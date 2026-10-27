@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from copy import deepcopy
 from typing import Any
 
 from mmkgc.stages.modeling import entity_context
 
 PLAN_SCHEMA = "model_relation_plan_v1"
+SLOT_SCHEMA = "model_candidate_slots_v2"
 ROLES = ("primary", "secondary", "context", "excluded")
 
 
 def selection_response_schema(knowledge: dict[str, Any]) -> dict[str, Any]:
+    """Legacy quota response schema, retained for validating recorded v1 plans."""
     facts = knowledge["relation_facts"]
     ids = [fact["fact_id"] for fact in facts]
     alternatives = []
@@ -50,6 +53,47 @@ def selection_response_schema(knowledge: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def candidate_slot_response_schema(knowledge: dict[str, Any], candidate_budget: int) -> dict[str, Any]:
+    """Constrain allocation by slot count instead of asking the model to sum quotas."""
+    if type(candidate_budget) is not int or candidate_budget <= 0:
+        raise ValueError("candidate_budget must be a positive integer")
+    legacy = selection_response_schema(knowledge)
+    definitions = deepcopy(legacy["$defs"])
+    ready_plans = deepcopy(legacy["properties"]["relation_plans"])
+    for index, item in enumerate(ready_plans["items"].get("anyOf", [])):
+        item["properties"].pop("candidate_quota")
+        item["required"].remove("candidate_quota")
+        ref_name = f"evidence_refs_{index:04d}"
+        definitions[ref_name] = item["properties"]["evidence_refs"]
+        item["properties"]["evidence_refs"] = {"$ref": f"#/$defs/{ref_name}"}
+    insufficient_plans = deepcopy(ready_plans)
+    for item in insufficient_plans["items"].get("anyOf", []):
+        item["properties"]["role"]["enum"] = ["context", "excluded"]
+        item["properties"]["supporting_fact_ids"]["maxItems"] = 0
+    definitions.update(ready_relation_plans=ready_plans, insufficient_relation_plans=insufficient_plans)
+    alternatives = []
+    for status, slots, plans in (("ready", candidate_budget, "ready_relation_plans"),
+                                 ("insufficient_evidence", 0, "insufficient_relation_plans")):
+        if status == "ready" and not knowledge["relation_facts"]:
+            continue
+        alternatives.append({
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "status": {"type": "string", "enum": [status]},
+                "relation_plans": {"$ref": f"#/$defs/{plans}"},
+                "candidate_anchors": {
+                    "type": "array", "minItems": slots, "maxItems": slots,
+                    "items": {"$ref": "#/$defs/fact_id"},
+                },
+            },
+            "required": ["status", "relation_plans", "candidate_anchors"],
+        })
+    return {
+        "type": "object", "additionalProperties": False, "$defs": definitions,
+        "properties": {"plan": {"anyOf": alternatives}}, "required": ["plan"],
+    }
+
+
 def selection_prompt(
     entity_label: str, missing_mode: str, knowledge: dict[str, Any], candidate_budget: int
 ) -> tuple[str, str]:
@@ -67,8 +111,13 @@ def selection_prompt(
         "exact appearances, settings or attributes. For text prioritize accurate, "
         "distinctive factual descriptions. Adapt emphasis to the actual entity "
         "profile and available visual/context cues, keeping uncertainties explicit. "
-        "Roles: primary drives a candidate; secondary supports a candidate and "
-        "may have zero quota; context is background; excluded is unused for this "
+        "Make TWO separate decisions: relation_plans reviews every fact exactly "
+        "once; candidate_anchors allocates the fixed candidate budget. Keeping a "
+        "fact does NOT require giving it a candidate. Do not return candidate_quota; "
+        "the program counts occurrences of each fact_id in candidate_anchors. "
+        "Roles: primary anchors at least one candidate; secondary can support a "
+        "candidate with ZERO slots of its own, or anchor a slot when useful; "
+        "context is background; excluded is unused for this "
         "run and does not mean false. Each plan's evidence_refs is a subset of "
         "THAT SAME fact's input evidence_refs. Do not merge evidence from support "
         "facts into the anchor's evidence_refs: use supporting_fact_ids for links. "
@@ -77,19 +126,27 @@ def selection_prompt(
         "every referenced fact must have role secondary in this same response. "
         "Never reference a primary, context or excluded fact, even if relevant; "
         "use an empty list when no secondary fact is needed. Do not link an "
-        "anchor to itself. Context/excluded have no support links "
-        "or quota. With status ready, at least one primary is required, each "
-        "primary has positive quota, and primary/secondary quotas sum exactly to "
-        "candidate_budget. Multiple angles can use the same fact. If evidence "
+        "anchor to itself. Context/excluded have no support links or candidate "
+        "slots. With status ready, at least one primary is required, every primary "
+        "must occur in candidate_anchors, and candidate_anchors must contain "
+        "EXACTLY candidate_budget fact_ids. Each slot anchors one primary or "
+        "secondary fact. Repeating a fact_id across candidate slots is allowed "
+        "and gives that fact multiple generation angles. Preserve all reviewed "
+        "facts even when they receive zero slots. If evidence "
         "cannot support a generation plan, return insufficient_evidence, classify "
-        "facts as context/excluded and set all quotas to zero. Never fill a budget "
+        "ALL facts as context/excluded, use empty support lists and return an "
+        "EMPTY candidate_anchors array. Never fill a budget "
         "with invented or unsupported claims. For image plans, birthplaces, burial "
         "places and credits do not establish the depicted setting, atmosphere or "
         "appearance. Before returning, check the entire plan: each input fact_id "
         "occurs exactly once, each support target has role secondary, and for a "
-        "ready plan the sum of ALL candidate_quota values equals candidate_budget "
-        "(for example 3+1+1=5, never six quotas of 1 when the budget is 5). "
-        "Return the requested JSON only and "
+        "ready plan the NUMBER OF SLOTS equals candidate_budget. For example, "
+        "with 7 facts and a budget of 5, keep 7 relation_plans but only 5 "
+        "candidate_anchors; do not create one candidate for every fact. An "
+        "allocation [A,A,A,B,B] means A gets 3 slots and B gets 2 while other "
+        "facts keep zero. A and B here are illustrative; use only input fact_ids. "
+        "Return one object with a plan containing status, relation_plans and "
+        "candidate_anchors, and "
         "give one concise, nonblank evidence-grounded reason for EVERY role, "
         "including context and excluded. If validator feedback is supplied in a "
         "later message, fix every listed error using the original input, return "
@@ -118,6 +175,97 @@ class RelationPlanValidationError(ValueError):
     def __init__(self, errors: list[dict[str, Any]]) -> None:
         self.errors = errors
         super().__init__("; ".join(f"{item['path'] or '/'}: {item['message']}" for item in errors))
+
+
+def apply_candidate_slot_plans(
+    knowledge: dict[str, Any], response: Any, missing_mode: str, candidate_budget: int
+) -> dict[str, Any]:
+    """Compile model-selected slots to quotas without altering the allocation."""
+    if missing_mode not in {"text", "image"} or type(candidate_budget) is not int or candidate_budget <= 0:
+        raise ValueError("a single target modality and a positive candidate_budget are required")
+    errors: list[dict[str, Any]] = []
+
+    def add(code: str, path: str, message: str, **details: Any) -> None:
+        errors.append({"code": code, "path": path, "message": message, **details})
+
+    def check_fields(value: dict[str, Any], required: set[str], path: str) -> None:
+        for key in sorted(required - value.keys()):
+            add("missing_field", f"{path}/{key}", "required field is missing")
+        for key in sorted(value.keys() - required):
+            token = key.replace("~", "~0").replace("/", "~1")
+            add("unexpected_field", f"{path}/{token}", "field is not in the slot response schema; do not return candidate_quota")
+
+    if not isinstance(response, dict):
+        raise RelationPlanValidationError([{"code": "invalid_response", "path": "", "message": "response must be an object"}])
+    check_fields(response, {"plan"}, "")
+    plan = response.get("plan")
+    if not isinstance(plan, dict):
+        add("invalid_plan", "/plan", "plan must contain status, relation_plans and candidate_anchors")
+        raise RelationPlanValidationError(errors)
+    check_fields(plan, {"status", "relation_plans", "candidate_anchors"}, "/plan")
+    status, plans, anchors = plan.get("status"), plan.get("relation_plans"), plan.get("candidate_anchors")
+    if not isinstance(plans, list):
+        add("invalid_plans", "/plan/relation_plans", "relation_plans must be an array", actual=plans)
+    if not isinstance(anchors, list):
+        add("invalid_anchors", "/plan/candidate_anchors", "candidate_anchors must be an array of fact_ids", actual=anchors)
+    if not isinstance(plans, list) or not isinstance(anchors, list):
+        raise RelationPlanValidationError(errors)
+    fact_ids = [fact["fact_id"] for fact in knowledge["relation_facts"]]
+    expected_count = candidate_budget if status == "ready" else 0 if status == "insufficient_evidence" else None
+    if expected_count is not None and len(anchors) != expected_count:
+        add("candidate_slot_count", "/plan/candidate_anchors",
+            "candidate_anchors must exactly fill candidate_budget when ready, or be empty when insufficient_evidence",
+            actual=len(anchors), expected=expected_count, candidate_budget=candidate_budget,
+            instruction="Keep all facts in relation_plans, but choose exactly the required number of candidate anchors; repetitions are allowed.")
+    counts = Counter()
+    for index, anchor in enumerate(anchors):
+        if not isinstance(anchor, str) or anchor not in fact_ids:
+            add("unknown_anchor", f"/plan/candidate_anchors/{index}", "slot must name an input fact_id",
+                actual=anchor, allowed_values=fact_ids)
+        else:
+            counts[anchor] += 1
+    compiled_plans = []
+    required = {"fact_id", "role", "evidence_refs", "supporting_fact_ids", "reason"}
+    roles = {}
+    for index, item in enumerate(plans):
+        if isinstance(item, dict):
+            check_fields(item, required, f"/plan/relation_plans/{index}")
+            fact_id = item.get("fact_id")
+            if isinstance(fact_id, str):
+                roles.setdefault(fact_id, item.get("role"))
+            quota = counts.get(fact_id, 0) if isinstance(fact_id, str) else 0
+            compiled_plans.append({**deepcopy(item), "candidate_quota": quota})
+        else:
+            compiled_plans.append(item)
+    for index, anchor in enumerate(anchors):
+        if isinstance(anchor, str) and anchor in fact_ids and roles.get(anchor) not in ("primary", "secondary"):
+            add("invalid_anchor_role", f"/plan/candidate_anchors/{index}",
+                "candidate slot must reference a primary or secondary fact in this response",
+                actual=anchor, actual_role=roles.get(anchor), expected_roles=["primary", "secondary"],
+                allowed_values=[fid for fid in fact_ids if roles.get(fid) in ("primary", "secondary")])
+    compiled = {"status": status, "relation_plans": compiled_plans}
+    for error in relation_plan_errors(knowledge, compiled, missing_mode, candidate_budget):
+        code = error["code"]
+        # Slot length is already checked directly; do not report arithmetic on
+        # a quota field which the model no longer returns.
+        if code in {"quota_total", "insufficient_quota"}:
+            continue
+        if code == "role_quota_conflict":
+            if error.get("role") == "primary":
+                add("unanchored_primary", "/plan" + error["path"].rsplit("/", 1)[0] + "/role",
+                    "every primary fact must anchor at least one candidate slot; secondary facts may retain zero slots",
+                    actual_role="primary", actual_slot_count=error["actual"])
+            continue
+        errors.append({**error, "path": "/plan" + error["path"]})
+    # The wire checks already report missing/extra fields; avoid identical repeats.
+    errors = list({json.dumps(error, sort_keys=True, ensure_ascii=False): error for error in errors}.values())
+    if errors:
+        raise RelationPlanValidationError(errors)
+    result = apply_relation_plans(knowledge, compiled, missing_mode, candidate_budget)
+    result["fine_grained_relation_selection"].update(
+        allocation_method=SLOT_SCHEMA, candidate_anchors=list(anchors),
+    )
+    return result
 
 
 def relation_plan_errors(

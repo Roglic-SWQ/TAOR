@@ -4,6 +4,7 @@ lmm:
   api_key_env: OPENAI_API_KEY
 
 inference:
+  stage3_max_concurrency: 5
   max_token: 4096
   image_prompt_max_token: 384
   temperature: 0.0

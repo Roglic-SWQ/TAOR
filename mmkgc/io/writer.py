@@ -437,6 +437,9 @@ def _compact_stage2_selection(payload: dict[str, Any]) -> dict[str, Any]:
     if payload.get("schema_version") == "model_relation_plan_v1":
         compact["schema_version"] = payload["schema_version"]
         compact["status"] = payload["status"]
+        if "candidate_anchors" in payload:
+            compact["candidate_anchors"] = list(payload["candidate_anchors"])
+            compact["allocation_method"] = payload["allocation_method"]
     if payload.get("semantic_refinement") is not None:
         compact["semantic_refinement"] = payload.get("semantic_refinement")
     return compact

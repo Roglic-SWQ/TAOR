@@ -4,6 +4,7 @@ lmm:
   api_key_env: QWEN_API_KEY
 
 inference:
+  prompt_profile: qwen7b_original_v1
   max_token: 4096
   image_prompt_max_token: 384
   temperature: 0.0

@@ -12,7 +12,9 @@ DATASET_DIR="${DATASET_DIR:-${PROJECT_ROOT}/datasets/MKG-W bak}"
 MANIFEST_PATH="${MANIFEST_PATH:-${PROJECT_ROOT}/configs/mkgw-image-test-50.json}"
 STAGE1_RERANKER_MODEL_DIR="${STAGE1_RERANKER_MODEL_DIR:-${PROJECT_ROOT}/Qwen3-Reranker-4B}"
 SDXL_MODEL_DIR="${SDXL_MODEL_DIR:-${PROJECT_ROOT}/SDXL/stable-diffusion-xl-base-1.0}"
-MODEL_CONFIG="${MODEL_CONFIG:-${PROJECT_ROOT}/configs/gpt4omini-mainline.yaml}"
+MODEL_CONFIG="${MODEL_CONFIG:-${PROJECT_ROOT}/configs/qwen7b-mainline.yaml}"
+STAGE1_MODEL_CONFIG="${STAGE1_MODEL_CONFIG:-${PROJECT_ROOT}/configs/qwen7b-stage1.yaml}"
+STAGE2_MODEL_CONFIG="${STAGE2_MODEL_CONFIG:-${PROJECT_ROOT}/configs/openai-gpt4o-mini-judge.yaml}"
 STAGE4_CONFIG="${STAGE4_CONFIG:-${PROJECT_ROOT}/configs/stage4-model-fusion-gpu1-visible.yaml}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-${PROJECT_ROOT}/outputs}"
 RUN_NAME="${RUN_NAME:-mkgw_image_test_50_$(date +%Y%m%d_%H%M%S)}"
@@ -42,6 +44,8 @@ conda activate "${CONDA_ENV}"
 [[ -d "${STAGE1_RERANKER_MODEL_DIR}" ]] || \
     fail "Stage 1 reranker model directory does not exist: ${STAGE1_RERANKER_MODEL_DIR}"
 [[ -f "${MODEL_CONFIG}" ]] || fail "model config does not exist: ${MODEL_CONFIG}"
+[[ -f "${STAGE1_MODEL_CONFIG}" ]] || fail "Stage 1 model config does not exist: ${STAGE1_MODEL_CONFIG}"
+[[ -f "${STAGE2_MODEL_CONFIG}" ]] || fail "Stage 2 model config does not exist: ${STAGE2_MODEL_CONFIG}"
 [[ -f "${STAGE4_CONFIG}" ]] || fail "Stage 4 config does not exist: ${STAGE4_CONFIG}"
 
 command -v python >/dev/null 2>&1 || fail "python was not found in conda environment: ${CONDA_ENV}"
@@ -84,6 +88,8 @@ PY
 echo "Running MKG-W 50-entity image completion test"
 echo "  environment: ${CONDA_ENV}"
 echo "  model config: ${MODEL_CONFIG}"
+echo "  stage1 config: ${STAGE1_MODEL_CONFIG}"
+echo "  stage2 config: ${STAGE2_MODEL_CONFIG}"
 echo "  dataset:     ${DATASET_DIR}"
 echo "  manifest:    ${MANIFEST_PATH}"
 echo "  sdxl:        ${SDXL_MODEL_DIR}"
@@ -101,8 +107,8 @@ CUDA_VISIBLE_DEVICES="${PIPELINE_GPU}" exec python -m mmkgc.run \
     --candidate-budget "${CANDIDATE_BUDGET}" \
     --stage1-reranker-model-dir "${STAGE1_RERANKER_MODEL_DIR}" \
     --model-config "${MODEL_CONFIG}" \
-    --stage1-model-config "${STAGE1_MODEL_CONFIG:-${PROJECT_ROOT}/configs/gpt4omini-mainline.yaml}" \
-    --stage2-model-config "${STAGE2_MODEL_CONFIG:-${PROJECT_ROOT}/configs/openai-gpt4o-mini-judge.yaml}" \
+    --stage1-model-config "${STAGE1_MODEL_CONFIG}" \
+    --stage2-model-config "${STAGE2_MODEL_CONFIG}" \
     --stage4-config "${STAGE4_CONFIG}" \
     --sdxl-model-dir "${SDXL_MODEL_DIR}" \
     --sdxl-width 1024 \

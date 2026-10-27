@@ -12,9 +12,11 @@ MANIFEST_PATH="${MANIFEST_PATH:-${PROJECT_ROOT}/tmp_mkgw_four_entities_manifest.
 SDXL_MODEL_DIR="${SDXL_MODEL_DIR:-${PROJECT_ROOT}/SDXL/stable-diffusion-xl-base-1.0}"
 STAGE1_RERANKER_MODEL_DIR="${STAGE1_RERANKER_MODEL_DIR:-${PROJECT_ROOT}/Qwen3-Reranker-4B}"
 STAGE4_CONFIG="${STAGE4_CONFIG:-${PROJECT_ROOT}/configs/stage4-model-fusion-gpu1-visible.yaml}"
-MODEL_CONFIG="${MODEL_CONFIG:-${PROJECT_ROOT}/configs/gpt4omini-mainline.yaml}"
+MODEL_CONFIG="${MODEL_CONFIG:-${PROJECT_ROOT}/configs/qwen7b-mainline.yaml}"
+STAGE1_MODEL_CONFIG="${STAGE1_MODEL_CONFIG:-${PROJECT_ROOT}/configs/qwen7b-stage1.yaml}"
+STAGE2_MODEL_CONFIG="${STAGE2_MODEL_CONFIG:-${PROJECT_ROOT}/configs/openai-gpt4o-mini-judge.yaml}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-${PROJECT_ROOT}/outputs}"
-RUN_NAME="${RUN_NAME:-gpt4omini_sdxl_four_$(date +%Y%m%d_%H%M%S)}"
+RUN_NAME="${RUN_NAME:-qwen7b_sdxl_four_$(date +%Y%m%d_%H%M%S)}"
 
 fail() {
     echo "ERROR: $*" >&2
@@ -39,12 +41,16 @@ conda activate "${CONDA_ENV}"
 [[ -d "${STAGE1_RERANKER_MODEL_DIR}" ]] || \
     fail "Stage 1 reranker model directory does not exist: ${STAGE1_RERANKER_MODEL_DIR}"
 [[ -f "${MODEL_CONFIG}" ]] || fail "model config does not exist: ${MODEL_CONFIG}"
+[[ -f "${STAGE1_MODEL_CONFIG}" ]] || fail "Stage 1 model config does not exist: ${STAGE1_MODEL_CONFIG}"
+[[ -f "${STAGE2_MODEL_CONFIG}" ]] || fail "Stage 2 model config does not exist: ${STAGE2_MODEL_CONFIG}"
 [[ -f "${STAGE4_CONFIG}" ]] || fail "Stage 4 config does not exist: ${STAGE4_CONFIG}"
 
 command -v python >/dev/null 2>&1 || fail "python was not found in conda environment: ${CONDA_ENV}"
-echo "Running GPT-4o-mini + SDXL four-entity test"
+echo "Running MKG-W four-entity image completion test"
 echo "  environment: ${CONDA_ENV}"
 echo "  model config: ${MODEL_CONFIG}"
+echo "  stage1 config: ${STAGE1_MODEL_CONFIG}"
+echo "  stage2 config: ${STAGE2_MODEL_CONFIG}"
 echo "  dataset:     ${DATASET_DIR}"
 echo "  manifest:    ${MANIFEST_PATH}"
 echo "  sdxl:        ${SDXL_MODEL_DIR}"
@@ -61,8 +67,8 @@ CUDA_VISIBLE_DEVICES="${PIPELINE_GPU}" exec python -m mmkgc.run \
     --candidate-budget 5 \
     --stage1-reranker-model-dir "${STAGE1_RERANKER_MODEL_DIR}" \
     --model-config "${MODEL_CONFIG}" \
-    --stage1-model-config "${STAGE1_MODEL_CONFIG:-${PROJECT_ROOT}/configs/gpt4omini-mainline.yaml}" \
-    --stage2-model-config "${STAGE2_MODEL_CONFIG:-${PROJECT_ROOT}/configs/openai-gpt4o-mini-judge.yaml}" \
+    --stage1-model-config "${STAGE1_MODEL_CONFIG}" \
+    --stage2-model-config "${STAGE2_MODEL_CONFIG}" \
     --stage4-config "${STAGE4_CONFIG}" \
     --sdxl-model-dir "${SDXL_MODEL_DIR}" \
     --sdxl-width 1024 \

@@ -48,6 +48,14 @@ def make_planner(**kwargs):
     return GPT4oMiniRelationPlanner(QwenConfig("gpt-4o-mini", "http://localhost/v1", "secret-key"), **kwargs)
 
 
+def slot_response(response):
+    plan = deepcopy(response)
+    anchors = []
+    for item in plan["relation_plans"]:
+        anchors.extend([item["fact_id"]] * item.pop("candidate_quota"))
+    return {"plan": {**plan, "candidate_anchors": anchors}}
+
+
 def schema_validator(source):
     validator = pytest.importorskip("jsonschema").Draft202012Validator
     schema = selection_response_schema(source)
@@ -141,7 +149,7 @@ def test_two_distinct_repairs_use_full_conversation_and_preserve_input(monkeypat
     first, second = deepcopy(valid), deepcopy(valid)
     first["relation_plans"][0].update(evidence_refs=["fact:0003"], candidate_quota=4)
     second["relation_plans"][0]["candidate_quota"] = 4
-    outputs = iter(map(json.dumps, [first, second, valid]))
+    outputs = iter(json.dumps(slot_response(response)) for response in [first, second, valid])
     captured = []
     planner = make_planner()
     before = deepcopy(source)
@@ -156,7 +164,7 @@ def test_two_distinct_repairs_use_full_conversation_and_preserve_input(monkeypat
     assert [len(messages) for messages in captured] == [2, 4, 6]
     assert captured[2][:4] == captured[1]
     feedback = json.loads(captured[1][-1]["content"].split("VALIDATION_ERRORS_JSON:\n")[1])
-    assert {error["code"] for error in feedback["validation_errors"]} == {"foreign_evidence_refs", "quota_total"}
+    assert {error["code"] for error in feedback["validation_errors"]} == {"foreign_evidence_refs", "candidate_slot_count"}
     assert json.loads(captured[2][1]["content"])["relation_facts"] == json.loads(captured[0][1]["content"])["relation_facts"]
     assert [len(attempt["errors"]) for attempt in planner.calls[0]["validation_attempts"]] == [2, 1, 0]
     assert planner.calls[0]["contract_repair_retries"] == 2
@@ -166,7 +174,7 @@ def test_two_distinct_repairs_use_full_conversation_and_preserve_input(monkeypat
 
 def test_repeated_invalid_json_stops_even_with_changed_key_order(monkeypatch, source, valid):
     valid["relation_plans"][0]["candidate_quota"] = 4
-    outputs = iter([json.dumps(valid), json.dumps(valid, sort_keys=True, indent=2)])
+    outputs = iter([json.dumps(slot_response(valid)), json.dumps(slot_response(valid), sort_keys=True, indent=2)])
     planner = make_planner()
     monkeypatch.setattr(planner, "_complete", lambda *args: next(outputs))
     with pytest.raises(RelationPlanValidationError) as caught:
@@ -182,7 +190,7 @@ def test_distinct_invalid_responses_stop_at_repair_limit(monkeypatch, source, va
     for quota in (1, 2, 3):
         changed = deepcopy(valid)
         changed["relation_plans"][0]["candidate_quota"] = quota
-        responses.append(json.dumps(changed))
+        responses.append(json.dumps(slot_response(changed)))
     outputs = iter(responses)
     planner = make_planner(max_contract_repairs=limit)
     monkeypatch.setattr(planner, "_complete", lambda *args: next(outputs))
@@ -194,7 +202,7 @@ def test_distinct_invalid_responses_stop_at_repair_limit(monkeypatch, source, va
 
 @pytest.mark.parametrize("bad_json", ["{", "[]", "null", '"text"'])
 def test_malformed_json_and_non_object_response_can_be_repaired(monkeypatch, source, valid, bad_json):
-    outputs = iter([bad_json, json.dumps(valid)])
+    outputs = iter([bad_json, json.dumps(slot_response(valid))])
     planner = make_planner()
     monkeypatch.setattr(planner, "_complete", lambda *args: next(outputs))
     planner.plan(SimpleNamespace(label="Museum"), "image", source, 5)
@@ -216,7 +224,7 @@ def test_http_request_sends_separate_repair_messages_and_redacts_logs(monkeypatc
             return False
 
         def read(self):
-            return json.dumps({"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(next(outputs))}}]}).encode()
+            return json.dumps({"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(slot_response(next(outputs)))}}]}).encode()
 
     def urlopen(req, **kwargs):
         captured.append(json.loads(req.data))

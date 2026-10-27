@@ -14,6 +14,7 @@ from collections.abc import Callable
 from typing import Any, Protocol
 
 from mmkgc.data import EntityRecord
+from mmkgc.generation_prompts import PROMPT_PROFILES, PROMPT_VERSION, QWEN_PROMPT_VERSION
 from mmkgc.stages.selection import _assign_candidate_quotas
 
 
@@ -72,7 +73,6 @@ STAGE1_TEXT_VISUAL_PATCH_FIELDS = {
 _SEMANTIC_TARGET_TEXT_LIMIT = 1600
 _SEMANTIC_NEIGHBOR_DESCRIPTION_LIMIT = 320
 _SEMANTIC_PROMPT_TRUNCATION_MARKER = "\n...[truncated for semantic prompt]..."
-PROMPT_VERSION = "gpt4omini_stage03_v2"
 
 
 class StrictJsonStagePlanner:
@@ -83,9 +83,13 @@ class StrictJsonStagePlanner:
         complete: Callable[[str], str],
         *,
         planner_name: str = "strict-json-stage-planner",
+        prompt_profile: str = PROMPT_VERSION,
     ) -> None:
+        if not isinstance(prompt_profile, str) or prompt_profile not in PROMPT_PROFILES:
+            raise ValueError(f"prompt_profile must be one of {PROMPT_PROFILES}")
         self._complete = complete
         self.planner_name = planner_name
+        self.prompt_version = prompt_profile
         self.calls: list[dict[str, Any]] = []
 
     def refine_coarse(
@@ -98,6 +102,7 @@ class StrictJsonStagePlanner:
             result = _apply_stage0_response(coarse, {"selected_relations": []})
             result["semantic_refinement"] = _refinement_status(
                 self.planner_name, "stage0_coarse", "skipped_no_candidates", None,
+                prompt_version=self.prompt_version,
             )
             return result
         return self._refine(
@@ -163,6 +168,7 @@ class StrictJsonStagePlanner:
             missing_mode=missing_mode,
             deterministic=deterministic,
             prior=prior or {},
+            prompt_profile=self.prompt_version,
         )
         try:
             response_text = self._complete(prompt)
@@ -206,8 +212,11 @@ class StrictJsonStagePlanner:
                         stage=stage,
                         response_text=response_text,
                         error=exc,
+                        prompt_profile=self.prompt_version,
                     )
-                    if stage in {"stage0_coarse", "stage1_knowledge"}:
+                    if stage == "stage1_knowledge" or (
+                        stage == "stage0_coarse" and self.prompt_version != QWEN_PROMPT_VERSION
+                    ):
                         repair_prompt = prompt + "\nCorrect the response using the complete input above.\n" + repair_prompt
                     repaired_response_text = self._complete(repair_prompt)
                     response = parse_strict_json_object(repaired_response_text)
@@ -241,7 +250,7 @@ class StrictJsonStagePlanner:
             self.calls.append(
                 {
                     "stage": stage,
-                    "prompt_version": PROMPT_VERSION,
+                    "prompt_version": self.prompt_version,
                     "status": "failed",
                     "prompt": prompt,
                     "response_text": locals().get("response_text", ""),
@@ -268,11 +277,12 @@ class StrictJsonStagePlanner:
             stage,
             "applied",
             None,
+            prompt_version=self.prompt_version,
         )
         self.calls.append(
             {
                 "stage": stage,
-                "prompt_version": PROMPT_VERSION,
+                "prompt_version": self.prompt_version,
                 "status": "applied",
                 "prompt": prompt,
                 "response_text": _semantic_call_response_text(
@@ -303,7 +313,15 @@ def build_stage_prompt(
     missing_mode: str,
     deterministic: dict[str, Any],
     prior: dict[str, Any],
+    prompt_profile: str = PROMPT_VERSION,
 ) -> str:
+    if prompt_profile == QWEN_PROMPT_VERSION:
+        from mmkgc.qwen7b_prompts import build_stage_prompt as build_qwen_stage_prompt
+
+        return build_qwen_stage_prompt(
+            stage=stage, record=record, missing_mode=missing_mode,
+            deterministic=deterministic, prior=prior,
+        )
     payload = {
         "prompt_version": PROMPT_VERSION,
         "stage": stage,
@@ -405,7 +423,12 @@ def build_stage_repair_prompt(
     stage: str,
     response_text: str,
     error: Exception,
+    prompt_profile: str = PROMPT_VERSION,
 ) -> str:
+    if prompt_profile == QWEN_PROMPT_VERSION:
+        from mmkgc.qwen7b_prompts import build_stage_repair_prompt as build_qwen_repair_prompt
+
+        return build_qwen_repair_prompt(stage=stage, response_text=response_text, error=error)
     return "\n".join(
         [
             "Repair the previous MMKGC semantic planner response.",
@@ -1472,10 +1495,12 @@ def _refinement_status(
     stage: str,
     status: str,
     error_type: str | None,
+    *,
+    prompt_version: str = PROMPT_VERSION,
 ) -> dict[str, Any]:
     result = {
         "planner": planner_name,
-        "prompt_version": PROMPT_VERSION,
+        "prompt_version": prompt_version,
         "stage": stage,
         "status": status,
         "ground_truth_used": False,

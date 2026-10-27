@@ -3,5 +3,6 @@ lmm:
   base_url: http://127.0.0.1:12345/v1
   api_key: EMPTY
 inference:
+  prompt_profile: qwen7b_original_v1
   max_token: 4096
   temperature: 0.0

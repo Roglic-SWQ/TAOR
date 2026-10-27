@@ -8,6 +8,8 @@ from typing import Any
 
 
 PROMPT_VERSION = "gpt4omini_stage03_v2"
+QWEN_PROMPT_VERSION = "qwen7b_original_v1"
+PROMPT_PROFILES = (PROMPT_VERSION, QWEN_PROMPT_VERSION)
 
 TEXT_SYSTEM = (
     "You write concise, evidence-grounded entity descriptions. Follow the task rules; "

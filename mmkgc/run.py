@@ -64,11 +64,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Explicit device for the local Stage 1 reranker; no automatic device fallback.",
     )
     parser.add_argument("--stage1-reranker-max-length", type=int, default=8192)
-    parser.add_argument("--stage1-model-config", default="configs/gpt4omini-mainline.yaml")
+    parser.add_argument("--stage1-model-config", default="configs/qwen7b-stage1.yaml")
     parser.add_argument("--stage2-model-config", default="configs/openai-gpt4o-mini-judge.yaml")
     parser.add_argument("--output-root", default="outputs")
     parser.add_argument("--run-name", default=None)
-    parser.add_argument("--model-config", default="configs/gpt4omini-mainline.yaml")
+    parser.add_argument("--model-config", default="configs/qwen7b-mainline.yaml")
     parser.add_argument("--model-call-timeout-seconds", type=float, default=60)
     parser.add_argument("--stage4-config", default="configs/stage4-model-fusion.yaml")
     parser.add_argument("--sdxl-model-dir", default="SDXL/stable-diffusion-xl-base-1.0")
@@ -182,6 +182,10 @@ def main(argv: list[str] | None = None) -> int:
         "text_generator": "openai-compatible",
         "image_prompt_generator": "openai-compatible",
         "stage2_planner": "gpt4omini-global-relation-planner",
+        "stage3_max_concurrency": getattr(
+            getattr(pipeline, "text_generator" if args.missing_mode == "text" else "image_prompt_generator", None),
+            "max_concurrency", 1,
+        ),
         "model_config": args.model_config,
         "model_call_timeout_seconds": args.model_call_timeout_seconds,
         "model_name": model_name,

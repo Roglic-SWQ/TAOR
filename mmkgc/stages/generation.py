@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from typing import Any
 
 from mmkgc.adapters import GeneratedImageArtifact, ImageGenerator, ImagePromptGenerator, TextGenerator
-from mmkgc.generation_prompts import PROMPT_VERSION
+from mmkgc.generation_prompts import PROMPT_VERSION, QWEN_PROMPT_VERSION
 
 
 STAGE_OWNED_METADATA_KEYS = {
@@ -183,6 +184,14 @@ def _relation_sequence(
         for relation in relations
         if modality in relation.get("target_modality", [])
     ]
+    if "candidate_anchors" in payload:
+        anchors = payload["candidate_anchors"]
+        by_fact = {item["fact_id"]: item for item in relations}
+        if not isinstance(anchors, list) or len(anchors) != candidate_budget or any(
+            not isinstance(ref, str) or ref not in by_fact for ref in anchors
+        ):
+            raise ValueError("Stage 2 candidate anchors must exactly fill candidate_budget using selected facts")
+        return [by_fact[ref] for ref in anchors]
     sequence = []
     for relation in relations:
         context = _generation_context_for_item(relation, reasoning, modality)
@@ -638,7 +647,15 @@ def _generate_modality_candidates(
     model_calls = []
     image_artifacts = []
     safe_variant = bool(regeneration_feedback)
-    for index, relation_item in enumerate(sequence):
+    generator = text_generator if modality == "text" else image_prompt_generator
+    original_qwen_prompts = getattr(generator, "prompt_version", None) == QWEN_PROMPT_VERSION
+    workers = getattr(generator, "max_concurrency", 1)
+    if type(workers) is not int or workers < 1:
+        raise ValueError("Stage 3 max_concurrency must be a positive integer")
+
+    def prepare(entry):
+        index, relation_item = entry
+        candidate_calls = []
         angle_specs = _generation_angle_specs(modality, relation_item, knowledge)
         angle_spec = angle_specs[index % len(angle_specs)]
         base_angle = angle_spec["angle"]
@@ -647,6 +664,8 @@ def _generate_modality_candidates(
         if safe_variant:
             diversity_axis = f"safer regeneration of {diversity_axis}"
         facts = _facts_for_relation(relation_item, knowledge, reasoning, modality)
+        if original_qwen_prompts and regeneration_feedback:
+            facts = _feedback_facts(regeneration_feedback) + facts
         brief = _generation_brief(
             modality,
             relation_item,
@@ -655,6 +674,9 @@ def _generate_modality_candidates(
             reasoning,
             diversity_axis=diversity_axis,
         )
+        if original_qwen_prompts:
+            for key in ("must_include", "should_include", "context_only", "evidence_facts"):
+                brief[key] = brief[key][:4]
         base = _candidate_base(
             (
                 f"{modality}_safe_{index + 1:03d}"
@@ -679,13 +701,17 @@ def _generate_modality_candidates(
                 }
             base["metadata"].update(_regeneration_candidate_metadata(regeneration_feedback))
         relation = str(relation_item.get("relation", "global_profile"))
-        generator = text_generator if modality == "text" else image_prompt_generator
         structured_generate = getattr(generator, "generate_with_context", None)
+        if not getattr(generator, "uses_structured_prompts", True):
+            structured_generate = None
+        if getattr(generator, "prompt_version", None):
+            base["metadata"]["prompt_version"] = generator.prompt_version
         model_context = _model_generation_context(
             knowledge, relation_item, reasoning, modality, angle, diversity_axis, regeneration_feedback,
         ) if callable(structured_generate) else {}
         legacy_facts = (
-            _feedback_facts(regeneration_feedback) + facts if regeneration_feedback else facts
+            _feedback_facts(regeneration_feedback) + facts
+            if regeneration_feedback and not original_qwen_prompts else facts
         )
         if modality == "text":
             if callable(structured_generate):
@@ -704,7 +730,7 @@ def _generate_modality_candidates(
             base["metadata"].update(_provider_candidate_metadata(text_generator))
             call = _provider_model_call(text_generator, entity_key, base["candidate_id"])
             if call:
-                model_calls.append(call)
+                candidate_calls.append(call)
         else:
             if callable(structured_generate):
                 prompt = structured_generate(record_label, entity_type, relation, angle, facts, context=model_context)
@@ -731,8 +757,35 @@ def _generate_modality_candidates(
                 base["candidate_id"],
             )
             if prompt_call:
-                model_calls.append(prompt_call)
+                candidate_calls.append(prompt_call)
             base["metadata"]["status"] = "planned"
+        return base, candidate_calls
+
+    def prepare_with_audit(entry):
+        try:
+            return prepare(entry)
+        except Exception as exc:
+            index, _relation_item = entry
+            candidate_id = f"{modality}_{'safe_' if safe_variant else ''}{index + 1:03d}"
+            call = _provider_model_call(generator, entity_key, candidate_id)
+            if call is not None:
+                call.update(stage="stage3_generation", status="failed", modality=modality)
+                setattr(exc, "model_call", call)
+            setattr(exc, "candidate_id", candidate_id)
+            raise
+
+    if workers > 1 and len(sequence) > 1:
+        with ThreadPoolExecutor(
+            max_workers=min(workers, len(sequence)), thread_name_prefix="mmkgc-stage3",
+        ) as executor:
+            prepared = list(executor.map(prepare_with_audit, enumerate(sequence)))
+    else:
+        prepared = [prepare_with_audit(entry) for entry in enumerate(sequence)]
+
+    # Merge in candidate order and keep the shared local GPU pipeline on the caller thread.
+    for base, candidate_calls in prepared:
+        model_calls.extend(candidate_calls)
+        if modality == "image":
             if image_generator is not None:
                 artifact = image_generator.generate(
                     entity_key,

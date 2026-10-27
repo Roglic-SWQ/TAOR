@@ -1,0 +1,588 @@
+{
+  "origin": "Original pre-GPT-v2 Qwen prompts from /tmp/mmkgc-prompts-v2-20261027",
+  "source_sha256": {
+    "stages/semantic.py": "8828c670929246222532c23ef94dd75ca7192e65ce438c5b590a96365d7af89a",
+    "stages/generation.py": "822df0be9a5f7c0ff5ce98d7b0415d8639b8a6c91c7860e04833414c8f42dccf",
+    "adapters/qwen.py": "3a1dbfdbba970f38878da49b39f4b76229a917e745f013085b30adacd4f87983"
+  },
+  "records": {
+    "text": {
+      "entity_id": 1,
+      "entity_key": "Q1",
+      "label": "Example Museum",
+      "description": "PRIVATE_TARGET_TEXT",
+      "neighbors": [],
+      "existing_modalities": {
+        "text": null,
+        "image": null
+      },
+      "ground_truth_modalities": {
+        "text": "PRIVATE_TARGET_TEXT",
+        "image": "PRIVATE_TARGET_IMAGE"
+      },
+      "modality_completion_policy": {}
+    },
+    "image": {
+      "entity_id": 1,
+      "entity_key": "Q1",
+      "label": "Example Museum",
+      "description": "PRIVATE_TARGET_TEXT",
+      "neighbors": [],
+      "existing_modalities": {
+        "text": "Example Museum has a glass facade and science exhibits.",
+        "image": null
+      },
+      "ground_truth_modalities": {
+        "text": "PRIVATE_TARGET_TEXT",
+        "image": "PRIVATE_TARGET_IMAGE"
+      },
+      "modality_completion_policy": {}
+    }
+  },
+  "coarse": {
+    "cleaned_relation_groups": [
+      {
+        "relation": "instance of",
+        "direction": "out",
+        "neighbor_entities": [
+          "museum"
+        ],
+        "evidence_triples": [
+          "(Example Museum, instance of, museum)"
+        ]
+      },
+      {
+        "relation": "located in",
+        "direction": "out",
+        "neighbor_entities": [
+          "Example City"
+        ],
+        "evidence_triples": [
+          "(Example Museum, located in, Example City)"
+        ]
+      },
+      {
+        "relation": "exhibits",
+        "direction": "out",
+        "neighbor_entities": [
+          "science exhibits"
+        ],
+        "evidence_triples": [
+          "(Example Museum, exhibits, science exhibits)"
+        ]
+      },
+      {
+        "relation": "material",
+        "direction": "out",
+        "neighbor_entities": [
+          "glass"
+        ],
+        "evidence_triples": [
+          "(Example Museum, material, glass)"
+        ]
+      }
+    ],
+    "selected_relations": [
+      {
+        "relation": "instance of",
+        "direction": "out",
+        "neighbor_entities": [
+          "museum"
+        ],
+        "evidence_triples": [
+          "(Example Museum, instance of, museum)"
+        ]
+      },
+      {
+        "relation": "located in",
+        "direction": "out",
+        "neighbor_entities": [
+          "Example City"
+        ],
+        "evidence_triples": [
+          "(Example Museum, located in, Example City)"
+        ]
+      },
+      {
+        "relation": "exhibits",
+        "direction": "out",
+        "neighbor_entities": [
+          "science exhibits"
+        ],
+        "evidence_triples": [
+          "(Example Museum, exhibits, science exhibits)"
+        ]
+      },
+      {
+        "relation": "material",
+        "direction": "out",
+        "neighbor_entities": [
+          "glass"
+        ],
+        "evidence_triples": [
+          "(Example Museum, material, glass)"
+        ]
+      }
+    ]
+  },
+  "generation_setups": {
+    "text": {
+      "knowledge_response": {
+        "entity_profile": {
+          "primary_type": "museum",
+          "core_identity": "Example Museum",
+          "secondary_types": [],
+          "semantic_domains": [],
+          "evidence_refs": []
+        },
+        "text_visual_profile": {
+          "visual_scene_cues": [
+            "glass facade"
+          ],
+          "context_cues": [],
+          "non_visual_facts": []
+        },
+        "key_attributes": [],
+        "uncertain_aspects": [],
+        "relation_facts": [
+          {
+            "fact_id": "rf:0001",
+            "claim": "Example Museum instance of museum"
+          },
+          {
+            "fact_id": "rf:0002",
+            "claim": "Example Museum located in Example City"
+          },
+          {
+            "fact_id": "rf:0003",
+            "claim": "Example Museum exhibits science exhibits"
+          },
+          {
+            "fact_id": "rf:0004",
+            "claim": "Example Museum material glass"
+          }
+        ]
+      },
+      "relation_plan_response": {
+        "status": "ready",
+        "relation_plans": [
+          {
+            "fact_id": "rf:0001",
+            "role": "primary",
+            "candidate_quota": 1,
+            "evidence_refs": [
+              "evidence:kg:0001"
+            ],
+            "supporting_fact_ids": [
+              "rf:0002",
+              "rf:0003",
+              "rf:0004"
+            ],
+            "reason": "Reference evidence reviewed."
+          },
+          {
+            "fact_id": "rf:0002",
+            "role": "secondary",
+            "candidate_quota": 0,
+            "evidence_refs": [
+              "evidence:kg:0002"
+            ],
+            "supporting_fact_ids": [],
+            "reason": "Reference evidence reviewed."
+          },
+          {
+            "fact_id": "rf:0003",
+            "role": "secondary",
+            "candidate_quota": 0,
+            "evidence_refs": [
+              "evidence:kg:0003"
+            ],
+            "supporting_fact_ids": [],
+            "reason": "Reference evidence reviewed."
+          },
+          {
+            "fact_id": "rf:0004",
+            "role": "secondary",
+            "candidate_quota": 0,
+            "evidence_refs": [
+              "evidence:kg:0004"
+            ],
+            "supporting_fact_ids": [],
+            "reason": "Reference evidence reviewed."
+          }
+        ]
+      }
+    },
+    "image": {
+      "knowledge_response": {
+        "entity_profile": {
+          "primary_type": "museum",
+          "core_identity": "Example Museum",
+          "secondary_types": [],
+          "semantic_domains": [],
+          "evidence_refs": []
+        },
+        "text_visual_profile": {
+          "visual_scene_cues": [
+            "glass facade"
+          ],
+          "context_cues": [],
+          "non_visual_facts": []
+        },
+        "key_attributes": [],
+        "uncertain_aspects": [],
+        "relation_facts": [
+          {
+            "fact_id": "rf:0001",
+            "claim": "Example Museum instance of museum"
+          },
+          {
+            "fact_id": "rf:0002",
+            "claim": "Example Museum located in Example City"
+          },
+          {
+            "fact_id": "rf:0003",
+            "claim": "Example Museum exhibits science exhibits"
+          },
+          {
+            "fact_id": "rf:0004",
+            "claim": "Example Museum material glass"
+          }
+        ]
+      },
+      "relation_plan_response": {
+        "status": "ready",
+        "relation_plans": [
+          {
+            "fact_id": "rf:0001",
+            "role": "primary",
+            "candidate_quota": 1,
+            "evidence_refs": [
+              "evidence:kg:0001",
+              "existing:text"
+            ],
+            "supporting_fact_ids": [
+              "rf:0002",
+              "rf:0003",
+              "rf:0004"
+            ],
+            "reason": "Reference evidence reviewed."
+          },
+          {
+            "fact_id": "rf:0002",
+            "role": "secondary",
+            "candidate_quota": 0,
+            "evidence_refs": [
+              "evidence:kg:0002",
+              "existing:text"
+            ],
+            "supporting_fact_ids": [],
+            "reason": "Reference evidence reviewed."
+          },
+          {
+            "fact_id": "rf:0003",
+            "role": "secondary",
+            "candidate_quota": 0,
+            "evidence_refs": [
+              "evidence:kg:0003",
+              "existing:text"
+            ],
+            "supporting_fact_ids": [],
+            "reason": "Reference evidence reviewed."
+          },
+          {
+            "fact_id": "rf:0004",
+            "role": "secondary",
+            "candidate_quota": 0,
+            "evidence_refs": [
+              "evidence:kg:0004",
+              "existing:text"
+            ],
+            "supporting_fact_ids": [],
+            "reason": "Reference evidence reviewed."
+          }
+        ]
+      }
+    }
+  },
+  "semantic_cases": [
+    {
+      "id": "stage0_coarse_text_repair0",
+      "stage": "stage0_coarse",
+      "mode": "text",
+      "responses": [
+        "{\"selected_relations\": [{\"relation\": \"instance of\", \"direction\": \"out\", \"neighbor_entities\": [\"museum\"], \"evidence_triples\": [\"(Example Museum, instance of, museum)\"], \"reason\": \"identity evidence\"}]}"
+      ],
+      "expected_request_sha256": [
+        "4de0c2594e39e490e621d22b8ede2c06e435dd2080e159f5023b3aac76c01881"
+      ]
+    },
+    {
+      "id": "stage0_coarse_text_repair1",
+      "stage": "stage0_coarse",
+      "mode": "text",
+      "responses": [
+        "not JSON",
+        "{\"selected_relations\": [{\"relation\": \"instance of\", \"direction\": \"out\", \"neighbor_entities\": [\"museum\"], \"evidence_triples\": [\"(Example Museum, instance of, museum)\"], \"reason\": \"identity evidence\"}]}"
+      ],
+      "expected_request_sha256": [
+        "4de0c2594e39e490e621d22b8ede2c06e435dd2080e159f5023b3aac76c01881",
+        "77e30fb0ec76ede983b14d2ffa644361375e3a23a84812c895294b99a1c577e2"
+      ]
+    },
+    {
+      "id": "stage1_knowledge_text_repair0",
+      "stage": "stage1_knowledge",
+      "mode": "text",
+      "responses": [
+        "{\"entity_profile\": {\"primary_type\": \"museum\", \"core_identity\": \"Example Museum\", \"secondary_types\": [], \"semantic_domains\": [], \"evidence_refs\": []}, \"text_visual_profile\": {\"visual_scene_cues\": [\"glass facade\"], \"context_cues\": [], \"non_visual_facts\": []}, \"key_attributes\": [], \"uncertain_aspects\": [], \"relation_facts\": [{\"fact_id\": \"rf:0001\", \"claim\": \"Example Museum instance of museum\"}, {\"fact_id\": \"rf:0002\", \"claim\": \"Example Museum located in Example City\"}, {\"fact_id\": \"rf:0003\", \"claim\": \"Example Museum exhibits science exhibits\"}, {\"fact_id\": \"rf:0004\", \"claim\": \"Example Museum material glass\"}]}"
+      ],
+      "expected_request_sha256": [
+        "890907aebc87e7c32c3527eb2250286b1eb9fe93df6a662d5263d2eb969118c0"
+      ]
+    },
+    {
+      "id": "stage1_knowledge_text_repair1",
+      "stage": "stage1_knowledge",
+      "mode": "text",
+      "responses": [
+        "not JSON",
+        "{\"entity_profile\": {\"primary_type\": \"museum\", \"core_identity\": \"Example Museum\", \"secondary_types\": [], \"semantic_domains\": [], \"evidence_refs\": []}, \"text_visual_profile\": {\"visual_scene_cues\": [\"glass facade\"], \"context_cues\": [], \"non_visual_facts\": []}, \"key_attributes\": [], \"uncertain_aspects\": [], \"relation_facts\": [{\"fact_id\": \"rf:0001\", \"claim\": \"Example Museum instance of museum\"}, {\"fact_id\": \"rf:0002\", \"claim\": \"Example Museum located in Example City\"}, {\"fact_id\": \"rf:0003\", \"claim\": \"Example Museum exhibits science exhibits\"}, {\"fact_id\": \"rf:0004\", \"claim\": \"Example Museum material glass\"}]}"
+      ],
+      "expected_request_sha256": [
+        "890907aebc87e7c32c3527eb2250286b1eb9fe93df6a662d5263d2eb969118c0",
+        "b4dd3589d5b150cdf2ccac37fca2d5851c03889f591410015e945c76a58f9590"
+      ]
+    },
+    {
+      "id": "stage0_coarse_image_repair0",
+      "stage": "stage0_coarse",
+      "mode": "image",
+      "responses": [
+        "{\"selected_relations\": [{\"relation\": \"instance of\", \"direction\": \"out\", \"neighbor_entities\": [\"museum\"], \"evidence_triples\": [\"(Example Museum, instance of, museum)\"], \"reason\": \"identity evidence\"}]}"
+      ],
+      "expected_request_sha256": [
+        "a3d384716c1e11998394029f6052c0e8a4a6d83f0d1749293114f0bb18c20b2a"
+      ]
+    },
+    {
+      "id": "stage0_coarse_image_repair1",
+      "stage": "stage0_coarse",
+      "mode": "image",
+      "responses": [
+        "not JSON",
+        "{\"selected_relations\": [{\"relation\": \"instance of\", \"direction\": \"out\", \"neighbor_entities\": [\"museum\"], \"evidence_triples\": [\"(Example Museum, instance of, museum)\"], \"reason\": \"identity evidence\"}]}"
+      ],
+      "expected_request_sha256": [
+        "a3d384716c1e11998394029f6052c0e8a4a6d83f0d1749293114f0bb18c20b2a",
+        "77e30fb0ec76ede983b14d2ffa644361375e3a23a84812c895294b99a1c577e2"
+      ]
+    },
+    {
+      "id": "stage1_knowledge_image_repair0",
+      "stage": "stage1_knowledge",
+      "mode": "image",
+      "responses": [
+        "{\"entity_profile\": {\"primary_type\": \"museum\", \"core_identity\": \"Example Museum\", \"secondary_types\": [], \"semantic_domains\": [], \"evidence_refs\": []}, \"text_visual_profile\": {\"visual_scene_cues\": [\"glass facade\"], \"context_cues\": [], \"non_visual_facts\": []}, \"key_attributes\": [], \"uncertain_aspects\": [], \"relation_facts\": [{\"fact_id\": \"rf:0001\", \"claim\": \"Example Museum instance of museum\"}, {\"fact_id\": \"rf:0002\", \"claim\": \"Example Museum located in Example City\"}, {\"fact_id\": \"rf:0003\", \"claim\": \"Example Museum exhibits science exhibits\"}, {\"fact_id\": \"rf:0004\", \"claim\": \"Example Museum material glass\"}]}"
+      ],
+      "expected_request_sha256": [
+        "012dbfe1a522bbaffedd301414814c7bcf53a2714a14af0679705063ea52bb7b"
+      ]
+    },
+    {
+      "id": "stage1_knowledge_image_repair1",
+      "stage": "stage1_knowledge",
+      "mode": "image",
+      "responses": [
+        "not JSON",
+        "{\"entity_profile\": {\"primary_type\": \"museum\", \"core_identity\": \"Example Museum\", \"secondary_types\": [], \"semantic_domains\": [], \"evidence_refs\": []}, \"text_visual_profile\": {\"visual_scene_cues\": [\"glass facade\"], \"context_cues\": [], \"non_visual_facts\": []}, \"key_attributes\": [], \"uncertain_aspects\": [], \"relation_facts\": [{\"fact_id\": \"rf:0001\", \"claim\": \"Example Museum instance of museum\"}, {\"fact_id\": \"rf:0002\", \"claim\": \"Example Museum located in Example City\"}, {\"fact_id\": \"rf:0003\", \"claim\": \"Example Museum exhibits science exhibits\"}, {\"fact_id\": \"rf:0004\", \"claim\": \"Example Museum material glass\"}]}"
+      ],
+      "expected_request_sha256": [
+        "012dbfe1a522bbaffedd301414814c7bcf53a2714a14af0679705063ea52bb7b",
+        "08916a08e34451ab86035e6d055b6ae7537c66ab9cb050d0527346d8697d1e2c"
+      ]
+    }
+  ],
+  "generation_cases": [
+    {
+      "id": "stage3_text_retry0",
+      "mode": "text",
+      "retry": false,
+      "feedback": {
+        "repair_actions": [
+          "remove unsupported details"
+        ],
+        "preserve": [
+          "entity identity"
+        ]
+      },
+      "responses": [
+        "Example Museum is a museum with science exhibits."
+      ],
+      "expected_generation_brief": {
+        "generation_intent": "Create a text candidate centered on instance of using the identity anchor angle.",
+        "semantic_focus": "instance of",
+        "diversity_axis": "core identity of Example Museum as a museum",
+        "evidence_policy": "grounded_graph_only",
+        "style_guidance": "natural concise description",
+        "must_include": [
+          "Example Museum instance of museum"
+        ],
+        "should_include": [
+          "Example Museum located in Example City",
+          "Example Museum exhibits science exhibits",
+          "Example Museum material glass"
+        ],
+        "context_only": [],
+        "evidence_facts": [
+          "Example Museum instance of museum",
+          "Example Museum located in Example City",
+          "Example Museum exhibits science exhibits",
+          "Example Museum material glass"
+        ]
+      },
+      "expected_generated_content": {
+        "type": "text",
+        "value": "Example Museum is a museum with science exhibits."
+      },
+      "expected_request_sha256": [
+        "a23086e866f3a7034da693aa3c63f9f402ffa2fb10afdbfbdb0a4e8cb3e608e9"
+      ]
+    },
+    {
+      "id": "stage3_text_retry1",
+      "mode": "text",
+      "retry": true,
+      "feedback": {
+        "repair_actions": [
+          "remove unsupported details"
+        ],
+        "preserve": [
+          "entity identity"
+        ]
+      },
+      "responses": [
+        "Example Museum is a museum with science exhibits."
+      ],
+      "expected_generation_brief": {
+        "generation_intent": "Create a text candidate centered on instance of using the safe retry identity anchor angle.",
+        "semantic_focus": "instance of",
+        "diversity_axis": "safer regeneration of core identity of Example Museum as a museum",
+        "evidence_policy": "grounded_graph_only",
+        "style_guidance": "natural concise description",
+        "must_include": [
+          "Example Museum instance of museum"
+        ],
+        "should_include": [
+          "Example Museum located in Example City",
+          "Example Museum exhibits science exhibits",
+          "Example Museum material glass"
+        ],
+        "context_only": [],
+        "evidence_facts": [
+          "Regenerate safer candidates using only graph-supported facts.",
+          "Preserve entity identity, supported core attributes, and selected relation roles.",
+          "Apply these Stage 3 repair actions: remove unsupported details",
+          "Example Museum instance of museum"
+        ]
+      },
+      "expected_generated_content": {
+        "type": "text",
+        "value": "Example Museum is a museum with science exhibits."
+      },
+      "expected_request_sha256": [
+        "866256c05138a09f900092253d3e7dc3a4503fca37e517adcf92297d886381b9"
+      ]
+    },
+    {
+      "id": "stage3_image_retry0",
+      "mode": "image",
+      "retry": false,
+      "feedback": {
+        "repair_actions": [
+          "remove unsupported details"
+        ],
+        "preserve": [
+          "entity identity"
+        ]
+      },
+      "responses": [
+        "{\"positive_prompt\": \"A museum exterior with a glass facade, neutral lighting, balanced composition\", \"used_text_cues\": [\"glass facade\"], \"omitted_risky_details\": [\"official logos\"]}"
+      ],
+      "expected_generation_brief": {
+        "generation_intent": "Create a image candidate centered on instance of using the identity anchor angle.",
+        "semantic_focus": "instance of",
+        "diversity_axis": "core identity of Example Museum as a museum",
+        "evidence_policy": "grounded_graph_only",
+        "style_guidance": "clear inspectable composition, concrete but not over-specific",
+        "must_include": [
+          "Example Museum instance of museum"
+        ],
+        "should_include": [
+          "Example Museum located in Example City",
+          "Example Museum exhibits science exhibits",
+          "Example Museum material glass"
+        ],
+        "context_only": [],
+        "evidence_facts": [
+          "Example Museum instance of museum",
+          "Example Museum located in Example City",
+          "Example Museum exhibits science exhibits",
+          "Example Museum material glass"
+        ]
+      },
+      "expected_generated_content": {
+        "type": "image_prompt",
+        "value": "A museum exterior with a glass facade, neutral lighting, balanced composition, Example Museum instance of museum, Example Museum located in Example City, Example Museum exhibits science exhibits"
+      },
+      "expected_request_sha256": [
+        "83618c3edd54af56dbb866320e3badc3c297bf7a5327036c6f660a6f75438ec7"
+      ]
+    },
+    {
+      "id": "stage3_image_retry1",
+      "mode": "image",
+      "retry": true,
+      "feedback": {
+        "repair_actions": [
+          "remove unsupported details"
+        ],
+        "preserve": [
+          "entity identity"
+        ]
+      },
+      "responses": [
+        "{\"positive_prompt\": \"A museum exterior with a glass facade, neutral lighting, balanced composition\", \"used_text_cues\": [\"glass facade\"], \"omitted_risky_details\": [\"official logos\"]}"
+      ],
+      "expected_generation_brief": {
+        "generation_intent": "Create a image candidate centered on instance of using the safe retry identity anchor angle.",
+        "semantic_focus": "instance of",
+        "diversity_axis": "safer regeneration of core identity of Example Museum as a museum",
+        "evidence_policy": "grounded_graph_only",
+        "style_guidance": "clear inspectable composition, concrete but not over-specific",
+        "must_include": [
+          "Example Museum instance of museum"
+        ],
+        "should_include": [
+          "Example Museum located in Example City",
+          "Example Museum exhibits science exhibits",
+          "Example Museum material glass"
+        ],
+        "context_only": [],
+        "evidence_facts": [
+          "Regenerate safer candidates using only graph-supported facts.",
+          "Preserve entity identity, supported core attributes, and selected relation roles.",
+          "Apply these Stage 3 repair actions: remove unsupported details",
+          "Example Museum instance of museum"
+        ]
+      },
+      "expected_generated_content": {
+        "type": "image_prompt",
+        "value": "A museum exterior with a glass facade, neutral lighting, balanced composition, Example Museum instance of museum, Example Museum located in Example City, Example Museum exhibits science exhibits"
+      },
+      "expected_request_sha256": [
+        "cef2cb7614fdd84704f827f9bfadcea9aff08fad4b9220510b235bb220b343b2"
+      ]
+    }
+  ]
+}

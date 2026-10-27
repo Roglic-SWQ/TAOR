@@ -9,10 +9,11 @@ from urllib import request
 
 from mmkgc.adapters.qwen import QwenConfig
 from mmkgc.stages.relation_planning import (
-    RelationPlanValidationError, apply_relation_plans, selection_prompt, selection_response_schema,
+    SLOT_SCHEMA, RelationPlanValidationError, apply_candidate_slot_plans,
+    candidate_slot_response_schema, selection_prompt,
 )
 
-PROMPT_VERSION = "gpt4omini_stage2_constraints_v2"
+PROMPT_VERSION = "gpt4omini_stage2_candidate_slots_v3"
 
 
 class GPT4oMiniRelationPlanner:
@@ -58,10 +59,11 @@ class GPT4oMiniRelationPlanner:
             "model_name": self.config.model_name, "prompt": prompt,
             "system_prompt": system, "ground_truth_used": False,
             "prompt_version": PROMPT_VERSION,
+            "response_schema_version": SLOT_SCHEMA,
         }
         started = time.perf_counter()
         try:
-            schema = selection_response_schema(knowledge)
+            schema = candidate_slot_response_schema(knowledge, candidate_budget)
             messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
             invalid_responses: set[str] = set()
             attempts: list[dict[str, Any]] = []
@@ -84,7 +86,7 @@ class GPT4oMiniRelationPlanner:
                 try:
                     if errors:
                         raise RelationPlanValidationError(errors)
-                    result = apply_relation_plans(knowledge, parsed, missing_mode, candidate_budget)
+                    result = apply_candidate_slot_plans(knowledge, parsed, missing_mode, candidate_budget)
                 except RelationPlanValidationError as exc:
                     attempts.append({"attempt": attempt, "response_text": response, "errors": exc.errors})
                     call.update(contract_repair_error=str(exc), contract_repair_error_type=type(exc).__name__,
@@ -105,7 +107,12 @@ class GPT4oMiniRelationPlanner:
                         "an empty path refers to the entire response. "
                         "Cite only the current fact's allowed evidence; use supporting_fact_ids to "
                         "link other facts. Keep every fact_id exactly once, give every role a "
-                        "nonblank reason, and recheck support roles and total candidate_budget. "
+                        "nonblank reason, and recheck support roles and candidate slot count. "
+                        "Return {plan: {status, relation_plans, candidate_anchors}} with no "
+                        "candidate_quota fields. Keeping a fact does not require a slot. "
+                        "For ready, choose exactly candidate_budget anchor IDs, allowing repeats; "
+                        "primary facts need a slot and secondary facts can keep zero slots. "
+                        "For insufficient_evidence, use only context/excluded roles and no slots. "
                         "Do not repeat the invalid response.\nVALIDATION_ERRORS_JSON:\n"
                         + json.dumps({"candidate_budget": candidate_budget, "validation_errors": exc.errors},
                                      ensure_ascii=False, separators=(",", ":"))
