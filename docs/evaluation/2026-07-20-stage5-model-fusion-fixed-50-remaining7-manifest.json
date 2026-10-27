@@ -1,0 +1,111 @@
+{
+  "eligibility": {
+    "required_readable_generated_images": 5,
+    "required_stage_files": [
+      "0_coarse_relation_filtering.json",
+      "1_knowledge_modeling.json",
+      "2_graph_constrained_reasoning.json",
+      "3_fine_grained_relation_selection.json",
+      "4_relation_alternation_generation.json",
+      "5_kg_aware_pair_ranking.json",
+      "final.json"
+    ],
+    "required_text_candidates": 5,
+    "requires_ground_truth_text": true,
+    "uses_candidate_scores": false
+  },
+  "eligible_entity_count": 500,
+  "manifest_schema_version": "stage5_fixed_manifest_v1",
+  "rejected_entity_counts": {},
+  "requested_sample_size": 7,
+  "sample_size": 7,
+  "samples": [
+    {
+      "entity_key": "Q4068989",
+      "entity_label": "James Moorhouse",
+      "entity_type": "entity",
+      "fallback_status": "no_fallback",
+      "ground_truth_image_available": false,
+      "index": 28,
+      "primary_relation": "educated at",
+      "selection_reason": "eligible: complete six-stage artifacts, 5 text candidates, 5 readable generated images, and ground-truth text",
+      "stratum_key": "entity|no_fallback|educated at|false"
+    },
+    {
+      "entity_key": "Q974693",
+      "entity_label": "Italian Americans",
+      "entity_type": "entity",
+      "fallback_status": "no_fallback",
+      "ground_truth_image_available": false,
+      "index": 29,
+      "primary_relation": "ethnic group",
+      "selection_reason": "eligible: complete six-stage artifacts, 5 text candidates, 5 readable generated images, and ground-truth text",
+      "stratum_key": "entity|no_fallback|ethnic group|false"
+    },
+    {
+      "entity_key": "Q42574",
+      "entity_label": "James Cameron",
+      "entity_type": "entity",
+      "fallback_status": "no_fallback",
+      "ground_truth_image_available": false,
+      "index": 30,
+      "primary_relation": "film editor",
+      "selection_reason": "eligible: complete six-stage artifacts, 5 text candidates, 5 readable generated images, and ground-truth text",
+      "stratum_key": "entity|no_fallback|film editor|false"
+    },
+    {
+      "entity_key": "Q84",
+      "entity_label": "London",
+      "entity_type": "entity",
+      "fallback_status": "no_fallback",
+      "ground_truth_image_available": false,
+      "index": 31,
+      "primary_relation": "filming location",
+      "selection_reason": "eligible: complete six-stage artifacts, 5 text candidates, 5 readable generated images, and ground-truth text",
+      "stratum_key": "entity|no_fallback|filming location|false"
+    },
+    {
+      "entity_key": "Q605511",
+      "entity_label": "Fredrik Modin",
+      "entity_type": "entity",
+      "fallback_status": "no_fallback",
+      "ground_truth_image_available": true,
+      "index": 43,
+      "primary_relation": "member of sports team",
+      "selection_reason": "eligible: complete six-stage artifacts, 5 text candidates, 5 readable generated images, and ground-truth text",
+      "stratum_key": "entity|no_fallback|member of sports team|true"
+    },
+    {
+      "entity_key": "Q667661",
+      "entity_label": "literary realism",
+      "entity_type": "entity",
+      "fallback_status": "no_fallback",
+      "ground_truth_image_available": false,
+      "index": 44,
+      "primary_relation": "movement",
+      "selection_reason": "eligible: complete six-stage artifacts, 5 text candidates, 5 readable generated images, and ground-truth text",
+      "stratum_key": "entity|no_fallback|movement|false"
+    },
+    {
+      "entity_key": "Q61",
+      "entity_label": "Washington, D.C.",
+      "entity_type": "entity",
+      "fallback_status": "no_fallback",
+      "ground_truth_image_available": false,
+      "index": 45,
+      "primary_relation": "narrative location",
+      "selection_reason": "eligible: complete six-stage artifacts, 5 text candidates, 5 readable generated images, and ground-truth text",
+      "stratum_key": "entity|no_fallback|narrative location|false"
+    }
+  ],
+  "seed": 20260717,
+  "selection_policy": "remaining fixed50 entries after stage5_model_fusion_rerank + remaining25_retry1",
+  "source_manifest": "docs/evaluation/2026-07-17-stage5-model-fusion-fixed-50-manifest.json",
+  "source_run_dir": "outputs/qwen_sdxl_500_20260712",
+  "stratification_fields": [
+    "entity_type",
+    "fallback_status",
+    "primary_relation",
+    "ground_truth_image_available"
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "dataset_dir": "datasets/MKG-W",
+  "missing_mode": "text",
+  "limit": 100,
+  "candidate_budget": 5,
+  "output_root": "outputs",
+  "run_name": null
+}

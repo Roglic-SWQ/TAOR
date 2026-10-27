@@ -1,0 +1,7 @@
+gemini:
+  api_key_env: GEMINI_API_KEY
+  base_url: https://generativelanguage.googleapis.com/v1beta
+  model_name: gemini-embedding-2
+  output_dimensionality: 768
+  timeout_seconds: 120
+  max_retries: 2

@@ -1,0 +1,52 @@
+[
+  {
+    "entity_key": "Q102341",
+    "label": "Farrah Fawcett",
+    "category": "person"
+  },
+  {
+    "entity_key": "Q303",
+    "label": "Elvis Presley",
+    "category": "person"
+  },
+  {
+    "entity_key": "Q502245",
+    "label": "Andrei Makrov",
+    "category": "person"
+  },
+  {
+    "entity_key": "Q1141252",
+    "label": "Do the Right Thing",
+    "category": "film"
+  },
+  {
+    "entity_key": "Q1090566",
+    "label": "Flying Swords of Dragon Gate",
+    "category": "film"
+  },
+  {
+    "entity_key": "Q586",
+    "label": "Bonn",
+    "category": "place"
+  },
+  {
+    "entity_key": "Q1353",
+    "label": "Delhi",
+    "category": "place"
+  },
+  {
+    "entity_key": "Q18233",
+    "label": "ABBA",
+    "category": "music"
+  },
+  {
+    "entity_key": "Q875637",
+    "label": "College of William & Mary",
+    "category": "organization"
+  },
+  {
+    "entity_key": "Q203992",
+    "label": "Game Boy Color",
+    "category": "object"
+  }
+]

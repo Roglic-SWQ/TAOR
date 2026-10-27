@@ -1,0 +1,9 @@
+lmm:
+  model_name_env: QWEN_MODEL_NAME
+  base_url_env: QWEN_BASE_URL
+  api_key_env: QWEN_API_KEY
+
+inference:
+  max_token: 4096
+  image_prompt_max_token: 384
+  temperature: 0.0

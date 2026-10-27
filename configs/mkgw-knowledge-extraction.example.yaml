@@ -1,0 +1,15 @@
+lmm:
+  model_name: ./Qwen/Qwen2-VL-7B-Instruct
+  base_url: http://localhost:12345/v1
+  api_key: <local-api-key>
+
+dataset:
+  name: mkgw
+  data_dir: ./datasets/MKG-W
+  entity_info_path: ./datasets/MKG-W/entity_info.json
+
+inference:
+  save_path: ./outputs/qwen_text_smoke
+  max_token: 512
+  temperature: 0.1
+  num_workers: 1

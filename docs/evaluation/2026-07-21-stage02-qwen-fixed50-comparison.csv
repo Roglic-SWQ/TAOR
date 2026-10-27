@@ -1,0 +1,51 @@
+entity_key,entity_label,stage0_relation_set_changed,stage0_relation_order_changed,stage0_top_relation_changed,stage1_entity_type_changed,stage1_relation_facts_changed,stage2_supported_facts_changed,stage4_text_primary_changed,stage4_image_primary_changed,best_pair_changed,best_text_changed,best_image_changed,baseline_best_pair_score,semantic_best_pair_score,best_pair_score_delta
+Q995267,Bryn Mawr,False,False,False,False,False,False,False,False,False,False,False,0.91783,0.91783,0.0
+Q1286434,Kerman County,False,False,False,False,False,False,False,False,False,False,False,0.859788,0.859788,0.0
+Q393366,Paveh County,False,False,False,False,False,False,False,False,False,False,False,0.84946,0.84946,0.0
+Q485172,Ann Arbor,False,False,False,False,False,False,False,False,False,False,False,0.883296,0.883296,0.0
+Q4132673,Dänew District,False,False,False,False,False,False,False,False,False,False,False,0.826076,0.826076,0.0
+Q1393576,Gerald Fink,True,True,True,False,True,True,True,True,False,False,False,0.840858,0.883388,0.04253
+Q16225071,Anton Shenfeld,True,True,True,False,True,True,True,True,False,False,False,0.840858,0.906409,0.065551
+Q337351,Rex Stout,False,False,False,False,False,False,False,False,False,False,False,0.780017,0.781519,0.001502
+Q95030,Warren Beatty,True,True,False,False,True,True,True,True,True,False,False,0.66164,0.73201,0.07037
+Q348345,Donald O'Connor,False,False,False,False,False,False,False,False,False,False,False,0.867195,0.867195,0.0
+Q476921,kidney failure,False,False,False,False,False,False,False,False,False,False,False,0.844123,0.873825,0.029702
+Q1351259,Mark Mothersbaugh,False,False,False,False,False,False,False,False,False,False,False,0.842405,0.842405,0.0
+Q111436,Elmer Bernstein,False,False,False,False,False,False,False,False,False,False,False,0.670286,0.670286,0.0
+Q7171690,Petar Brlek,False,False,False,False,False,False,False,False,False,False,False,0.790176,0.790176,0.0
+Q224,Croatia,False,False,False,False,False,False,False,False,False,False,False,0.754025,0.754025,0.0
+Q10904448,The Man Who Could Not Shudder,True,True,True,False,True,True,True,True,False,False,False,0.888818,0.941112,0.052294
+Q826,Maldives,False,False,False,False,False,False,False,False,False,False,False,0.795896,0.795896,0.0
+Q13752,Bohol,False,False,False,False,False,False,False,False,False,False,False,0.759823,0.759823,0.0
+Q466154,Jack E. Cox,False,False,False,False,False,False,False,False,False,False,False,0.796163,0.796673,0.00051
+Q1064479,Charles G. Clarke,False,False,False,False,False,False,False,False,False,False,False,0.789728,0.793572,0.003844
+Q260969,Jules Dassin,False,False,False,False,False,False,False,False,False,False,False,0.73514,0.736792,0.001652
+Q319204,Brett Ratner,False,False,False,False,False,False,False,False,False,False,False,0.735526,0.736792,0.001266
+Q159846,Paramount Pictures,False,False,False,False,False,False,False,False,False,False,True,0.738304,0.799158,0.060854
+Q465224,American International Pictures,False,False,False,False,False,False,False,False,False,False,False,0.845491,0.863382,0.017891
+Q5294,DVD,False,False,False,False,False,False,False,False,False,False,False,0.714598,0.805534,0.090936
+Q902512,Minnesota North Stars,False,False,False,False,False,False,False,False,False,False,False,0.798496,0.843291,0.044795
+Q132893,Dallas Mavericks,False,False,False,False,False,False,False,False,False,False,False,0.811859,0.830857,0.018998
+Q4068989,James Moorhouse,False,False,False,False,False,False,False,False,False,False,False,0.786059,0.786059,0.0
+Q974693,Italian Americans,False,False,False,False,False,False,False,False,False,False,False,0.831757,0.85223,0.020473
+Q42574,James Cameron,False,False,False,False,False,False,False,False,False,False,False,0.67539,0.670747,-0.004643
+Q84,London,False,False,False,False,False,True,False,False,False,False,False,0.785753,0.785753,0.0
+Q11366,alternative rock,False,False,False,False,False,False,False,False,False,False,False,0.779778,0.788951,0.009173
+Q987,New Delhi,False,False,False,False,False,False,False,False,False,False,False,0.828114,0.828114,0.0
+Q7243,Leo Tolstoy,False,False,False,False,False,False,False,False,False,False,False,0.887254,0.887254,0.0
+Q137535,county of Iran,False,False,False,False,False,False,False,False,False,False,False,0.845465,0.857906,0.012441
+Q128309,drum kit,False,False,False,False,False,False,False,False,False,False,False,0.801675,0.8359,0.034225
+Q1321,Spanish,False,False,False,False,False,False,False,False,False,False,False,0.781594,0.837681,0.056087
+Q489197,Torrance,False,False,False,False,False,False,False,False,False,False,False,0.789228,0.789228,0.0
+Q579321,Dalhousie University,False,False,False,False,False,False,False,False,False,False,False,0.824241,0.824241,0.0
+Q381955,ATM,False,False,False,False,False,False,False,False,False,False,False,0.82513,0.832155,0.007025
+Q826977,Progressive Conservative Party of Ontario,False,False,False,False,False,False,False,False,False,False,False,0.928035,0.931873,0.003838
+Q3567951,Widnes Vikings,False,False,False,False,False,False,False,False,False,False,False,0.714747,0.742648,0.027901
+Q605511,Fredrik Modin,False,False,False,False,False,False,False,False,False,False,False,0.790176,0.790176,0.0
+Q667661,literary realism,False,False,False,False,False,False,False,False,False,False,False,0.839272,0.839272,0.0
+Q61,"Washington, D.C.",False,False,False,False,False,False,False,False,False,False,False,0.8312,0.8312,0.0
+Q128641,Richard Bedford Bennett,False,False,False,False,False,False,False,False,False,False,False,0.821258,0.821258,0.0
+Q508752,Frank Lautenberg,False,False,False,False,False,False,False,False,False,False,False,0.790176,0.790176,0.0
+Q908436,TV Asahi,False,False,False,False,False,False,False,False,False,True,False,0.761241,0.788134,0.026893
+Q858742,Cartman's Mom Is a Dirty Slut,False,False,False,False,False,False,False,False,False,False,False,0.884611,0.884611,0.0
+Q189266,Eastern Front,False,False,False,False,False,False,False,False,False,False,False,0.846342,0.865908,0.019566

@@ -1,0 +1,9 @@
+lmm:
+  model_name: gpt-4o-mini
+  base_url_env: OPENAI_BASE_URL
+  api_key_env: OPENAI_API_KEY
+
+inference:
+  max_token: 1024
+  image_prompt_max_token: 384
+  temperature: 0.0

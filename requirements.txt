@@ -1,0 +1,11 @@
+# Install a Torch/torchvision build appropriate for the local CUDA runtime first.
+-r requirements-stage1-reranker.txt
+numpy==1.26.4
+Pillow==11.3.0
+PyYAML==6.0.2
+diffusers==0.31.0
+accelerate==1.1.1
+sentence-transformers==5.6.0
+bert-score==0.3.13
+openai-clip==1.0.1
+packaging>=23

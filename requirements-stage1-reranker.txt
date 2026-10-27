@@ -1,0 +1,6 @@
+# Keep the pipeline on a Qwen3-compatible release with the existing Torch 2.5 runtime.
+transformers==4.51.3
+safetensors>=0.4.3
+python-dotenv>=1.0,<2
+# Concurrent Stage 4 HTTP requests retain an overall deadline in worker threads.
+httpx>=0.27,<1

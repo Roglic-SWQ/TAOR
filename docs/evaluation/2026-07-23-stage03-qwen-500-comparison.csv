@@ -1,0 +1,501 @@
+entity_key,entity_label,stage0_relation_set_changed,stage0_relation_order_changed,stage0_top_relation_changed,stage1_entity_type_changed,stage1_relation_facts_changed,stage2_supported_facts_changed,stage4_text_primary_changed,stage4_image_primary_changed,best_pair_changed,best_text_changed,best_image_changed,baseline_best_pair_score,semantic_best_pair_score,best_pair_score_delta
+Q102711,Dennis Hopper,False,False,False,False,False,False,False,False,False,False,False,0.669444,0.676032,0.006588
+Q1030652,Ricochet,False,False,False,False,False,False,False,False,False,False,False,0.801122,0.801122,0.0
+Q104266,Mel Brooks,False,False,False,False,False,False,False,False,False,False,False,0.631341,0.631341,0.0
+Q1044,Sierra Leone,False,False,False,False,False,False,True,False,False,True,False,0.737871,0.737871,0.0
+Q104994,Los Angeles County,False,False,False,False,False,False,False,False,False,False,False,0.702149,0.703885,0.001736
+Q105221,Dan Aykroyd,False,False,False,False,True,True,False,True,False,False,False,0.826496,0.783403,-0.043093
+Q1055,Hamburg,False,False,False,False,False,False,False,False,False,False,False,0.793349,0.793349,0.0
+Q1055491,Still in the Groove,False,False,False,False,False,False,False,False,False,False,False,0.790333,0.790333,0.0
+Q1056704,I Vinti,False,False,False,False,False,False,False,False,False,False,False,0.738512,0.738512,0.0
+Q1064479,Charles G. Clarke,False,False,False,False,False,False,False,False,False,False,False,0.80294,0.784246,-0.018694
+Q10859,Spanish Civil War,False,False,False,False,False,False,False,False,False,False,False,0.698756,0.703602,0.004846
+Q108622,Talia Shire,False,False,False,False,False,False,False,False,False,False,False,0.809957,0.810295,0.000338
+Q1086291,Christophe Beck,False,False,False,False,False,False,False,False,False,False,False,0.820115,0.78989,-0.030225
+Q10904448,The Man Who Could Not Shudder,True,True,True,False,True,True,True,True,False,False,False,0.831846,0.857318,0.025472
+Q1090566,Flying Swords of Dragon Gate,False,False,False,False,False,False,False,False,False,False,False,0.760282,0.760282,0.0
+Q1107,anime,False,False,False,False,False,False,False,False,False,False,False,0.725313,0.725313,0.0
+Q111436,Elmer Bernstein,False,False,False,False,False,False,False,False,True,False,False,0.730146,0.684293,-0.045853
+Q11230,Q11230,False,False,False,False,False,False,False,False,False,False,False,0.825365,0.825365,0.0
+Q11248,Q11248,False,False,False,False,False,False,False,False,False,False,False,0.825365,0.825365,0.0
+Q11366,alternative rock,False,False,False,False,False,False,False,False,False,False,False,0.817555,0.784242,-0.033313
+Q11424,film,False,False,False,False,False,False,False,False,False,False,False,0.829716,0.773955,-0.055761
+Q1152519,The Boy Who Knew Too Much,True,True,True,False,True,True,True,True,False,False,False,0.831846,0.840253,0.008407
+Q1153176,tight end,True,True,True,False,True,True,True,True,False,False,False,0.836077,0.841253,0.005176
+Q1156,Mumbai,False,False,False,False,False,False,False,False,False,False,True,0.731875,0.785829,0.053954
+Q11578089,"Foster Daddy, Tora!",False,False,False,False,False,False,False,False,False,False,False,0.762057,0.762057,0.0
+Q1164740,The American,False,False,False,False,False,False,False,False,False,False,False,0.75453,0.75453,0.0
+Q1166180,Julia,False,False,False,False,False,False,False,False,False,False,False,0.755879,0.755879,0.0
+Q1197352,Test Pilot,False,False,False,False,False,True,False,False,False,False,False,0.80466,0.80466,0.0
+Q1199728,The Uninvited,False,False,False,False,False,False,False,False,False,False,False,0.807585,0.807585,0.0
+Q1209853,Dick Tracy,False,False,False,False,False,False,False,False,False,False,False,0.710874,0.705015,-0.005859
+Q12126490,Neutral Port,False,False,False,False,False,False,False,False,False,False,False,0.757717,0.757717,0.0
+Q12129012,The Argyle Case,False,False,False,False,False,False,False,False,False,False,False,0.767162,0.767162,0.0
+Q1214605,The Conspirator,False,False,False,False,False,False,False,False,False,False,False,0.807212,0.807212,0.0
+Q1276338,Keble College,False,False,False,False,False,False,False,False,False,False,False,0.668026,0.668026,0.0
+Q128309,drum kit,False,False,False,False,False,False,False,False,False,False,False,0.787678,0.780545,-0.007133
+Q128641,Richard Bedford Bennett,False,False,False,False,False,False,False,False,False,False,False,0.761689,0.761689,0.0
+Q1286434,Kerman County,False,False,False,False,False,False,False,False,False,False,False,0.819512,0.819512,0.0
+Q128645,Arthur Meighen,False,False,False,False,False,False,False,False,False,False,False,0.756415,0.756415,0.0
+Q129049,Dishonored Lady,False,False,False,False,False,False,False,False,False,False,False,0.804015,0.804015,0.0
+Q12993439,King,False,False,False,False,False,False,False,False,False,False,False,0.770672,0.770672,0.0
+Q1304614,That Touch of Mink,False,False,False,False,False,False,False,False,False,False,False,0.818589,0.818589,0.0
+Q1321,Spanish,False,False,False,False,False,False,False,False,False,False,False,0.778197,0.778197,0.0
+Q132893,Dallas Mavericks,False,False,False,False,False,False,False,False,False,False,False,0.760553,0.776928,0.016375
+Q132952,Adam Sandler,False,False,False,False,False,False,False,False,False,False,False,0.792548,0.792548,0.0
+Q1339,Johann Sebastian Bach,False,False,False,False,False,False,False,False,False,False,False,0.688769,0.688769,0.0
+Q1342432,Live to Tell,False,False,False,False,False,False,False,False,False,False,False,0.77038,0.77038,0.0
+Q1346090,Enzo D’Alò,False,False,False,True,False,False,False,False,False,True,False,0.710949,0.712884,0.001935
+Q134672,Exeter,False,False,False,False,False,False,False,False,False,False,False,0.652081,0.652081,0.0
+Q134674,Bayonne,False,False,False,False,False,False,False,False,False,False,False,0.639301,0.639301,0.0
+Q134969,R.E.M.,False,False,False,False,True,True,False,True,False,False,False,0.848345,0.784184,-0.064161
+Q1351259,Mark Mothersbaugh,False,False,False,False,False,False,False,False,False,False,False,0.804035,0.804035,0.0
+Q1351291,Eric Fellner,False,False,False,False,False,False,False,False,False,False,False,0.814832,0.781305,-0.033527
+Q1354061,Pedro Costa,False,False,False,False,False,False,False,False,False,False,False,0.70708,0.70708,0.0
+Q1354121,Melinda and Melinda,False,False,False,False,False,False,False,False,False,False,False,0.762059,0.762059,0.0
+Q1356749,Ernesto Gastaldi,False,False,False,False,False,False,False,False,False,False,False,0.680201,0.674203,-0.005998
+Q1357559,Piero De Bernardi,False,False,False,False,False,False,False,False,False,False,False,0.681672,0.681672,0.0
+Q1358159,Polar,False,False,False,False,False,False,False,False,False,False,False,0.652916,0.66011,0.007194
+Q1373204,Francis Eugene Worley,False,False,False,False,False,False,False,False,False,False,False,0.761689,0.766639,0.00495
+Q13752,Bohol,False,False,False,False,False,False,False,False,False,False,False,0.753111,0.753111,0.0
+Q137535,county of Iran,False,False,False,False,False,False,False,False,False,False,False,0.896174,0.81373,-0.082444
+Q138089,Philadelphia 76ers,False,False,False,False,False,False,False,False,False,False,False,0.748511,0.769341,0.02083
+Q1393256,Jack Carson,False,False,False,False,False,False,False,False,False,False,False,0.860545,0.86137,0.000825
+Q1393576,Gerald Fink,True,True,True,False,True,True,True,True,False,False,False,0.836077,0.811306,-0.024771
+Q13974,NBC,False,False,False,False,False,False,False,False,False,False,False,0.839535,0.839535,0.0
+Q1401821,"Enemies, a Love Story",True,True,False,False,True,True,True,False,False,True,False,0.814913,0.814693,-0.00022
+Q141673,Jack Conway,False,False,False,False,False,False,False,False,False,False,False,0.7319,0.729104,-0.002796
+Q1418568,Nowhere Man,False,False,False,False,False,False,False,False,False,False,False,0.783965,0.783965,0.0
+Q1419817,I'll Take the Rain,False,False,False,False,False,False,False,False,False,False,False,0.802412,0.802412,0.0
+Q142,France,False,False,False,False,False,False,True,False,True,True,False,0.732769,0.712037,-0.020732
+Q142292,Traffic,True,True,True,False,True,True,True,True,False,False,False,0.836994,0.764512,-0.072482
+Q1423235,Moby Dick,False,False,False,False,False,False,False,False,False,False,False,0.736761,0.736761,0.0
+Q145,United Kingdom,False,False,False,False,False,False,False,False,True,True,False,0.705145,0.690242,-0.014903
+Q1460837,Gambler,False,False,False,False,False,False,False,False,False,False,False,0.755846,0.755846,0.0
+Q1469084,The Gingerbread Man,False,False,False,False,False,False,False,False,False,False,False,0.754568,0.754568,0.0
+Q1471937,Saathiya,False,False,False,False,False,False,True,True,False,True,True,0.721903,0.761623,0.03972
+Q1475995,The Lower Depths,False,False,False,False,False,True,False,False,False,False,False,0.687781,0.687781,0.0
+Q14773,Macau,False,False,False,False,False,False,False,False,False,False,False,0.817488,0.817488,0.0
+Q1477751,William Boyd,False,False,False,False,False,False,False,False,False,False,False,0.8179,0.8179,0.0
+Q151048,London Borough of Barnet,False,False,False,False,False,False,False,False,False,False,False,0.764676,0.764676,0.0
+Q1524,Athens,True,True,False,False,True,True,False,True,True,True,True,0.861979,0.799194,-0.062785
+Q1526138,Giovanni Garzoni,False,False,False,False,False,False,False,False,False,False,False,0.758629,0.758629,0.0
+Q1526143,Jules White,False,False,False,False,False,False,False,False,False,False,False,0.757154,0.757154,0.0
+Q154182,Battle of Berlin,False,False,False,False,False,False,False,False,False,False,False,0.803262,0.803262,0.0
+Q154804,Leipzig University,False,False,False,False,True,True,False,False,False,False,False,0.798688,0.795966,-0.002722
+Q1568727,Enver Hoxhaj,False,False,False,False,False,False,False,False,False,False,False,0.75082,0.75082,0.0
+Q15935,Kanye West,False,False,False,False,False,False,False,False,False,False,False,0.74844,0.803138,0.054698
+Q159846,Paramount Pictures,False,False,False,True,True,True,False,True,True,True,True,0.779257,0.790848,0.011591
+Q1610624,Return to Peyton Place,False,False,False,False,False,False,False,False,False,False,False,0.811283,0.811283,0.0
+Q1611317,Music Box,False,False,False,False,False,False,False,False,False,False,False,0.763324,0.763324,0.0
+Q161345,Houston Rockets,False,False,False,False,False,False,False,False,False,False,False,0.75607,0.77476,0.01869
+Q16225071,Anton Shenfeld,True,True,True,False,True,True,True,True,False,False,False,0.836077,0.839371,0.003294
+Q1639875,The Long Gray Line,False,False,False,False,False,False,False,False,False,False,False,0.758381,0.758381,0.0
+Q16472,Robert Mitchum,False,False,False,False,False,False,False,False,False,False,False,0.816248,0.798056,-0.018192
+Q1691477,Joe Somebody,False,False,False,False,False,False,False,False,False,False,False,0.804015,0.804015,0.0
+Q16963,Jiangsu,True,True,True,False,True,True,True,True,True,True,False,0.836994,0.775588,-0.061406
+Q16967,Zhejiang,False,False,False,False,False,False,False,False,False,False,False,0.830688,0.830688,0.0
+Q16976993,Richard Pryor: Omit the Logic,False,False,False,False,False,True,False,False,False,False,False,0.717958,0.717958,0.0
+Q17,Japan,False,False,False,False,False,False,False,False,True,False,False,0.651079,0.635953,-0.015126
+Q1708667,Midway,False,False,False,False,False,False,True,True,False,True,True,0.721903,0.761623,0.03972
+Q171736,Robert Duvall,False,False,False,False,False,False,False,False,True,False,False,0.712346,0.647942,-0.064404
+Q172157,Winchester,True,True,True,False,True,True,True,True,False,False,False,0.836994,0.811941,-0.025053
+Q173474,Veliko Tarnovo,True,True,True,False,True,True,True,True,False,False,False,0.836077,0.809632,-0.026445
+Q174291,Morning Musume,False,False,False,False,False,False,False,False,False,False,False,0.772436,0.772436,0.0
+Q174385,Alice in Wonderland,False,False,False,False,False,False,False,False,False,False,False,0.762205,0.762205,0.0
+Q1744,Madonna,False,False,False,False,False,False,False,False,False,False,False,0.728704,0.709341,-0.019363
+Q174648,Mani Ratnam,False,False,False,False,False,False,False,False,False,False,False,0.64216,0.64216,0.0
+Q17479333,The Cheeky Devil,False,False,False,False,False,False,False,False,False,False,False,0.809912,0.809912,0.0
+Q1755183,Belle of the Nineties,False,False,False,False,False,False,False,False,False,False,False,0.762775,0.762775,0.0
+Q178169,Presbyterianism,False,False,False,False,False,False,False,False,False,False,False,0.810009,0.81023,0.000221
+Q1792965,Kurbaan,False,False,False,False,False,False,False,False,False,False,False,0.801122,0.801122,0.0
+Q180338,Christopher Lee,False,False,False,False,True,True,False,True,False,False,False,0.828927,0.806239,-0.022688
+Q18048100,Marcus Stock,True,True,True,False,True,True,True,True,False,False,False,0.836077,0.79674,-0.039337
+Q18210113,Veettuku Veedu,False,False,False,False,False,False,False,False,False,False,False,0.804015,0.804015,0.0
+Q184116,Gary,False,False,False,False,False,False,False,False,False,False,False,0.828006,0.828526,0.00052
+Q185051,Christopher Walken,False,False,False,True,False,False,False,False,False,False,False,0.655042,0.726021,0.070979
+Q185214,Anna Christie,False,False,False,False,False,False,False,False,False,False,False,0.804015,0.804015,0.0
+Q18531190,Thank You Jan!,False,False,False,False,False,False,False,False,False,False,False,0.768955,0.768955,0.0
+Q1859330,Luciano Tovoli,False,False,False,True,True,True,False,False,False,True,False,0.737185,0.731927,-0.005258
+Q1865,Kuala Lumpur,False,False,False,False,False,False,False,False,True,True,True,0.853368,0.865706,0.012338
+Q186587,Troy,False,False,False,False,False,False,False,False,False,False,False,0.756597,0.756597,0.0
+Q1867,Taipei,True,True,False,False,True,True,False,True,True,True,True,0.865236,0.796766,-0.06847
+Q186941,Columbia Pictures,False,False,False,False,False,False,False,False,False,False,False,0.820787,0.820787,0.0
+Q1891,Bologna,False,False,False,False,False,False,True,True,False,False,False,0.778755,0.778755,0.0
+Q189266,Eastern Front,False,False,False,False,False,False,False,False,False,False,False,0.751988,0.751988,0.0
+Q189635,Eagles,False,False,False,False,False,False,False,False,False,False,False,0.802472,0.802472,0.0
+Q190998,Anjelica Huston,False,False,False,False,False,False,False,False,False,False,False,0.674628,0.674628,0.0
+Q193397,Steve Vai,False,False,False,True,True,True,False,False,False,False,False,0.779278,0.847434,0.068156
+Q193559,Valve Corporation,True,True,True,True,True,True,True,True,False,False,False,0.836077,0.845831,0.009754
+Q1954593,The Collection,False,False,False,False,False,False,False,False,False,False,False,0.732466,0.732466,0.0
+Q19689,Tirana,False,False,False,False,False,False,False,False,True,True,True,0.854558,0.866999,0.012441
+Q1970428,Victor Tourjansky,False,False,False,True,False,False,False,False,False,True,False,0.713355,0.708937,-0.004418
+Q1971717,Alan Hale,False,False,False,False,False,False,False,False,False,False,False,0.884041,0.884041,0.0
+Q1988428,Avex Trax,False,False,False,False,False,False,False,False,False,False,False,0.64611,0.661461,0.015351
+Q1999366,L'Affaire Maurizius,False,False,False,False,False,False,False,False,False,False,False,0.741331,0.741331,0.0
+Q203384,Toronto Maple Leafs,False,False,False,False,False,False,False,False,False,True,False,0.748025,0.769831,0.021806
+Q2038125,Otto Arpke,True,True,True,False,True,True,True,True,False,False,False,0.836077,0.80706,-0.029017
+Q203960,James Earl Jones,False,False,False,False,False,False,False,False,False,False,False,0.828919,0.808025,-0.020894
+Q2062166,Paul Sarossy,False,False,False,True,False,False,False,False,False,True,False,0.736716,0.733572,-0.003144
+Q2063119,The Ice Follies of 1939,False,False,False,False,False,False,False,False,False,False,False,0.821993,0.821993,0.0
+Q2067275,Brigham Young,False,False,False,False,False,False,False,False,False,False,False,0.827557,0.827557,0.0
+Q207201,London Borough of Brent,False,False,False,False,False,False,False,False,False,False,False,0.71079,0.71079,0.0
+Q208108,Catch Me If You Can,False,False,False,False,False,False,False,False,False,False,False,0.756954,0.756954,0.0
+Q20814652,Death of a Friend,False,False,False,False,False,False,False,False,False,False,False,0.821644,0.821644,0.0
+Q208408,Tim Allen,False,False,False,False,False,False,False,False,False,False,False,0.63961,0.632824,-0.006786
+Q208909,Parlophone,False,False,False,False,True,True,False,False,False,False,False,0.82926,0.791202,-0.038058
+Q210148,Peter Fonda,False,False,False,False,False,False,False,False,False,False,False,0.674173,0.677019,0.002846
+Q2107,Wuppertal,True,True,True,False,True,True,True,True,False,False,False,0.836994,0.811941,-0.025053
+Q21095,Crack a Bottle,False,False,False,False,False,False,False,False,False,False,False,0.796614,0.796614,0.0
+Q212699,Geffen Records,False,False,False,False,False,False,False,False,False,False,False,0.841396,0.791005,-0.050391
+Q212991,Santa Rosa,False,False,False,False,False,False,False,False,False,False,False,0.806469,0.806469,0.0
+Q213611,Franz Waxman,False,False,False,False,False,False,False,False,False,False,False,0.844761,0.782077,-0.062684
+Q213667,Kazimierz Fajans,False,False,False,False,False,False,False,False,False,False,False,0.75082,0.75082,0.0
+Q214665,Nino Rota,False,False,False,True,False,False,False,False,True,False,False,0.728254,0.727681,-0.000573
+Q215036,Paul Czinner,False,False,False,False,True,True,False,False,False,False,False,0.721563,0.721563,0.0
+Q216,Vilnius,False,False,False,False,False,False,True,True,False,False,False,0.830685,0.808724,-0.021961
+Q219521,Walter Brennan,False,False,False,False,False,False,False,False,False,False,False,0.841955,0.829465,-0.01249
+Q221384,Black Hawk Down,False,False,False,False,False,False,True,False,False,True,False,0.727443,0.738478,0.011035
+Q224,Croatia,False,False,False,False,False,False,True,False,False,True,False,0.727479,0.727479,0.0
+Q229276,Maureen O'Hara,False,False,False,False,False,False,False,False,False,False,False,0.674919,0.684761,0.009842
+Q229347,Nana Mizuki,False,False,False,False,False,False,False,False,False,False,False,0.789621,0.849846,0.060225
+Q2301402,The Land Before Time VIII: The Big Freeze,False,False,False,False,False,True,True,False,True,True,False,0.756177,0.773416,0.017239
+Q232083,Two Missionaries,False,False,False,False,False,False,False,False,False,False,False,0.76646,0.76646,0.0
+Q234900,Linda Darnell,False,False,False,False,False,False,False,False,False,False,False,0.810035,0.809957,-7.8e-05
+Q23831,The Office,False,False,False,False,False,False,False,False,False,False,False,0.794897,0.794105,-0.000792
+Q2384574,Brothers in Law,False,False,False,False,False,False,False,False,False,False,False,0.769752,0.769752,0.0
+Q2421588,A Woman Rebels,False,False,False,False,False,False,False,False,False,False,False,0.812149,0.812149,0.0
+Q2450374,Love Crazy,False,False,False,False,False,False,False,False,False,False,False,0.748432,0.748432,0.0
+Q2466764,Laser Beam/Kasuka na Kaori,False,False,False,False,False,False,False,False,False,False,False,0.783217,0.871313,0.088096
+Q248713,USA Network,False,False,False,False,False,False,False,False,False,False,False,0.799041,0.799041,0.0
+Q2492348,See You in My Nightmares,False,False,False,False,False,False,False,False,False,False,False,0.79171,0.79171,0.0
+Q2506273,Arrival,False,False,False,False,False,False,False,False,False,False,False,0.755846,0.755846,0.0
+Q2526255,film director,False,False,False,False,False,False,False,False,False,False,False,0.809222,0.77124,-0.037982
+Q2545760,Wax Trax! Records,False,False,False,False,False,False,False,False,False,False,False,0.802342,0.802342,0.0
+Q2550105,The Land Before Time VII: The Stone of Cold Fire,False,False,False,False,False,False,False,False,False,False,False,0.838702,0.838702,0.0
+Q2554178,Jimmy Crack Corn,False,False,False,False,False,False,False,False,False,False,False,0.776585,0.776585,0.0
+Q2571116,Grand Ages: Rome,False,False,False,False,False,False,False,False,False,False,False,0.767383,0.767383,0.0
+Q260969,Jules Dassin,False,False,False,True,True,True,False,False,False,False,False,0.740803,0.728551,-0.012252
+Q2615777,Dyssegård station,True,True,True,False,True,True,True,True,False,False,False,0.835172,0.846573,0.011401
+Q26208,Carlo Lizzani,False,False,False,False,False,False,False,False,False,False,False,0.677131,0.677131,0.0
+Q265358,Constance Bennett,False,False,False,False,False,False,False,False,False,False,False,0.82072,0.818034,-0.002686
+Q2655224,John Cox,False,False,False,False,False,False,False,False,False,False,False,0.752152,0.752152,0.0
+Q2665674,Bucky Larson: Born to Be a Star,True,True,True,False,True,True,True,True,False,False,False,0.830916,0.810927,-0.019989
+Q267778,Daniel Berthiaume,True,True,True,False,True,True,True,True,False,False,False,0.836077,0.839371,0.003294
+Q26806,Danny DeVito,False,False,False,False,False,False,False,False,True,False,False,0.652319,0.607635,-0.044684
+Q2685,Arnold Schwarzenegger,False,False,False,False,False,False,False,False,False,False,False,0.666707,0.679985,0.013278
+Q2696164,Rod La Rocque,False,False,False,False,False,False,False,False,False,False,False,0.831025,0.83134,0.000315
+Q2707658,As You Like It,False,False,False,False,False,False,False,False,False,False,False,0.767883,0.767883,0.0
+Q27343,Warm Bodies,False,False,False,False,False,False,False,False,False,False,False,0.761421,0.761421,0.0
+Q2741618,Milo O'Shea,False,False,False,False,False,False,False,False,False,False,False,0.835124,0.835124,0.0
+Q2752852,New Day,False,False,False,False,False,False,False,False,False,False,False,0.781721,0.781721,0.0
+Q276849,Necessary Roughness,False,False,False,False,False,False,False,False,False,False,False,0.835835,0.835835,0.0
+Q2773,Brunswick,False,False,False,False,False,False,False,False,False,False,False,0.78544,0.78544,0.0
+Q2790732,The Case of the Constant Suicides,False,False,False,False,False,False,False,False,False,False,False,0.794007,0.794007,0.0
+Q280400,Matilda,False,False,False,False,False,False,False,False,False,False,False,0.700234,0.700234,0.0
+Q2824975,Adoration,False,False,False,False,False,False,False,False,False,False,False,0.801892,0.801892,0.0
+Q2831,Michael Jackson,False,False,False,False,False,False,False,False,False,False,False,0.763889,0.741367,-0.022522
+Q284103,Water Drops on Burning Rocks,False,False,False,False,False,False,False,False,False,False,False,0.769726,0.769726,0.0
+Q2924921,Brian Howard,False,False,False,False,False,False,False,False,False,False,False,0.774143,0.785023,0.01088
+Q2930359,Maybe It's Me,True,True,True,False,True,True,True,True,False,False,False,0.834279,0.797292,-0.036987
+Q2975580,Four Letter Word,False,False,False,False,False,False,False,False,False,False,False,0.78107,0.78107,0.0
+Q298025,Joss Whedon,False,False,False,False,False,False,False,False,False,False,False,0.709598,0.709598,0.0
+Q298347,Nicholas Hoult,False,False,False,False,False,False,False,False,False,False,False,0.80046,0.80046,0.0
+Q299314,Danny Aiello,False,False,False,False,False,False,False,False,False,False,False,0.829653,0.813575,-0.016078
+Q300589,A Ticket to Tomahawk,False,False,False,False,False,False,False,False,False,False,False,0.816851,0.816851,0.0
+Q3015300,Danny Roane: First Time Director,False,False,False,False,False,False,False,False,False,False,False,0.766319,0.766319,0.0
+Q3015508,Deep Down,False,False,False,False,False,False,False,False,False,False,False,0.775357,0.775357,0.0
+Q3020368,Of Life and Love,False,False,False,False,False,False,False,False,False,False,False,0.761792,0.761792,0.0
+Q304561,Kim Beazley,True,True,True,False,True,True,True,True,False,False,False,0.836077,0.814646,-0.021431
+Q3047626,Edith Evanson,False,False,False,False,False,False,False,False,False,False,False,0.823799,0.821706,-0.002093
+Q3052795,Emmanuel Maurel,False,False,False,False,False,False,False,False,False,False,False,0.75082,0.75082,0.0
+Q3115598,M. S. Viswanathan,False,False,False,False,False,False,False,False,False,False,False,0.788296,0.788296,0.0
+Q312,Apple Inc.,False,False,False,False,False,False,False,False,False,False,False,0.805919,0.805919,0.0
+Q3126769,Hangover Square,False,False,False,False,False,False,False,False,False,False,False,0.80466,0.80466,0.0
+Q312719,Kabir Bedi,False,False,False,True,True,True,False,True,False,True,False,0.79067,0.767095,-0.023575
+Q312789,Shakti Kapoor,False,False,False,False,False,False,False,False,False,False,False,0.803963,0.800627,-0.003336
+Q313596,Leslie Cheung,False,False,False,False,False,False,False,False,False,False,False,0.679498,0.679498,0.0
+Q317033,Dimitri Tiomkin,False,False,False,False,False,False,False,False,False,False,False,0.679506,0.684038,0.004532
+Q317814,Tsui Hark,False,False,False,False,False,False,False,False,False,False,False,0.69007,0.69007,0.0
+Q3181105,Boulting brothers,False,False,False,False,True,True,False,True,False,False,False,0.815951,0.800486,-0.015465
+Q3181785,John Howard,False,False,False,False,False,False,False,False,False,False,False,0.812726,0.812726,0.0
+Q3183,Perth,False,False,False,False,False,False,False,False,False,False,False,0.810927,0.810927,0.0
+Q318362,Johan de Witt,True,True,True,False,True,True,True,True,False,False,False,0.835172,0.809827,-0.025345
+Q319204,Brett Ratner,False,False,False,True,False,False,False,False,False,True,False,0.736831,0.725663,-0.011168
+Q3207697,La Comédie du bonheur,False,False,False,False,False,True,False,False,False,False,False,0.683638,0.683638,0.0
+Q3232718,The Gay Sisters,False,False,False,False,False,False,False,False,False,False,False,0.810178,0.810178,0.0
+Q3279033,Who's Been Sleeping in My Bed?,False,False,False,False,False,False,False,False,False,False,False,0.817159,0.817159,0.0
+Q3285536,These Thousand Hills,False,False,False,False,False,False,False,False,False,False,False,0.806315,0.806315,0.0
+Q3319768,mech-4,False,False,False,False,False,False,False,False,False,False,False,0.749434,0.749434,0.0
+Q332530,Leo McCarey,False,False,False,False,False,False,False,False,False,False,False,0.705951,0.705951,0.0
+Q3359260,Where Are You Going on Holiday?,False,False,False,False,False,False,False,False,False,False,False,0.703773,0.703773,0.0
+Q336177,EVE Online,False,False,False,False,False,False,False,False,False,False,False,0.762085,0.762085,0.0
+Q337351,Rex Stout,False,False,False,False,False,False,False,False,False,False,False,0.798891,0.792814,-0.006077
+Q3401588,Prem Chopra,False,False,False,False,False,False,False,False,False,False,False,0.803438,0.798624,-0.004814
+Q3427435,Immaan Dharam,False,False,False,False,False,False,False,False,False,False,False,0.837454,0.837454,0.0
+Q34643,Celluloide,False,False,False,False,False,False,False,False,False,False,False,0.697702,0.697702,0.0
+Q348345,Donald O'Connor,False,False,False,False,False,False,False,False,False,False,False,0.829996,0.829996,0.0
+Q3487718,Souvenir d'Italie,False,False,False,False,False,False,False,False,False,False,False,0.825171,0.825171,0.0
+Q349146,Jack DeJohnette,True,True,True,False,True,True,True,True,False,False,False,0.836077,0.787626,-0.048451
+Q3498834,Westside Story,False,False,False,False,False,False,False,False,False,False,False,0.783965,0.783965,0.0
+Q351563,Joseph LaShelle,False,False,False,False,False,False,False,False,False,False,False,0.781786,0.77956,-0.002226
+Q3522075,M. N. Nambiar,False,False,False,False,False,False,False,False,False,False,False,0.801651,0.802167,0.000516
+Q3522608,The Sawmill,False,False,False,False,False,False,False,False,False,False,False,0.752166,0.752166,0.0
+Q3549899,Island in the Sun,False,False,False,False,False,False,False,False,False,False,False,0.812526,0.812526,0.0
+Q3554148,I'll Be Going Now,False,False,False,False,False,False,False,False,False,False,False,0.812149,0.812149,0.0
+Q3555524,"Venice, the Moon and You",False,False,False,False,False,False,False,False,False,False,False,0.749883,0.749883,0.0
+Q3559341,Vimodrone,True,True,True,False,True,True,True,True,False,False,False,0.836994,0.782855,-0.054139
+Q3567951,Widnes Vikings,False,False,False,False,False,False,False,False,False,False,False,0.644082,0.655376,0.011294
+Q3577037,The West Wing,True,True,True,False,True,True,True,True,False,False,False,0.834468,0.77015,-0.064318
+Q358443,Jeff Sessions,False,False,False,False,False,False,False,False,False,False,False,0.756415,0.756415,0.0
+Q3595184,Madhavi,False,False,False,False,False,False,False,False,False,False,False,0.797044,0.795548,-0.001496
+Q3595531,Sarath Babu,False,False,False,False,False,False,False,False,False,False,False,0.798888,0.798688,-0.0002
+Q361208,Adolph Zukor,False,False,False,False,False,False,False,False,False,False,False,0.814318,0.789796,-0.024522
+Q3658575,Dear Goddamned Friends,False,False,False,False,False,False,False,False,False,False,False,0.704736,0.704736,0.0
+Q3667163,Nowsud,False,False,False,False,False,False,False,False,False,False,False,0.607076,0.607076,0.0
+Q36949,Robert De Niro,False,False,False,False,False,False,False,False,False,False,False,0.677927,0.684393,0.006466
+Q37001,Toshirō Mifune,False,False,False,False,False,False,False,False,False,False,False,0.806842,0.806842,0.0
+Q370252,My Darling Clementine,False,False,False,False,False,False,False,False,False,False,False,0.777489,0.777489,0.0
+Q370268,Caron Butler,False,False,False,False,False,False,False,False,False,False,False,0.873107,0.870424,-0.002683
+Q3712040,Folgore Division,False,False,False,False,False,False,False,False,False,False,False,0.804015,0.804015,0.0
+Q3713428,Don't Fall in Love with Everyone You See,True,True,True,False,True,True,True,True,False,False,False,0.835086,0.829543,-0.005543
+Q3714788,Down the River of Golden Dreams,True,True,True,False,True,True,True,True,False,False,False,0.831846,0.829773,-0.002073
+Q371774,Nero Wolfe,False,False,False,False,False,False,False,False,False,False,False,0.843661,0.843563,-9.8e-05
+Q3780,Freetown,False,False,False,False,False,False,False,False,False,False,False,0.664668,0.664668,0.0
+Q378032,Francis Joins the WACS,True,True,False,False,True,True,True,False,False,True,False,0.812694,0.812526,-0.000168
+Q3790607,Knights of the Desert,True,True,True,False,True,True,True,True,True,True,False,0.833583,0.859051,0.025468
+Q3791157,The Firemen of Viggiù,False,False,False,False,False,False,False,False,False,False,False,0.821067,0.821067,0.0
+Q379171,Shashi Kapoor,False,False,False,False,False,False,False,False,False,False,False,0.645881,0.664255,0.018374
+Q3798256,Escape to Glory,False,False,False,False,False,True,True,False,True,True,False,0.723579,0.744473,0.020894
+Q3806,Tübingen,False,False,False,True,True,True,False,False,False,True,False,0.775447,0.876685,0.101238
+Q3808385,Jim Ware,True,True,True,False,True,True,True,True,False,False,False,0.836077,0.79674,-0.039337
+Q3818197,Mother Is a Freshman,False,False,False,False,False,False,False,False,False,False,False,0.815395,0.815395,0.0
+Q381955,ATM,False,False,False,False,False,False,False,False,False,False,False,0.786852,0.786565,-0.000287
+Q3831182,The Four Poster,False,False,False,False,False,False,False,False,False,False,False,0.755217,0.755217,0.0
+Q3857815,The Violent Professionals,False,False,False,False,False,False,False,False,False,False,False,0.809912,0.809912,0.0
+Q387092,Vaanam,False,False,False,False,False,False,False,False,False,False,False,0.745033,0.745033,0.0
+Q3875171,The New Age,False,False,False,False,False,False,False,False,False,False,False,0.809912,0.809912,0.0
+Q389284,Aftermath Entertainment,False,False,False,False,False,False,False,False,False,False,False,0.82418,0.82418,0.0
+Q3927602,Please Pass the Guilt,False,False,False,False,False,False,False,False,False,False,False,0.769136,0.769136,0.0
+Q393366,Paveh County,False,False,False,False,False,False,False,False,False,False,False,0.805007,0.805007,0.0
+Q3960397,"Goodnight, Ladies and Gentlemen",False,False,False,False,False,False,False,False,False,False,False,0.647843,0.647843,0.0
+Q3986366,The Coming of Amos,True,True,True,False,True,True,True,True,False,False,False,0.833583,0.814007,-0.019576
+Q4003676,Un apprezzato professionista di sicuro avvenire,False,False,False,False,False,False,False,False,False,False,False,0.814693,0.814693,0.0
+Q4003933,Before Midnight,False,False,False,False,False,False,False,False,False,False,False,0.62676,0.62676,0.0
+Q4023088,Your Studio and You,False,False,False,False,False,False,False,False,False,False,False,0.710405,0.710405,0.0
+Q40348,lawyer,False,False,False,False,False,False,False,False,False,False,False,0.700486,0.700486,0.0
+Q4043633,Major Distribution,False,False,False,False,False,False,False,False,False,False,False,0.789745,0.789745,0.0
+Q40475,Joan Crawford,False,False,False,False,False,False,False,False,False,False,False,0.663372,0.668256,0.004884
+Q4055443,August: Osage County,False,False,False,False,False,False,False,False,False,False,False,0.806815,0.806815,0.0
+Q4068989,James Moorhouse,False,False,False,False,False,False,False,False,False,False,False,0.749576,0.749576,0.0
+Q40831,comedy,False,False,False,False,False,False,False,False,False,False,False,0.778541,0.704355,-0.074186
+Q4132673,Dänew District,False,False,False,False,False,False,False,False,False,False,False,0.759635,0.759635,0.0
+Q42053,Isfahan,False,False,False,False,False,False,True,False,True,False,True,0.715382,0.653339,-0.062043
+Q42574,James Cameron,False,False,False,False,False,True,False,False,False,False,False,0.62044,0.62044,0.0
+Q4289919,Vangede station,True,True,True,False,True,True,True,True,False,False,False,0.836077,0.845615,0.009538
+Q431804,Thomas Joseph Meskill,False,False,False,False,False,False,False,False,False,False,False,0.761689,0.761689,0.0
+Q4353733,Journey for Margaret,False,False,False,False,False,False,False,False,False,False,False,0.773826,0.773826,0.0
+Q43845,businessperson,False,False,False,False,False,False,False,False,False,False,False,0.702607,0.68393,-0.018677
+Q44131,Werner Herzog,False,False,False,False,False,False,False,False,False,False,False,0.73208,0.73208,0.0
+Q44320,Thriller,False,False,False,False,False,False,False,False,False,False,False,0.769423,0.769423,0.0
+Q443215,Garfield Todd,False,False,False,False,False,False,False,False,False,False,False,0.753344,0.753344,0.0
+Q45212,Amr ibn al-Layth,True,True,True,False,True,True,True,True,False,False,False,0.834279,0.864342,0.030063
+Q45261,Ya'qub ibn al-Layth al-Saffar,False,False,False,False,False,False,False,False,False,False,False,0.795432,0.795432,0.0
+Q4527002,Hermann Stuckmann,True,True,True,False,True,True,True,False,False,False,False,0.836077,0.785318,-0.050759
+Q453683,Julien Duvivier,False,False,False,False,False,False,False,False,False,False,False,0.681856,0.681856,0.0
+Q464232,Pam Tillis,False,False,False,False,False,False,False,False,False,False,False,0.775363,0.775363,0.0
+Q464578,Karisma Kapoor,False,False,False,False,False,False,False,False,False,False,False,0.807926,0.807926,0.0
+Q465224,American International Pictures,False,False,False,False,False,False,False,False,False,False,False,0.841849,0.835124,-0.006725
+Q4657878,A Little Too Late,False,False,False,False,False,False,False,False,False,False,False,0.790333,0.790333,0.0
+Q466154,Jack E. Cox,False,False,False,True,False,False,False,False,False,True,False,0.783321,0.785726,0.002405
+Q4668586,About Time,False,False,False,False,False,False,False,False,False,False,False,0.738843,0.738843,0.0
+Q471994,Konstantin Makarov,False,False,False,False,False,False,False,False,False,False,False,0.881135,0.881135,0.0
+Q472361,Amistad,False,False,False,False,False,False,False,False,False,False,False,0.801122,0.801122,0.0
+Q47284,Robert Rodriguez,False,False,False,False,False,False,False,False,False,False,False,0.667907,0.667907,0.0
+Q476921,kidney failure,False,False,False,False,False,False,False,False,False,False,False,0.811863,0.81311,0.001247
+Q47871,Green Day,False,False,False,False,False,False,False,False,False,False,False,0.750443,0.750443,0.0
+Q48,Asia,True,True,False,False,True,True,True,True,False,False,False,0.690724,0.771796,0.081072
+Q4801789,Arturo S. Mom,False,False,False,False,False,False,False,False,False,False,False,0.758512,0.758512,0.0
+Q482626,Jacob's Ladder,False,False,False,False,False,False,False,False,False,False,False,0.806815,0.806815,0.0
+Q484779,Luc Besson,False,False,False,False,False,True,False,False,False,False,False,0.740651,0.740651,0.0
+Q485172,Ann Arbor,False,False,False,False,False,False,False,False,False,False,False,0.819517,0.819517,0.0
+Q4880009,Beer in Mexico,True,True,True,False,True,True,True,True,False,False,False,0.835172,0.789916,-0.045256
+Q4880849,Behind the Headlines,False,False,False,False,False,False,False,False,False,False,False,0.76529,0.76529,0.0
+Q489197,Torrance,False,False,False,False,False,False,False,False,False,False,False,0.835497,0.835497,0.0
+Q491105,Speedy Scandal,False,False,False,False,False,False,False,False,False,False,False,0.804015,0.804015,0.0
+Q49165,Amherst College,False,False,False,False,False,False,False,False,False,False,False,0.800484,0.798609,-0.001875
+Q4919072,Bittersweet Bundle of Misery,False,False,False,False,False,False,False,False,False,False,False,0.786525,0.786525,0.0
+Q494703,Perfume,False,False,False,False,False,False,False,False,False,False,False,0.798718,0.798718,0.0
+Q498162,census-designated place in the United States,False,False,False,False,False,False,False,False,False,False,False,0.783766,0.783766,0.0
+Q499031,The Ring,False,False,False,False,False,False,False,False,False,False,False,0.712121,0.712121,0.0
+Q503545,Norman Reedus,False,False,False,False,False,False,False,False,False,False,False,0.677226,0.677226,0.0
+Q5057106,Cedric Gervais,False,False,False,False,False,False,False,False,False,False,False,0.73552,0.73552,0.0
+Q50713,Jean Renoir,False,False,False,False,False,False,False,False,False,False,False,0.643956,0.643956,0.0
+Q508752,Frank Lautenberg,False,False,False,False,False,False,False,False,False,False,False,0.76049,0.76049,0.0
+Q512453,James Van Trees,False,False,False,False,False,False,False,False,False,False,False,0.798057,0.797564,-0.000493
+Q51330,John Howard,False,False,False,False,False,False,False,False,False,False,False,0.700159,0.700159,0.0
+Q51575,John Huston,False,False,False,False,False,True,False,False,False,False,False,0.668246,0.723083,0.054837
+Q51581,Howard Hawks,False,False,False,False,False,False,False,False,False,False,False,0.649368,0.649368,0.0
+Q515880,Dutch Reformed Church,False,False,False,False,False,False,False,False,False,False,False,0.82972,0.82972,0.0
+Q5195739,Curtis Fuller Volume 3,True,True,True,False,True,True,True,True,False,False,False,0.834279,0.80964,-0.024639
+Q5196992,Cutting Room Floor,True,True,True,False,True,True,True,True,False,False,False,0.835172,0.796333,-0.038839
+Q523197,How Do You Know,False,False,False,False,False,False,False,False,False,False,False,0.755729,0.755729,0.0
+Q5294,DVD,False,False,False,False,False,False,False,False,False,False,False,0.849841,0.811095,-0.038746
+Q5302336,Douthyam,False,False,False,False,False,True,False,False,False,False,False,0.801892,0.801892,0.0
+Q531599,Harvey Weinstein,False,False,False,False,False,False,False,False,False,False,False,0.805138,0.800023,-0.005115
+Q5443,Greta Garbo,False,False,False,True,True,True,False,True,False,False,False,0.795063,0.778549,-0.016514
+Q5480557,Francis Cochrane,False,False,False,False,False,False,False,False,False,False,False,0.756415,0.756415,0.0
+Q548978,Movie 43,False,False,False,False,False,False,False,False,False,False,False,0.760298,0.760298,0.0
+Q550232,Arthur and the Minimoys,False,False,False,False,False,True,False,False,False,False,False,0.663599,0.663599,0.0
+Q5525723,Gary Paul Nabhan,False,False,False,False,False,False,False,False,False,False,False,0.759635,0.759635,0.0
+Q55450,Aldo Fabrizi,False,False,False,False,False,False,False,False,True,False,False,0.655251,0.649099,-0.006152
+Q55452,Vittorio Gassman,False,False,False,False,False,False,False,False,False,False,False,0.660573,0.667506,0.006933
+Q55456,Nino Manfredi,False,False,False,True,False,False,False,False,True,False,False,0.68689,0.748731,0.061841
+Q5562692,Gimik,False,False,False,False,False,False,False,False,False,False,False,0.75637,0.75637,0.0
+Q559819,Toby Keith,False,False,False,False,False,False,False,False,False,False,False,0.87747,0.839311,-0.038159
+Q560163,Anupam Kher,False,False,False,False,False,False,False,False,True,True,False,0.67851,0.620418,-0.058092
+Q565510,Maurice Elvey,False,False,False,True,True,True,False,False,False,False,False,0.765219,0.720119,-0.0451
+Q568246,Shady Records,False,False,False,False,False,False,False,False,False,False,False,0.821793,0.819049,-0.002744
+Q5693220,Heat Wave,False,False,False,False,False,False,False,False,False,False,False,0.756415,0.756415,0.0
+Q573770,Stay Hungry,False,False,False,False,False,True,True,True,False,True,False,0.71334,0.768545,0.055205
+Q579321,Dalhousie University,False,False,False,False,False,False,False,False,False,False,False,0.832921,0.832921,0.0
+Q579608,Above Suspicion,False,False,False,False,False,False,False,False,False,False,False,0.804015,0.804015,0.0
+Q586789,Six of a Kind,False,False,False,False,False,False,False,False,False,False,False,0.763175,0.763175,0.0
+Q595915,I am…,False,False,False,False,False,False,False,False,False,False,False,0.775357,0.775357,0.0
+Q5977826,I Know How He Feels,False,False,False,False,False,False,False,False,False,False,False,0.79171,0.79171,0.0
+Q5980566,Iain Morrison,False,False,False,False,False,False,False,False,False,False,False,0.85257,0.85257,0.0
+Q5991062,If a Body Meets a Body,False,False,False,False,False,False,False,False,False,False,False,0.77963,0.77963,0.0
+Q59953,Josef Straka,False,False,False,False,False,False,False,False,False,False,False,0.846394,0.846394,0.0
+Q600176,Tie Me Up! Tie Me Down!,False,False,False,False,False,False,False,False,False,False,False,0.746893,0.746893,0.0
+Q60493,Lee Tergesen,False,False,False,False,False,False,False,False,False,False,False,0.804585,0.804728,0.000143
+Q605388,Fat Wreck Chords,False,False,False,False,False,False,False,False,False,False,False,0.812682,0.812682,0.0
+Q605511,Fredrik Modin,False,False,False,False,False,False,False,False,False,False,False,0.773537,0.773537,0.0
+Q6060,50 Cent,False,False,False,False,False,False,False,False,False,False,False,0.752101,0.707766,-0.044335
+Q6078,Dr. Dre,False,False,False,False,False,False,False,False,False,False,False,0.716867,0.755426,0.038559
+Q609236,Big Miracle,False,False,False,False,False,True,True,True,True,True,False,0.712256,0.773248,0.060992
+Q6096,Snoop Dogg,False,False,False,False,False,False,False,False,False,False,False,0.78576,0.78576,0.0
+Q61,"Washington, D.C.",False,False,False,True,True,True,False,False,False,False,False,0.820718,0.882814,0.062096
+Q611364,Ticker,False,False,False,False,False,False,False,False,False,False,False,0.665844,0.665844,0.0
+Q6115373,Jack Straw,True,True,True,False,True,True,True,True,False,False,False,0.836077,0.777067,-0.05901
+Q6124275,Jaishankar,True,True,True,False,True,True,True,True,True,True,False,0.836994,0.811875,-0.025119
+Q6150228,Jan Wouwerman,True,True,True,False,True,True,True,True,False,False,False,0.836077,0.796791,-0.039286
+Q6168181,Jazz ...It's Magic!,True,True,True,False,True,True,True,True,False,False,False,0.834279,0.817098,-0.017181
+Q6172887,Jeene Do,False,False,False,False,False,True,True,False,False,True,False,0.716479,0.736559,0.02008
+Q620670,The Origin of Love,True,True,True,False,True,True,True,True,False,False,False,0.833583,0.83427,0.000687
+Q622812,talk show,False,False,False,False,False,False,False,False,False,False,False,0.787447,0.787447,0.0
+Q623443,Wag the Dog,False,False,False,False,False,True,True,False,False,True,False,0.737679,0.740433,0.002754
+Q63224,Gustaf Kossinna,False,False,False,False,False,False,False,False,False,False,False,0.756415,0.756415,0.0
+Q6350569,Kalangarai Vilakkam,False,False,False,False,False,False,False,False,False,False,False,0.804015,0.804015,0.0
+Q6354708,Kalvanin Kadhali,True,True,True,False,True,True,True,True,False,False,False,0.836077,0.79674,-0.039337
+Q639095,Avtomobilist Yekaterinburg,False,False,False,False,False,False,False,False,False,False,False,0.822483,0.825072,0.002589
+Q6397231,Kevin Penny,False,False,False,False,False,False,False,False,False,False,False,0.842999,0.842999,0.0
+Q639795,Toni,False,False,False,False,False,False,False,False,False,False,False,0.801122,0.801122,0.0
+Q640041,Curse of the Crimson Altar,False,False,False,False,False,False,False,False,False,False,False,0.778525,0.778525,0.0
+Q640762,Invincible,False,False,False,False,False,False,False,False,False,False,False,0.73598,0.73598,0.0
+Q6455930,L'esprit,True,True,True,False,True,True,True,True,False,False,False,0.836077,0.804419,-0.031658
+Q652,Italian,False,False,False,False,False,False,False,False,False,False,False,0.852854,0.852854,0.0
+Q656,Saint Petersburg,False,False,False,False,False,True,True,True,False,False,False,0.711706,0.711706,0.0
+Q662081,HBO Films,False,False,False,False,False,False,False,False,False,False,False,0.799176,0.799176,0.0
+Q666812,Darius Morris,False,False,False,False,False,False,False,False,False,False,False,0.869339,0.869339,0.0
+Q667661,literary realism,False,False,False,False,False,False,False,False,False,False,False,0.78031,0.78031,0.0
+Q670417,Bob Clampett,False,False,False,False,False,False,False,False,False,False,False,0.779274,0.771876,-0.007398
+Q6741559,Malaya Marutha,False,False,False,False,False,False,False,False,False,False,False,0.804015,0.804015,0.0
+Q6772265,Maro Charithra,False,False,False,False,False,True,True,False,True,True,False,0.714906,0.737295,0.022389
+Q6904735,Monte Criollo,False,False,False,False,False,False,False,False,False,False,False,0.749434,0.749434,0.0
+Q6957919,Nadodi,False,False,False,False,False,False,False,False,False,False,False,0.801122,0.801122,0.0
+Q6983388,Nazi Agent,False,False,False,False,False,False,False,False,False,False,False,0.748432,0.748432,0.0
+Q7004338,Never Wanted Nothing More,True,True,True,False,True,True,True,True,False,False,False,0.834279,0.783679,-0.0506
+Q7007607,New Fool at an Old Game,False,False,False,False,False,False,False,False,False,False,False,0.803336,0.803336,0.0
+Q7044125,No Down Payment,False,False,False,False,False,False,False,False,False,False,False,0.807342,0.807342,0.0
+Q7062737,Nothing Can Come Between Us,True,True,True,False,True,True,True,True,False,False,False,0.833398,0.819092,-0.014306
+Q711415,Herbert Ross,False,False,False,False,False,False,False,False,False,False,False,0.725844,0.725844,0.0
+Q712827,Alain Sarde,False,False,False,False,False,False,False,False,False,False,False,0.801116,0.801116,0.0
+Q7149524,Paul Broadbent,True,True,True,False,True,True,True,True,False,False,False,0.836077,0.839371,0.003294
+Q716493,Sol Polito,False,False,False,False,False,False,False,False,False,False,False,0.837517,0.796241,-0.041276
+Q7171690,Petar Brlek,False,False,False,False,False,False,False,False,False,False,False,0.773537,0.773537,0.0
+Q7191142,Picture,True,True,True,False,True,True,True,True,False,False,False,0.836994,0.800923,-0.036071
+Q72050,Christoph von Sigwart,True,True,True,False,True,True,True,True,False,False,False,0.835172,0.806657,-0.028515
+Q723837,Robert Krasker,False,False,False,True,False,False,False,False,False,False,False,0.805476,0.80511,-0.000366
+Q7238441,Prasad Murella,False,False,False,False,False,False,False,False,False,False,False,0.768323,0.768323,0.0
+Q7243,Leo Tolstoy,False,False,False,False,False,False,False,False,False,False,False,0.799681,0.799681,0.0
+Q726634,The Caretakers,False,False,False,False,False,False,True,False,False,True,False,0.722831,0.740266,0.017435
+Q7271508,"Questing, Not Coasting",True,True,True,False,True,True,True,True,False,False,False,0.835172,0.804235,-0.030937
+Q729462,Tony Gonzalez,True,True,True,False,True,True,True,True,False,False,False,0.836077,0.814926,-0.021151
+Q7318,Nazi Germany,False,False,False,False,False,False,True,False,False,False,False,0.680873,0.681463,0.00059
+Q7341609,Robert Arthur,False,False,False,False,False,False,False,False,False,False,False,0.813514,0.810759,-0.002755
+Q7374,Alfred Hitchcock,False,False,False,False,False,False,True,True,False,False,False,0.689579,0.724169,0.03459
+Q740516,Conan the Destroyer,False,False,False,False,False,True,True,True,True,True,False,0.722207,0.78161,0.059403
+Q7407174,Sam Benedict,False,False,False,False,False,False,False,False,False,False,False,0.764694,0.764694,0.0
+Q7459924,Shaan,False,False,False,False,False,False,True,False,False,True,False,0.710251,0.732873,0.022622
+Q7499123,Shit Hits The Fan,False,False,False,False,False,False,False,False,False,False,False,0.784851,0.784851,0.0
+Q7505590,Shut Your Mouth,True,True,True,False,True,True,True,True,False,False,False,0.835172,0.795907,-0.039265
+Q7505912,Shyam,False,False,False,False,False,False,False,False,False,False,False,0.765617,0.765617,0.0
+Q753648,Beady Eye,False,False,False,False,False,False,False,False,False,False,False,0.791593,0.791593,0.0
+Q7575101,Spectacular,False,False,False,False,False,False,False,False,False,False,False,0.769423,0.769423,0.0
+Q7600659,Star Cinema,False,False,False,False,False,False,False,False,False,False,False,0.768777,0.768777,0.0
+Q763351,Behold a Pale Horse,False,False,False,False,False,False,False,False,False,False,False,0.773528,0.773528,0.0
+Q7645326,Suraj Ka Satvan Ghoda,False,False,False,False,False,False,False,False,False,False,False,0.809524,0.809524,0.0
+Q7655589,Sweet and Hot,False,False,False,False,False,False,False,False,False,False,False,0.767682,0.767682,0.0
+Q766770,The Girl of Your Dreams,False,False,False,False,False,True,False,False,False,False,False,0.783474,0.783474,0.0
+Q7672658,T. L. V. Prasad,False,False,False,False,False,False,False,False,False,False,False,0.764676,0.764676,0.0
+Q76884,"Hugh de Courtenay, 2nd Earl of Devon",False,False,False,False,False,False,False,False,False,False,False,0.800413,0.800413,0.0
+Q7723249,The Clairvoyant,False,False,False,False,False,False,False,False,False,False,False,0.741991,0.741991,0.0
+Q7744271,The Kids Are Sick Again,False,False,False,False,False,False,False,False,False,False,False,0.802412,0.802412,0.0
+Q7769294,"The Time, the Place and the Girl",False,False,False,False,False,True,True,True,True,True,False,0.768114,0.81096,0.042846
+Q7776497,The Yankee Clipper,True,True,True,False,True,True,True,True,False,False,False,0.834468,0.792333,-0.042135
+Q7783941,Thicke of the Night,False,False,False,False,False,False,False,False,False,False,False,0.769136,0.769136,0.0
+Q778979,Tower Heist,False,False,False,False,False,False,False,False,False,False,False,0.74887,0.74887,0.0
+Q782154,William LeBaron,False,False,False,False,False,False,False,False,False,False,False,0.812602,0.803831,-0.008771
+Q7855696,Turn My Back on You,True,True,True,False,True,True,True,True,False,False,False,0.832709,0.813817,-0.018892
+Q787091,A Better Tomorrow 2,False,False,False,False,False,False,True,True,True,True,False,0.732577,0.78371,0.051133
+Q7879131,Ullam Ketkumae,False,False,False,False,False,False,False,False,False,False,False,0.804015,0.804015,0.0
+Q7883081,Under Control,True,True,True,False,True,True,True,True,False,False,False,0.836077,0.787966,-0.048111
+Q7903322,Uttar Dakshin,True,True,False,False,True,True,True,True,True,True,False,0.715409,0.804015,0.088606
+Q7990897,What's the Matador?,False,False,False,False,False,False,False,False,False,False,False,0.769136,0.769136,0.0
+Q826,Maldives,False,False,False,False,False,False,True,False,False,False,False,0.781566,0.780777,-0.000789
+Q826977,Progressive Conservative Party of Ontario,False,False,False,False,False,False,False,False,False,False,False,0.848096,0.849177,0.001081
+Q82955,politician,False,False,False,False,False,False,False,False,False,False,False,0.811516,0.7654,-0.046116
+Q832515,Blues Brothers 2000,True,True,True,False,True,True,True,True,False,False,False,0.835172,0.785578,-0.049594
+Q83484,Anthony Quinn,False,False,False,False,False,False,False,False,False,False,False,0.660026,0.668368,0.008342
+Q84,London,False,False,False,False,False,False,False,True,False,True,True,0.757486,0.759996,0.00251
+Q844972,The WB,False,False,False,False,False,False,False,False,False,False,False,0.843891,0.832064,-0.011827
+Q846810,The Easiest Way,False,False,False,False,False,False,False,False,False,False,False,0.767162,0.767162,0.0
+Q846908,Reunion in France,False,False,False,False,False,False,False,False,False,False,False,0.666223,0.666223,0.0
+Q853056,Metallurg Magnitogorsk,False,False,False,False,False,False,False,False,False,False,False,0.617564,0.652647,0.035083
+Q858742,Cartman's Mom Is a Dirty Slut,False,False,False,False,False,False,False,False,False,False,False,0.778182,0.778182,0.0
+Q859363,Sciences Po,False,False,False,False,False,True,False,False,False,False,False,0.6412,0.659368,0.018168
+Q863469,London Broncos,False,False,False,False,False,False,False,False,False,False,False,0.821824,0.825072,0.003248
+Q863661,Hull F.C.,False,False,False,False,False,False,False,False,False,False,False,0.823804,0.826727,0.002923
+Q874,Turkmenistan,False,False,False,False,False,False,False,False,False,False,False,0.733598,0.731659,-0.001939
+Q879204,Biwi No.1,False,False,False,False,False,True,True,False,True,True,False,0.720362,0.742304,0.021942
+Q881469,Blanco y Negro,False,False,False,False,False,False,False,False,False,False,False,0.799375,0.799375,0.0
+Q8877,Steven Spielberg,False,False,False,False,False,False,False,False,False,False,False,0.608687,0.608687,0.0
+Q898211,Terrance and Phillip in Not Without My Anus,False,False,False,False,False,False,False,False,False,False,False,0.84348,0.84348,0.0
+Q898721,Hamlet,False,False,False,False,False,False,False,False,False,False,False,0.665403,0.665403,0.0
+Q902512,Minnesota North Stars,False,False,False,False,False,False,False,False,False,True,False,0.743894,0.775064,0.03117
+Q908436,TV Asahi,False,False,False,False,False,False,False,False,True,True,True,0.792897,0.777484,-0.015413
+Q911,Ufa,False,False,False,True,False,False,False,False,False,False,False,0.652829,0.712203,0.059374
+Q911554,business magnate,False,False,False,False,False,False,False,False,False,False,False,0.788112,0.788112,0.0
+Q911892,Dwight Bialowas,True,True,True,False,True,True,True,True,False,False,False,0.836077,0.839371,0.003294
+Q912729,The Purple Rose of Cairo,False,False,False,False,False,False,False,False,False,False,False,0.692594,0.692594,0.0
+Q913872,Bridget Fonda,False,False,False,False,True,True,False,True,False,False,False,0.812726,0.776437,-0.036289
+Q921042,Inspector Clouseau,False,False,False,False,False,False,False,False,False,False,False,0.739855,0.739855,0.0
+Q924135,Rang De Basanti,False,False,False,False,False,False,False,False,False,False,False,0.806815,0.806815,0.0
+Q925604,Marshall Herskovitz,False,False,False,True,False,False,False,False,False,True,False,0.708037,0.70293,-0.005107
+Q928,Philippines,False,False,False,False,False,False,True,False,True,False,False,0.744035,0.730874,-0.013161
+Q93853,Once Upon a Time in Mexico,False,False,False,False,False,False,False,False,False,False,False,0.710536,0.710536,0.0
+Q946597,True Colors,False,False,False,False,False,False,False,False,False,False,False,0.74887,0.74887,0.0
+Q947739,Fire Garden,False,False,False,False,False,False,False,False,False,False,False,0.775357,0.775357,0.0
+Q95030,Warren Beatty,False,False,False,False,False,False,False,False,False,False,False,0.603741,0.61076,0.007019
+Q95492,Hans-Otto Borgmann,True,True,True,False,True,True,True,True,False,False,False,0.835172,0.800302,-0.03487
+Q958664,"Doraemon: The Records of Nobita, Spaceblazer",False,False,False,False,False,False,False,False,False,False,False,0.780969,0.780969,0.0
+Q960020,The Libertine,False,False,False,False,False,False,False,False,False,False,False,0.74286,0.74286,0.0
+Q971941,The Lady,False,False,False,False,False,False,False,False,False,False,False,0.742227,0.742227,0.0
+Q974693,Italian Americans,False,False,False,False,False,False,False,False,False,False,False,0.791279,0.7906,-0.000679
+Q976007,Automatic,True,True,True,False,True,True,True,True,False,False,False,0.836994,0.800923,-0.036071
+Q977372,New York Stories,False,False,False,False,False,False,False,False,False,False,False,0.712781,0.701218,-0.011563
+Q982177,Larry Fine,False,False,False,False,True,True,False,False,False,False,False,0.859907,0.807179,-0.052728
+Q98363,Fritz Kampers,False,False,False,False,False,False,False,False,False,False,False,0.668789,0.668789,0.0
+Q987,New Delhi,False,False,False,True,True,True,True,True,True,True,False,0.784432,0.839957,0.055525
+Q9920,Haarlem,False,False,False,False,False,False,False,True,False,False,False,0.808735,0.808735,0.0
+Q995267,Bryn Mawr,False,False,False,False,False,False,False,False,False,False,False,0.883971,0.883971,0.0
