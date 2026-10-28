@@ -84,12 +84,16 @@ class StrictJsonStagePlanner:
         *,
         planner_name: str = "strict-json-stage-planner",
         prompt_profile: str = PROMPT_VERSION,
+        max_knowledge_repairs: int = 2,
     ) -> None:
         if not isinstance(prompt_profile, str) or prompt_profile not in PROMPT_PROFILES:
             raise ValueError(f"prompt_profile must be one of {PROMPT_PROFILES}")
+        if type(max_knowledge_repairs) is not int or max_knowledge_repairs < 0:
+            raise ValueError("max_knowledge_repairs must be a nonnegative integer")
         self._complete = complete
         self.planner_name = planner_name
         self.prompt_version = prompt_profile
+        self.max_knowledge_repairs = max_knowledge_repairs
         self.calls: list[dict[str, Any]] = []
 
     def refine_coarse(
@@ -170,6 +174,8 @@ class StrictJsonStagePlanner:
             prior=prior or {},
             prompt_profile=self.prompt_version,
         )
+        if stage == "stage1_knowledge":
+            return self._refine_knowledge(prompt, deterministic, apply_response)
         try:
             response_text = self._complete(prompt)
             try:
@@ -293,6 +299,86 @@ class StrictJsonStagePlanner:
             }
         )
         return refined
+
+    def _refine_knowledge(
+        self,
+        prompt: str,
+        inputs: dict[str, Any],
+        apply_response: Callable[[dict[str, Any]], dict[str, Any]],
+    ) -> dict[str, Any]:
+        from mmkgc.stages.modeling import KnowledgeResponseValidationError
+
+        call: dict[str, Any] = {
+            "stage": "stage1_knowledge", "prompt_version": self.prompt_version,
+            "knowledge_repair_version": "stage1_complete_fact_repair_v3",
+            "prompt": prompt, "contract_repair_retries": 0, "validation_attempts": [],
+        }
+        seen: set[str] = set()
+        request_prompt = prompt
+        try:
+            for attempt in range(self.max_knowledge_repairs + 1):
+                call["contract_repair_retries"] = attempt
+                response_text = self._complete(request_prompt)
+                call["response_text"] = response_text
+                try:
+                    response = parse_strict_json_object(response_text)
+                    refined = apply_response(response)
+                except (SemanticStageParseError, KnowledgeResponseValidationError) as exc:
+                    if isinstance(exc, KnowledgeResponseValidationError):
+                        errors = exc.errors
+                    elif _should_attempt_contract_repair(exc, response_text):
+                        errors = [{"code": "invalid_json", "path": "", "message": str(exc)}]
+                    else:
+                        raise
+                    call["validation_attempts"].append({"attempt": attempt, "response_text": response_text, "errors": errors})
+                    call.update(validation_errors=errors, contract_repair_error=str(exc),
+                                contract_repair_error_type=type(exc).__name__)
+                    call.setdefault("contract_repair_original_response_preview", _truncate_text(response_text, 4000))
+                    call.setdefault("contract_repair_original_response_truncated", len(response_text) > 4000)
+                    try:
+                        fingerprint = json.dumps(json.loads(response_text), sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+                    except json.JSONDecodeError:
+                        fingerprint = response_text.strip()
+                    first_syntax_repair_failed = (
+                        isinstance(exc, SemanticStageParseError) and attempt == 1
+                        and attempt < self.max_knowledge_repairs
+                    )
+                    if fingerprint in seen and not first_syntax_repair_failed:
+                        call["contract_repair_stopped_reason"] = "repeated_invalid_response"
+                        raise
+                    if attempt == self.max_knowledge_repairs:
+                        call["contract_repair_stopped_reason"] = "repair_limit_reached"
+                        raise
+                    seen.add(fingerprint)
+                    if isinstance(exc, KnowledgeResponseValidationError) or attempt > 0:
+                        request_prompt = build_knowledge_contract_repair_prompt(
+                            inputs=inputs, errors=errors,
+                        )
+                    else:
+                        # Preserve the first syntax-repair request for each profile.
+                        repair = build_stage_repair_prompt(
+                            stage="stage1_knowledge", response_text=response_text, error=exc,
+                            prompt_profile=self.prompt_version,
+                        )
+                        request_prompt = prompt + "\nCorrect the response using the complete input above.\n" + repair
+                    call["contract_repair_prompt"] = request_prompt
+                    continue
+                call["validation_attempts"].append({"attempt": attempt, "response_text": response_text, "errors": []})
+                call.update(status="applied", validation_errors=[])
+                if attempt:
+                    call["contract_repair_response_text"] = response_text
+                refined["semantic_refinement"] = _refinement_status(
+                    self.planner_name, "stage1_knowledge", "applied", None,
+                    prompt_version=self.prompt_version,
+                )
+                return refined
+            raise RuntimeError("Stage 1 repair loop exhausted without a result")
+        except Exception as exc:
+            call.update(status="failed", error_type=type(exc).__name__, error_message=str(exc))
+            setattr(exc, "model_call", call)
+            raise
+        finally:
+            self.calls.append(call)
 
 
 def parse_strict_json_object(response_text: str) -> dict[str, Any]:
@@ -451,6 +537,51 @@ def build_stage_repair_prompt(
             "PREVIOUS_RESPONSE:",
             _truncate_text(response_text, 5000),
         ]
+    )
+
+
+def build_knowledge_contract_repair_prompt(
+    *, inputs: dict[str, Any], errors: list[dict[str, Any]],
+) -> str:
+    expected = [fact["fact_id"] for fact in inputs["fact_candidates"]]
+    required = [{key: fact[key] for key in ("fact_id", "subject", "relation", "object", "direction")}
+                for fact in inputs["fact_candidates"]]
+    feedback = {"expected_fact_count": len(expected), "expected_fact_ids": expected,
+                "validation_errors": errors, "required_fact_rows": required}
+    template = {
+        "relation_facts": [{"fact_id": fact_id, "claim": ""} for fact_id in expected],
+        "entity_profile": {"primary_type": "", "secondary_types": [], "semantic_domains": [],
+                           "core_identity": "", "evidence_refs": []},
+        "text_visual_profile": {"visual_scene_cues": [], "context_cues": [], "non_visual_facts": []},
+        "key_attributes": [], "uncertain_aspects": [],
+    }
+    return (
+        "Generate a fresh MMKGC Stage 1 knowledge model using the ORIGINAL_INPUT_JSON "
+        "and ALL validation errors below. Return a COMPLETE replacement JSON object, not a patch. "
+        "Previous model responses are not evidence. Use only the supplied source facts and evidence.\n"
+        f"relation_facts MUST contain exactly {len(expected)} entries. Every expected_fact_id must "
+        "appear exactly once, with one non-empty claim about THAT ID's subject, relation and object. "
+        "Different neighbors under the same relation are different facts: do not summarize them "
+        "into one row, reuse an ID, omit an ID, or invent IDs. Keep original direction and polarity. "
+        "Do not put a general entity biography into a relation-specific claim.\n"
+        "Include entity_profile, text_visual_profile, key_attributes, uncertain_aspects and the "
+        "complete relation_facts list. Profile evidence_refs and attribute source_ref must cite "
+        "existing evidence_catalog IDs, not rf:* fact IDs. key_attributes may be []; if non-empty, "
+        "EVERY item must be an object with exactly value (text), type (text), and source_ref "
+        "(one existing evidence_catalog ID). Never put bare strings in key_attributes and never "
+        "omit source_ref. uncertain_aspects may be []; its items must be objects with aspect "
+        "and reason text. All visual/context profile fields and secondary_types, semantic_domains, "
+        "evidence_refs must be lists of strings. Do not output scores, allowed_use or generation constraints. "
+        "Do not repeat the invalid response. Return exact JSON only, with no Markdown or explanation.\n"
+        "ORIGINAL_INPUT_JSON:\n" + json.dumps(_prompt_deterministic_output("stage1_knowledge", inputs), ensure_ascii=False, sort_keys=True)
+        + "\nVALIDATION_FEEDBACK_JSON:\n" + json.dumps(feedback, ensure_ascii=False, separators=(",", ":"))
+        + "\nResponse JSON shape:\n" + json.dumps(template, ensure_ascii=False)
+        + "\nComplete the template above from ORIGINAL_INPUT_JSON. Empty primary_type, core_identity "
+        "and claim values are placeholders and MUST be replaced with non-empty supported text. "
+        "Keep every template fact_id exactly as written, in the same order, with one claim per row. "
+        "Start your JSON object with relation_facts. Fill every row before writing the profiles. "
+        "Rebuild the fact list from the source rows and template. "
+        "Return only the completed JSON object:"
     )
 
 

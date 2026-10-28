@@ -25,6 +25,14 @@ Stage 2 和 GPT 评分器使用 `configs/openai-gpt4o-mini-judge.yaml`。
 格式修正提示；Stage 3 恢复原来的简短文本模板、图像 JSON 输入、generation brief
 及正向提示词补充片段。角色、事实引用、输出结构和 SDXL 参数继续沿用当前管线。
 
+Stage 1 的初次模板保留原样。漏写、重复或未知 `fact_id` 等业务校验错误现在会
+反馈完整 ID 集合、缺失项和对应三元组，要求模型重新生成完整结果；默认最多两次
+额外修正，与 JSON 格式修正共享预算。业务修正不引用错误响应原文；重复无效业务响应
+提前停止。首次格式修正仍无效时，剩余预算改用完整源数据重建，不进行程序补写。
+日志通过 `stage1_complete_fact_repair_v3` 及 `validation_attempts` 标记这一机制。
+旧版关系组建模与当前原子事实契约的差异见
+`docs/evaluation/2026-10-27-stage1-fact-id-repair.zh.md`。
+
 Stage 3 的文本生成和图像提示词请求支持并发。在主模型配置中设置：
 
 ```yaml

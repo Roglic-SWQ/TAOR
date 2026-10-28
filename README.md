@@ -16,6 +16,9 @@ Stage 2 按事实约束证据引用，保留每个事实的角色记录，并由
 的候选锚点。程序统计锚点出现次数得到配额，辅助事实允许零配额。
 一次反馈全部可检测的契约错误，最多请求模型修正两轮，对重复的无效响应提前停止。
 
+Stage 1 对漏写、重复或未知事实 ID 等契约错误同样提供具体修正反馈：列出完整
+ID 集合及其原始三元组，最多额外修正两次。程序保留完整性校验，不补写模型 claim。
+
 Stage 4 的 GPT 请求支持候选间并发，配置为 `max_concurrency: 10`。每实体
 5 张候选图时实际最多并发 5 个评分请求，实体之间仍按顺序处理。
 
@@ -92,6 +95,7 @@ CUDA_VISIBLE_DEVICES=1 python -m mmkgc.run \
 ```bash
 python -m pip install -r requirements-dev.txt
 PYTHONDONTWRITEBYTECODE=1 python -m pytest -q \
+  tests/test_stage1_contract_repair.py \
   tests/test_qwen7b_original_prompts.py \
   tests/test_stage3_concurrency.py \
   tests/test_stage2_candidate_slots.py \
@@ -111,6 +115,7 @@ PYTHONDONTWRITEBYTECODE=1 python -m pytest -q \
 - [千问 7B 原始提示词](docs/qwen7b-original-prompts.zh.md)
 - [GPT 对照提示词 v2](docs/gpt4omini-prompts-v2.zh.md)
 - [Stage 2 契约与修正反馈](docs/evaluation/2026-10-27-stage2-contract-v2.zh.md)
+- [Stage 1 事实 ID 完整性修正](docs/evaluation/2026-10-27-stage1-fact-id-repair.zh.md)
 - [五阶段设计](docs/five-stage-pipeline-current-design.zh.md)
 
 本仓库保存当前工作代码快照；本地实验日志、运行产物和第三方模型资源单独管理。

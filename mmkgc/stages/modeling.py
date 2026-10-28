@@ -10,6 +10,92 @@ from mmkgc.data import EntityRecord
 KNOWLEDGE_SCHEMA = "qwen_grounded_knowledge_v1"
 
 
+class KnowledgeResponseValidationError(ValueError):
+    """Model-output contract errors that can be sent back for bounded repair."""
+
+    def __init__(self, errors: list[dict[str, Any]]) -> None:
+        self.errors = deepcopy(errors)
+        super().__init__("; ".join(dict.fromkeys(error["message"] for error in errors)))
+
+
+def knowledge_response_errors(inputs: dict[str, Any], response: Any) -> list[dict[str, Any]]:
+    """Collect independent response errors without changing facts or model output."""
+    errors: list[dict[str, Any]] = []
+    expected = [item["fact_id"] for item in inputs["fact_candidates"]]
+    allowed_ids = set(expected)
+    catalog = {item["evidence_id"] for item in inputs["evidence_catalog"]}
+
+    def add(code: str, path: str, message: str, **details: Any) -> None:
+        errors.append({"code": code, "path": path, "message": message, **details})
+
+    def string_list(value: Any, path: str, name: str) -> list[str] | None:
+        if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+            add("invalid_string_list", path, f"{name} must be a list of strings")
+            return None
+        return [item.strip() for item in value if item.strip()]
+
+    if not isinstance(response, dict):
+        add("invalid_object", "", "Stage 1 knowledge response must be an object")
+        return errors
+    profile, visual = response.get("entity_profile"), response.get("text_visual_profile")
+    if not isinstance(profile, dict):
+        add("invalid_profile", "/entity_profile", "Stage 1 requires entity_profile and text_visual_profile objects")
+    else:
+        for key in ("primary_type", "core_identity"):
+            if not isinstance(profile.get(key), str) or not profile[key].strip():
+                add("empty_profile_text", f"/entity_profile/{key}", f"entity_profile.{key} must be non-empty text")
+        for key in ("secondary_types", "semantic_domains", "evidence_refs"):
+            values = string_list(profile.get(key, []), f"/entity_profile/{key}", f"entity_profile.{key}")
+            if key == "evidence_refs" and values is not None:
+                unknown = sorted(set(values) - catalog)
+                if unknown:
+                    add("unknown_profile_evidence", "/entity_profile/evidence_refs",
+                        "entity_profile contains unknown evidence references", actual=unknown, allowed_values=sorted(catalog))
+    if not isinstance(visual, dict):
+        add("invalid_visual_profile", "/text_visual_profile", "Stage 1 requires entity_profile and text_visual_profile objects")
+    else:
+        for key in ("visual_scene_cues", "context_cues", "non_visual_facts"):
+            string_list(visual.get(key, []), f"/text_visual_profile/{key}", f"text_visual_profile.{key}")
+    claims = response.get("relation_facts")
+    seen: set[str] = set()
+    if not isinstance(claims, list):
+        add("invalid_fact_list", "/relation_facts", "relation_facts must be a list")
+    else:
+        for index, claim in enumerate(claims):
+            path = f"/relation_facts/{index}"
+            if not isinstance(claim, dict):
+                add("invalid_fact_object", path, "each relation fact must be an object")
+                continue
+            fact_id = claim.get("fact_id")
+            if not isinstance(fact_id, str) or fact_id not in allowed_ids:
+                add("unknown_fact_id", path + "/fact_id", "Stage 1 returned an unknown or duplicate fact_id",
+                    actual=fact_id, allowed_values=expected)
+            elif fact_id in seen:
+                add("duplicate_fact_id", path + "/fact_id", "Stage 1 returned an unknown or duplicate fact_id", actual=fact_id)
+            else:
+                seen.add(fact_id)
+            text = claim.get("claim")
+            if not isinstance(text, str) or not text.strip():
+                add("empty_claim", path + "/claim", "each fact requires a non-empty claim", fact_id=fact_id)
+    missing = [fact_id for fact_id in expected if fact_id not in seen]
+    if missing:
+        add("missing_fact_ids", "/relation_facts", "Stage 1 must model every provided fact_id exactly once",
+            expected_fact_ids=expected, missing_fact_ids=missing, expected_count=len(expected),
+            returned_count=len(claims) if isinstance(claims, list) else 0)
+    attributes = response.get("key_attributes", [])
+    if not isinstance(attributes, list):
+        add("invalid_attributes", "/key_attributes", "key_attributes and uncertain_aspects must be lists")
+    else:
+        for index, attribute in enumerate(attributes):
+            ref = attribute.get("source_ref") if isinstance(attribute, dict) else None
+            if not isinstance(ref, str) or ref not in catalog:
+                add("unknown_attribute_evidence", f"/key_attributes/{index}/source_ref",
+                    "key_attributes require an existing source_ref", actual=ref, allowed_values=sorted(catalog))
+    if not isinstance(response.get("uncertain_aspects", []), list):
+        add("invalid_uncertainties", "/uncertain_aspects", "key_attributes and uncertain_aspects must be lists")
+    return errors
+
+
 def entity_context(knowledge: dict[str, Any]) -> dict[str, Any]:
     v3 = knowledge.get("stage1_v3", {})
     return {
@@ -111,38 +197,26 @@ def _text_list(value: Any, name: str) -> list[str]:
 
 def apply_knowledge_response(inputs: dict[str, Any], response: dict[str, Any]) -> dict[str, Any]:
     """Bind model-authored claims to source facts without model-authored evidence."""
+    errors = knowledge_response_errors(inputs, response)
+    if errors:
+        raise KnowledgeResponseValidationError(errors)
     profile = response.get("entity_profile")
     visual = response.get("text_visual_profile")
-    if not isinstance(profile, dict) or not isinstance(visual, dict):
-        raise ValueError("Stage 1 requires entity_profile and text_visual_profile objects")
     profile = {key: deepcopy(profile[key]) for key in (
         "primary_type", "secondary_types", "semantic_domains", "core_identity", "evidence_refs"
     ) if key in profile}
-    for key in ("primary_type", "core_identity"):
-        if not isinstance(profile.get(key), str) or not profile[key].strip():
-            raise ValueError(f"entity_profile.{key} must be non-empty text")
     for key in ("secondary_types", "semantic_domains", "evidence_refs"):
         profile[key] = _text_list(profile.get(key, []), f"entity_profile.{key}")
     catalog = {item["evidence_id"]: item for item in inputs["evidence_catalog"]}
-    if not set(profile["evidence_refs"]).issubset(catalog):
-        raise ValueError("entity_profile contains unknown evidence references")
     visual = {key: _text_list(visual.get(key, []), f"text_visual_profile.{key}") for key in (
         "visual_scene_cues", "context_cues", "non_visual_facts"
     )}
     claims = response.get("relation_facts")
-    if not isinstance(claims, list):
-        raise ValueError("relation_facts must be a list")
     by_id = {item["fact_id"]: item for item in inputs["fact_candidates"]}
     modeled: dict[str, dict[str, Any]] = {}
     for claim in claims:
-        if not isinstance(claim, dict):
-            raise ValueError("each relation fact must be an object")
         fact_id = claim.get("fact_id")
-        if fact_id not in by_id or fact_id in modeled:
-            raise ValueError("Stage 1 returned an unknown or duplicate fact_id")
         text = claim.get("claim")
-        if not isinstance(text, str) or not text.strip():
-            raise ValueError("each fact requires a non-empty claim")
         fact = deepcopy(by_id[fact_id])
         bundle = [deepcopy(catalog[ref]) for ref in fact["evidence_refs"]]
         modeled[fact_id] = {
@@ -152,15 +226,8 @@ def apply_knowledge_response(inputs: dict[str, Any], response: dict[str, Any]) -
             "evidence_match_score": None, "scoring_status": "pending",
             "evidence_basis": "source_match" if len(bundle) == 1 and bundle[0]["source"] == "stage0_kg" else "provided_context",
         }
-    if set(modeled) != set(by_id):
-        raise ValueError("Stage 1 must model every provided fact_id exactly once")
     attributes = response.get("key_attributes", [])
     uncertainties = response.get("uncertain_aspects", [])
-    if not isinstance(attributes, list) or not isinstance(uncertainties, list):
-        raise ValueError("key_attributes and uncertain_aspects must be lists")
-    for attribute in attributes:
-        if not isinstance(attribute, dict) or attribute.get("source_ref") not in catalog:
-            raise ValueError("key_attributes require an existing source_ref")
     facts = [modeled[ref] for ref in by_id]
     v3 = {
         "schema_version": KNOWLEDGE_SCHEMA, "entity_profile": profile,
