@@ -19,6 +19,10 @@ inference:
 初次 JSON 语法修正提示保留；如果仍然无效，剩余预算使用完整源数据重建。
 两种修正共享最多两次额外请求的预算；业务修正不再引用错误响应原文。
 
+2026-10-28 另为本地千问 Stage 3 增加重复／截断恢复：首次请求的原始模板不变，
+修正时使用原始事实和约束构建独立短请求，并启用 lm-format-enforcer JSON 约束。
+这项恢复最多额外请求两次，说明见 `docs/evaluation/2026-10-28-failed8-recovery.zh.md`。
+
 | 位置 | 恢复内容 |
 | --- | --- |
 | Stage 0 | 原始关系粗筛任务说明、system 指令和输入 JSON；恢复紧凑列表最多 3 项的文字要求 |
@@ -30,7 +34,7 @@ Stage 3 同时恢复原来的 generation brief 输入方式、各 brief 列表�
 grounded_facts 取前 8 项，以及程序在 SDXL 正向提示词后附加的 brief 片段。
 Stage 4 反馈触发重生成时，继续使用原来的反馈事实前缀和提示词形式。
 
-这次恢复保留当前的 Stage 1 Qwen3-Reranker-4B、Stage 2 GPT 槽位方案及严格校验、
+这次恢复保留当前的 Stage 1 Qwen3-Reranker-4B、Stage 2 槽位方案及严格校验、
 Stage 3 并发和线程日志隔离、Stage 4 评分配置。千问 Stage 3 默认并发 1，仍可配置。
 显式使用 `gpt4omini-mainline.yaml` 时继续使用 GPT v2 提示词。
 

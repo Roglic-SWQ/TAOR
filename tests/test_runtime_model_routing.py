@@ -20,7 +20,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 @pytest.mark.parametrize("missing_mode", ["text", "image"])
 @pytest.mark.parametrize("gpt_override", [False, True])
-def test_runtime_routes_qwen_generation_and_gpt_selection(monkeypatch, tmp_path, missing_mode, gpt_override):
+def test_runtime_routes_local_qwen_and_explicit_gpt_override(monkeypatch, tmp_path, missing_mode, gpt_override):
     (tmp_path / ".env").write_text(
         "OPENAI_BASE_URL=https://gpt.example.test/v1\n"
         "OPENAI_API_KEY=project-gpt-key\n"
@@ -30,7 +30,7 @@ def test_runtime_routes_qwen_generation_and_gpt_selection(monkeypatch, tmp_path,
         monkeypatch.delenv(name, raising=False)
     configs = tmp_path / "configs"
     configs.mkdir()
-    for name in ("qwen7b-mainline.yaml", "qwen7b-stage1.yaml",
+    for name in ("qwen7b-mainline.yaml", "qwen7b-stage1.yaml", "qwen7b-stage2.yaml",
                  "gpt4omini-mainline.yaml", "openai-gpt4o-mini-judge.yaml"):
         shutil.copyfile(PROJECT_ROOT / "configs" / name, configs / name)
     monkeypatch.chdir(tmp_path)
@@ -42,7 +42,8 @@ def test_runtime_routes_qwen_generation_and_gpt_selection(monkeypatch, tmp_path,
     monkeypatch.setattr(defaults, "SDXLImageGenerator", lambda config: SimpleNamespace(config=config))
 
     overrides = ({"model_config": "configs/gpt4omini-mainline.yaml",
-                  "stage1_model_config": "configs/gpt4omini-mainline.yaml"}
+                  "stage1_model_config": "configs/gpt4omini-mainline.yaml",
+                  "stage2_model_config": "configs/openai-gpt4o-mini-judge.yaml"}
                  if gpt_override else {})
     runtime = defaults.build_default_mainline_runtime(missing_mode=missing_mode, **overrides)
 
@@ -58,9 +59,11 @@ def test_runtime_routes_qwen_generation_and_gpt_selection(monkeypatch, tmp_path,
     assert runtime.model_name == components[0].config.model_name
     assert runtime.base_url == components[0].config.base_url
     assert runtime.pipeline.text_generator.max_concurrency == (5 if gpt_override else 1)
-    assert runtime.pipeline.relation_planner.config.model_name == "gpt-4o-mini"
-    assert runtime.pipeline.relation_planner.config.base_url == "https://gpt.example.test/v1"
-    assert runtime.pipeline.relation_planner.config.api_key == "project-gpt-key"
+    relation_planner = runtime.pipeline.relation_planner
+    assert relation_planner.config.model_name == ("gpt-4o-mini" if gpt_override else "Qwen/Qwen2-VL-7B-Instruct")
+    assert relation_planner.config.base_url == ("https://gpt.example.test/v1" if gpt_override else "http://127.0.0.1:12345/v1")
+    assert relation_planner.config.api_key == ("project-gpt-key" if gpt_override else "EMPTY")
+    assert relation_planner.planner_name == ("gpt4omini-global-relation-planner" if gpt_override else "qwen-local-global-relation-planner")
     assert runtime.pipeline.evidence_reranker is reranker
     planner_name = "gpt4omini-stage-semantic-planner" if gpt_override else "qwen-local-stage-semantic-planner"
     assert runtime.pipeline.semantic_planner.planner_name == planner_name
@@ -69,7 +72,7 @@ def test_runtime_routes_qwen_generation_and_gpt_selection(monkeypatch, tmp_path,
     args = build_parser().parse_args([])
     assert args.model_config == "configs/qwen7b-mainline.yaml"
     assert args.stage1_model_config == "configs/qwen7b-stage1.yaml"
-    assert args.stage2_model_config == "configs/openai-gpt4o-mini-judge.yaml"
+    assert args.stage2_model_config == "configs/qwen7b-stage2.yaml"
 
 
 @pytest.mark.parametrize("size", [4, 10, 50])
@@ -85,7 +88,7 @@ def test_launchers_route_stage_models(tmp_path, size, explicit_credentials, gpt_
         directory.mkdir(parents=True)
     script = scripts / f"run_mkgw_image_test_{size}.sh"
     shutil.copyfile(PROJECT_ROOT / "scripts" / script.name, script)
-    for name in ("qwen7b-mainline.yaml", "qwen7b-stage1.yaml",
+    for name in ("qwen7b-mainline.yaml", "qwen7b-stage1.yaml", "qwen7b-stage2.yaml",
                  "gpt4omini-mainline.yaml", "openai-gpt4o-mini-judge.yaml"):
         shutil.copyfile(PROJECT_ROOT / "configs" / name, configs / name)
     (configs / "stage4-model-fusion-gpu1-visible.yaml").write_text("{}")
@@ -148,7 +151,8 @@ def test_launchers_route_stage_models(tmp_path, size, explicit_credentials, gpt_
         )
     if gpt_override:
         env.update(MODEL_CONFIG=str(configs / "gpt4omini-mainline.yaml"),
-                   STAGE1_MODEL_CONFIG=str(configs / "gpt4omini-mainline.yaml"))
+                   STAGE1_MODEL_CONFIG=str(configs / "gpt4omini-mainline.yaml"),
+                   STAGE2_MODEL_CONFIG=str(configs / "openai-gpt4o-mini-judge.yaml"))
     completed = subprocess.run(
         ["bash", str(script)], cwd=tmp_path, env=env, text=True,
         capture_output=True, check=True, timeout=15,
@@ -162,4 +166,4 @@ def test_launchers_route_stage_models(tmp_path, size, explicit_credentials, gpt_
     qwen_route = ["Qwen/Qwen2-VL-7B-Instruct", "http://127.0.0.1:12345/v1", "EMPTY"]
     for flag in ("--model-config", "--stage1-model-config"):
         assert routing[flag] == (gpt_route if gpt_override else qwen_route)
-    assert routing["--stage2-model-config"] == gpt_route
+    assert routing["--stage2-model-config"] == (gpt_route if gpt_override else qwen_route)

@@ -11,11 +11,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from urllib import error, request
+from urllib.parse import urlsplit
 
 from mmkgc.stages.semantic import StrictJsonStagePlanner
 from mmkgc.generation_prompts import (
     IMAGE_SYSTEM, PROMPT_PROFILES, PROMPT_VERSION, QWEN_PROMPT_VERSION, TEXT_SYSTEM,
     build_generation_prompt, generation_payload,
+)
+from mmkgc.adapters.image_prompt_repair import (
+    REPAIR_SCHEMA as IMAGE_REPAIR_SCHEMA, REPAIR_VERSION as IMAGE_REPAIR_VERSION,
+    compact_repair_prompt, validate_positive_prompt,
 )
 from mmkgc.qwen7b_prompts import (
     IMAGE_SYSTEM as QWEN_IMAGE_SYSTEM,
@@ -475,6 +480,7 @@ class QwenLocalImagePromptGenerator(_CandidateCallLog):
         positive = str(data.get("positive_prompt") or "").strip()
         if not positive:
             raise ValueError("image prompt response is missing positive_prompt")
+        validate_positive_prompt(positive)
         return {
             "prompt_or_instruction": "GPT prompt planner generated an SDXL prompt from structured evidence.",
             "positive_prompt": positive,
@@ -530,7 +536,7 @@ class QwenLocalImagePromptGenerator(_CandidateCallLog):
             record["repaired_finish_reason"] = repaired_finish_reason
         return record
 
-    def _request_json(self, prompt: str) -> tuple[dict[str, Any], int]:
+    def _request_json(self, prompt: str, *, structured_repair: bool = False) -> tuple[dict[str, Any], int]:
         request_body = {
             "model": self.config.model_name,
             "messages": [
@@ -543,6 +549,10 @@ class QwenLocalImagePromptGenerator(_CandidateCallLog):
             "max_tokens": self.config.image_prompt_max_token,
             "temperature": self.config.temperature,
         }
+        if structured_repair:
+            request_body['guided_json'] = IMAGE_REPAIR_SCHEMA
+            request_body['guided_decoding_backend'] = 'lm-format-enforcer'
+            request_body['repetition_penalty'] = 1.1
         headers = {
             "Authorization": f"Bearer {self.config.api_key}",
             "Content-Type": "application/json",
@@ -580,6 +590,10 @@ class QwenLocalImagePromptGenerator(_CandidateCallLog):
         initial_response_json: dict[str, Any] | None = None
         repaired_json: dict[str, Any] | None = None
         repair_attempted = False
+        repair_count = 0
+        validation_attempts = []
+        local_qwen = ('qwen' in self.config.model_name.casefold()
+                      and urlsplit(self.config.base_url).hostname in {'127.0.0.1', 'localhost', '::1'})
         start_time = time.perf_counter()
         try:
             response_json, latency_ms = self._request_json(prompt)
@@ -587,27 +601,41 @@ class QwenLocalImagePromptGenerator(_CandidateCallLog):
             initial_finish_reason = _response_finish_reason(response_json)
             response_text = self._extract_response_text(response_json)
             initial_response_text = response_text
-            try:
-                prompt_package = self._parse_prompt_package(response_text)
-            except ValueError as parse_error:
-                repair_attempted = True
-                repair_prompt = _build_image_prompt_contract_repair_prompt(
-                    response_text,
-                    parse_error,
-                    truncated=initial_finish_reason == "length",
-                )
-                repair_prompt = prompt + "\nApply the same evidence and rendering rules.\n" + repair_prompt
-                repaired_json, repair_latency_ms = self._request_json(repair_prompt)
-                repaired_finish_reason = _response_finish_reason(repaired_json)
-                repaired_text = self._extract_response_text(repaired_json)
-                prompt_package = self._parse_prompt_package(repaired_text)
-                response_text = repaired_text
-                response_json = {
-                    "initial_response": response_json,
-                    "repaired_response": repaired_json,
-                }
-                latency_ms += repair_latency_ms
-                record_prompt = prompt + "\n\n[contract repair prompt]\n" + repair_prompt
+            current_text, current_finish = response_text, initial_finish_reason
+            for attempt in range((2 if local_qwen else 1) + 1):
+                try:
+                    prompt_package = self._parse_prompt_package(current_text)
+                    if current_finish == 'length':
+                        raise ValueError('Image prompt output reached the token limit')
+                except ValueError as parse_error:
+                    validation_attempts.append({'attempt': attempt, 'response_text': current_text,
+                                                'finish_reason': current_finish, 'error': str(parse_error)})
+                    if attempt == (2 if local_qwen else 1):
+                        raise
+                    repair_attempted = True
+                    repair_count += 1
+                    if local_qwen:
+                        repair_prompt = compact_repair_prompt(record_label, entity_type, relation, angle, facts,
+                            self.context if generation_context is None else generation_context, parse_error)
+                    else:
+                        repair_prompt = prompt + '\nApply the same evidence and rendering rules.\n' + _build_image_prompt_contract_repair_prompt(
+                            current_text, parse_error, truncated=current_finish == 'length')
+                    record_prompt = prompt + '\n\n[contract repair prompt]\n' + repair_prompt
+                    if local_qwen:
+                        repaired_json, repair_latency_ms = self._request_json(repair_prompt, structured_repair=True)
+                    else:
+                        repaired_json, repair_latency_ms = self._request_json(repair_prompt)
+                    repaired_finish_reason = _response_finish_reason(repaired_json)
+                    repaired_text = self._extract_response_text(repaired_json)
+                    latency_ms += repair_latency_ms
+                    current_text, current_finish = repaired_text, repaired_finish_reason
+                    continue
+                validation_attempts.append({'attempt': attempt, 'response_text': current_text,
+                                            'finish_reason': current_finish, 'error': None})
+                response_text = current_text
+                if repair_attempted:
+                    response_json = {'initial_response': initial_response_json, 'repaired_response': repaired_json}
+                break
             self._record_call(
                 {
                     "metadata": {
@@ -615,8 +643,10 @@ class QwenLocalImagePromptGenerator(_CandidateCallLog):
                         "model_name": self.config.model_name,
                         "model_status": "generated",
                         "fallback_used": False,
-                        "contract_repair_retries": int(repair_attempted),
+                        "contract_repair_retries": repair_count,
                     },
+                    'validation_attempts': validation_attempts,
+                    'image_prompt_repair_version': IMAGE_REPAIR_VERSION,
                     **self._build_call_record(
                         status="generated",
                         prompt=record_prompt,
@@ -657,8 +687,10 @@ class QwenLocalImagePromptGenerator(_CandidateCallLog):
                     "model_error": str(exc),
                     "error_type": type(exc).__name__,
                     "error_message": str(exc),
-                    "contract_repair_retries": int(repair_attempted),
+                    "contract_repair_retries": repair_count,
                 },
+                'validation_attempts': validation_attempts,
+                'image_prompt_repair_version': IMAGE_REPAIR_VERSION,
                 **self._build_call_record(
                     status="failed",
                     prompt=record_prompt,

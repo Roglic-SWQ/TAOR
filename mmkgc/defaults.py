@@ -17,7 +17,7 @@ from mmkgc.adapters import (
     load_qwen_config,
 )
 from mmkgc.adapters.evidence_reranker import Qwen3EvidenceReranker
-from mmkgc.adapters.relation_planner import GPT4oMiniRelationPlanner
+from mmkgc.adapters.relation_planner import OpenAICompatibleRelationPlanner
 from mmkgc.pipeline import MMKGCPipeline
 
 
@@ -59,7 +59,7 @@ def build_default_mainline_runtime(
     stage1_reranker_device: str = "cuda:0",
     stage1_reranker_max_length: int = 8192,
     stage1_model_config: str | Path = "configs/qwen7b-stage1.yaml",
-    stage2_model_config: str | Path = "configs/openai-gpt4o-mini-judge.yaml",
+    stage2_model_config: str | Path = "configs/qwen7b-stage2.yaml",
     model_config: str | Path = "configs/qwen7b-mainline.yaml",
     model_call_timeout_seconds: float = 60.0,
     stage4_config: str | Path | None = "configs/stage4-model-fusion.yaml",
@@ -105,7 +105,7 @@ def build_default_mainline_runtime(
         load_qwen_config(stage1_config_path),
         timeout_seconds=model_call_timeout_seconds,
     )
-    relation_planner = GPT4oMiniRelationPlanner(
+    relation_planner = OpenAICompatibleRelationPlanner(
         load_qwen_config(stage2_config_path), timeout_seconds=model_call_timeout_seconds
     )
     reranker_path = Path(stage1_reranker_model_dir)

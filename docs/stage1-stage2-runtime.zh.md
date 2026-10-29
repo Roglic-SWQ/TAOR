@@ -1,8 +1,9 @@
 # 千问 7B、GPT-4o-mini 与 Reranker 运行环境
 
-2026-10-27 实验后，CLI、Python API 和 4 / 10 / 50 实体启动脚本的 Stage 0 / 1 / 3
-默认模型恢复为 `Qwen/Qwen2-VL-7B-Instruct`；Stage 2 和 Stage 4 的 GPT 评分保持
-`gpt-4o-mini`。随后按用户要求，千问配置的提示词也恢复为修改前的版本，
+2026-10-28 按用户要求，Stage 2 也切换为本地千问。CLI、Python API 和
+4 / 10 / 50 实体启动脚本的 Stage 0 / 1 / 2 / 3 默认模型均为
+`Qwen/Qwen2-VL-7B-Instruct`；Stage 4 的 GPT 评分使用 `gpt-4o-mini`。
+Stage 0 / 1 / 3 的千问提示词已恢复为修改前的版本，
 使用 `inference.prompt_profile: qwen7b_original_v1` 标记。实际模型看调用日志的
 `model_name`；原始模板说明见 `docs/qwen7b-original-prompts.zh.md`。
 显式 GPT 对照配置仍采用 `gpt4omini_stage03_v2`，说明见 `docs/gpt4omini-prompts-v2.zh.md`。
@@ -11,14 +12,16 @@
 | --- | --- |
 | Stage 0 | Qwen2-VL-7B-Instruct 做关系语义粗筛 |
 | Stage 1 | Qwen2-VL-7B-Instruct 构建知识模型；本地 Qwen3-Reranker-4B 做证据评分 |
-| Stage 2 | GPT-4o-mini 选择关系角色并分配候选数量 |
+| Stage 2 | Qwen2-VL-7B-Instruct 选择关系角色并分配候选数量 |
 | Stage 3 | Qwen2-VL-7B-Instruct 生成文本或图像提示词；SDXL 生成图像 |
 | Stage 4 | GPT-4o-mini 与 CLIP、BLIP 等评分器参与候选排序 |
 
 Stage 0 / Stage 3 使用 `configs/qwen7b-mainline.yaml`，Stage 1 知识建模使用
-`configs/qwen7b-stage1.yaml`，两者默认连接 `http://127.0.0.1:12345/v1`。
+`configs/qwen7b-stage1.yaml`，Stage 2 使用 `configs/qwen7b-stage2.yaml`；
+三者默认连接 `http://127.0.0.1:12345/v1`。
 主配置保留 4096 token 的语言模型输出预算及 384 token 的图像提示词预算。
-Stage 2 和 GPT 评分器使用 `configs/openai-gpt4o-mini-judge.yaml`。
+Stage 4 GPT 评分器使用 `configs/openai-gpt4o-mini-judge.yaml`。
+Stage 2 可通过 `--stage2-model-config` 或脚本的 `STAGE2_MODEL_CONFIG` 显式切回 GPT 对照。
 
 `qwen7b-mainline.yaml`、`qwen7b-stage1.yaml` 和环境变量版 `qwen-local.yaml`
 均显式启用原始千问提示词。Stage 0 / 1 恢复原始 system、任务说明、输入组织和
@@ -32,6 +35,18 @@ Stage 1 的初次模板保留原样。漏写、重复或未知 `fact_id` 等业�
 日志通过 `stage1_complete_fact_repair_v3` 及 `validation_attempts` 标记这一机制。
 旧版关系组建模与当前原子事实契约的差异见
 `docs/evaluation/2026-10-27-stage1-fact-id-repair.zh.md`。
+
+Stage 2 默认对网络超时、断连及临时 HTTP 故障额外重试 1 次，与模型契约修正分别计数，
+阶段总预算为 300 秒。仅支持关系错误时，根据已确定角色收紧合法支持 ID；修正请求不再
+追加错误模型响应。本地千问 Stage 3 的重复／截断修正使用独立短请求、lm-format-enforcer
+JSON 约束和 1.1 重复惩罚，最多额外请求 2 次。原始初次模板和 SDXL 参数保持原样。
+实现与验证见 `docs/evaluation/2026-10-28-failed8-recovery.zh.md`。
+
+千问 Stage 2 另使用 `qwen_stage2_targeted_repair_v1`：仅漏写事实时分批请求遗漏项，
+每批最多 4 条；仅槽位错误时请求明确编号的全部槽位；仅支持引用错误时请求对应支持列表。
+这些小响应使用直接按键展开的 JSON Schema，其他合法决策不重写，所有显式模型补答合并后
+仍须通过完整业务校验。其余混合错误继续完整规划修正，不增加两轮修正或 300 秒总预算。
+详见 `docs/evaluation/2026-10-28-stage2-qwen-targeted-repair.zh.md`。
 
 Stage 3 的文本生成和图像提示词请求支持并发。在主模型配置中设置：
 
@@ -50,7 +65,13 @@ SDXL 在调用线程逐张生成，避免多个线程同时操作同一 GPU 模�
 记录实际 `stage3_max_concurrency`。这项配置只作用于 Stage 3，实体和其他阶段
 仍按原来的依赖顺序执行；SDXL 的图像尺寸、步数、种子和候选预算不变。
 
-Stage 2 使用 `gpt4omini_stage2_candidate_slots_v3` 提示词及逐事实的严格 JSON Schema：
+Stage 2 千问调用记录 `qwen7b_stage2_candidate_slots_v3`，显式 GPT 对照记录
+`gpt4omini_stage2_candidate_slots_v4`；两者共用已有槽位规划任务和业务契约。
+GPT 请求发送逐事实的严格 JSON Schema；千问使用普通生成接口及 1.05 重复惩罚，
+在提示词中列出完整模板、全部事实 ID、合法角色和槽位数量，输出预算为 3072 token。
+本地不启用当前 vLLM 中较慢的约束解码器；JSON 语法、逐事实证据归属、非空白 reason 等
+规则继续由本地解析器和校验器严格检查；详见
+`docs/evaluation/2026-10-28-stage2-qwen7b.zh.md`。
 每个 `fact_id` 对应独立分支，其 `evidence_refs` 只能从该事实自己的证据 ID 中选择；
 没有证据时只能返回空列表。所有角色（含 `context`、`excluded`）的 `reason`
 都必须包含非空白字符。辅助事实通过 `supporting_fact_ids` 连接，不把辅助事实的
@@ -77,10 +98,10 @@ Stage 3 按模型给出的槽位顺序生成，Stage 2 产物保存槽位和派�
 `ready` 计划必须有主事实并恰好填满预算，`insufficient_evidence` 计划保持零配额。
 这些跨字段业务规则仍执行程序校验，不以 Schema 校验替代。
 
-若 JSON 或业务契约不合法，修正对话保留最初的 system/user 输入，将上次输出
-作为 assistant 消息，再用独立 user 消息提交全部结构化错误，要求返回完整计划。
+若 JSON 或业务契约不合法，修正对话保留最初的 system/user 输入，
+再用独立 user 消息提交全部结构化错误与完整模板，要求返回完整计划；不追加错误响应原文。
 默认最多修正两轮（首次请求之外）；无效结果在 JSON 解析后与之前结果相同，
-即使只改了空白或对象键顺序，也会提前停止。`GPT4oMiniRelationPlanner` 的
+即使只改了空白或对象键顺序，也会提前停止。`OpenAICompatibleRelationPlanner` 的
 `max_contract_repairs` 可配置该上限。网络错误不进入业务契约修正循环。
 程序不自动改写角色、引用或配额。模型调用日志的 `validation_attempts` 保存每轮
 响应和完整错误列表，`contract_repair_stopped_reason` 记录重复响应或次数耗尽。

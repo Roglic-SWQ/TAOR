@@ -161,8 +161,9 @@ def test_two_distinct_repairs_use_full_conversation_and_preserve_input(monkeypat
     monkeypatch.setattr(planner, "_complete", complete)
     result = planner.plan(SimpleNamespace(label="Museum"), "image", source, 5)
     assert result["fine_grained_relation_selection"]["quota_summary"]["assigned_total"] == 5
-    assert [len(messages) for messages in captured] == [2, 4, 6]
-    assert captured[2][:4] == captured[1]
+    assert [len(messages) for messages in captured] == [2, 3, 3]
+    assert captured[2][:2] == captured[1][:2]
+    assert all(message['role'] != 'assistant' for messages in captured for message in messages)
     feedback = json.loads(captured[1][-1]["content"].split("VALIDATION_ERRORS_JSON:\n")[1])
     assert {error["code"] for error in feedback["validation_errors"]} == {"foreign_evidence_refs", "candidate_slot_count"}
     assert json.loads(captured[2][1]["content"])["relation_facts"] == json.loads(captured[0][1]["content"])["relation_facts"]
@@ -216,24 +217,25 @@ def test_http_request_sends_separate_repair_messages_and_redacts_logs(monkeypatc
     outputs = iter([invalid, valid])
     captured = []
 
-    class Response:
-        def __enter__(self):
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
             return self
 
-        def __exit__(self, *args):
+        async def __aexit__(self, *args):
             return False
 
-        def read(self):
-            return json.dumps({"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(slot_response(next(outputs)))}}]}).encode()
+        async def post(self, url, json, headers):
+            captured.append(json)
+            payload = {"choices": [{"finish_reason": "stop", "message": {"content": __import__('json').dumps(slot_response(next(outputs)))}}]}
+            return SimpleNamespace(status_code=200, headers={'x-request-id': 'test-request-id'}, json=lambda: payload)
 
-    def urlopen(req, **kwargs):
-        captured.append(json.loads(req.data))
-        return Response()
-
-    monkeypatch.setattr("mmkgc.adapters.relation_planner.request.urlopen", urlopen)
+    monkeypatch.setattr("httpx.AsyncClient", Client)
     planner = make_planner()
     planner.plan(SimpleNamespace(label="secret-key Museum"), "image", source, 5)
-    assert [message["role"] for message in captured[1]["messages"]] == ["system", "user", "assistant", "user"]
+    assert [message["role"] for message in captured[1]["messages"]] == ["system", "user", "user"]
     assert captured[0]["response_format"] == captured[1]["response_format"]
     assert captured[1]["response_format"]["json_schema"]["strict"] is True
     assert "secret-key" not in json.dumps(planner.calls)
@@ -247,7 +249,7 @@ def test_transport_errors_do_not_consume_contract_repairs(monkeypatch, source, f
         calls.append(args)
         raise failure
 
-    planner = make_planner()
+    planner = make_planner(max_transport_retries=0)
     monkeypatch.setattr(planner, "_complete", complete)
     with pytest.raises(type(failure)):
         planner.plan(SimpleNamespace(label="Museum"), "image", source, 5)

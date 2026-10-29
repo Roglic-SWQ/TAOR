@@ -1,0 +1,218 @@
+[
+  {
+    "entity_key": "Q652",
+    "entity_id": 76,
+    "label": "Italian",
+    "scope": "currently_missing_image_in_test_graph",
+    "train_degree": 358,
+    "has_text": true
+  },
+  {
+    "entity_key": "Q45261",
+    "entity_id": 131,
+    "label": "Ya'qub ibn al-Layth al-Saffar",
+    "scope": "currently_missing_image_in_test_graph",
+    "train_degree": 2,
+    "has_text": true
+  },
+  {
+    "entity_key": "Q565510",
+    "entity_id": 364,
+    "label": "Maurice Elvey",
+    "scope": "currently_missing_image_in_test_graph",
+    "train_degree": 18,
+    "has_text": true
+  },
+  {
+    "entity_key": "Q7737",
+    "entity_id": 697,
+    "label": "Russian",
+    "scope": "currently_missing_image_in_test_graph",
+    "train_degree": 49,
+    "has_text": true
+  },
+  {
+    "entity_key": "Q3695854",
+    "entity_id": 1397,
+    "label": "So Sweet... So Perverse",
+    "scope": "currently_missing_image_in_test_graph",
+    "train_degree": 4,
+    "has_text": true
+  },
+  {
+    "entity_key": "Q7909019",
+    "entity_id": 2377,
+    "label": "Vakkalathu Narayanankutty",
+    "scope": "currently_missing_image_in_test_graph",
+    "train_degree": 2,
+    "has_text": true
+  },
+  {
+    "entity_key": "Q1197236",
+    "entity_id": 2527,
+    "label": "The Guru",
+    "scope": "currently_missing_image_in_test_graph",
+    "train_degree": 8,
+    "has_text": true
+  },
+  {
+    "entity_key": "Q9061",
+    "entity_id": 2617,
+    "label": "Karl Marx",
+    "scope": "currently_missing_image_in_test_graph",
+    "train_degree": 7,
+    "has_text": true
+  },
+  {
+    "entity_key": "Q1199203",
+    "entity_id": 3595,
+    "label": "When Worlds Collide",
+    "scope": "currently_missing_image_in_test_graph",
+    "train_degree": 9,
+    "has_text": true
+  },
+  {
+    "entity_key": "Q1772459",
+    "entity_id": 3638,
+    "label": "The Story of Marie and Julien",
+    "scope": "currently_missing_image_in_test_graph",
+    "train_degree": 4,
+    "has_text": true
+  },
+  {
+    "entity_key": "Q107130",
+    "entity_id": 3929,
+    "label": "Rajesh Khanna",
+    "scope": "currently_missing_image_in_test_graph",
+    "train_degree": 15,
+    "has_text": true
+  },
+  {
+    "entity_key": "Q462799",
+    "entity_id": 4134,
+    "label": "Evanston",
+    "scope": "currently_missing_image_in_test_graph",
+    "train_degree": 8,
+    "has_text": true
+  },
+  {
+    "entity_key": "Q499410",
+    "entity_id": 4148,
+    "label": "Linköping Municipality",
+    "scope": "currently_missing_image_in_test_graph",
+    "train_degree": 3,
+    "has_text": true
+  },
+  {
+    "entity_key": "Q634875",
+    "entity_id": 4504,
+    "label": "Sergiu Nicolaescu",
+    "scope": "currently_missing_image_in_test_graph",
+    "train_degree": 5,
+    "has_text": true
+  },
+  {
+    "entity_key": "Q51520",
+    "entity_id": 4788,
+    "label": "The Passion of Joan of Arc",
+    "scope": "currently_missing_image_in_test_graph",
+    "train_degree": 5,
+    "has_text": true
+  },
+  {
+    "entity_key": "Q940054",
+    "entity_id": 5129,
+    "label": "The Sin of Madelon Claudet",
+    "scope": "currently_missing_image_in_test_graph",
+    "train_degree": 6,
+    "has_text": true
+  },
+  {
+    "entity_key": "Q9168",
+    "entity_id": 5183,
+    "label": "Persian",
+    "scope": "currently_missing_image_in_test_graph",
+    "train_degree": 10,
+    "has_text": true
+  },
+  {
+    "entity_key": "Q3978441",
+    "entity_id": 6417,
+    "label": "Wake Up and Die",
+    "scope": "currently_missing_image_in_test_graph",
+    "train_degree": 6,
+    "has_text": true
+  },
+  {
+    "entity_key": "Q21646858",
+    "entity_id": 6568,
+    "label": "Q21646858",
+    "scope": "currently_missing_image_in_test_graph",
+    "train_degree": 1,
+    "has_text": false
+  },
+  {
+    "entity_key": "Q7858846",
+    "entity_id": 8579,
+    "label": "Two Blondes",
+    "scope": "currently_missing_image_in_test_graph",
+    "train_degree": 3,
+    "has_text": true
+  },
+  {
+    "entity_key": "Q3989320",
+    "entity_id": 9339,
+    "label": "The Six Wives of Henry Lefay",
+    "scope": "currently_missing_image_in_test_graph",
+    "train_degree": 4,
+    "has_text": true
+  },
+  {
+    "entity_key": "Q4075091",
+    "entity_id": 10037,
+    "label": "Alexander Bazhbeuk-Melikyan",
+    "scope": "currently_missing_image_in_test_graph",
+    "train_degree": 3,
+    "has_text": true
+  },
+  {
+    "entity_key": "Q1611073",
+    "entity_id": 10983,
+    "label": "E.G. Records",
+    "scope": "currently_missing_image_in_test_graph",
+    "train_degree": 1,
+    "has_text": true
+  },
+  {
+    "entity_key": "Q1051067",
+    "entity_id": 11875,
+    "label": "pre-dreadnought battleship",
+    "scope": "currently_missing_image_in_test_graph",
+    "train_degree": 2,
+    "has_text": true
+  },
+  {
+    "entity_key": "Q3845638",
+    "entity_id": 12915,
+    "label": "Marcello Mastroianni: I Remember",
+    "scope": "currently_missing_image_in_test_graph",
+    "train_degree": 3,
+    "has_text": true
+  },
+  {
+    "entity_key": "Q2626472",
+    "entity_id": 13566,
+    "label": "The Masks",
+    "scope": "currently_missing_image_in_test_graph",
+    "train_degree": 2,
+    "has_text": true
+  },
+  {
+    "entity_key": "Q3334292",
+    "entity_id": 14195,
+    "label": "HMCS Glace Bay",
+    "scope": "currently_missing_image_in_test_graph",
+    "train_degree": 1,
+    "has_text": true
+  }
+]

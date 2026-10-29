@@ -1,23 +1,29 @@
 # TAOR / MMKGC
 
-当前 MMKGC 五阶段多模态知识图谱补全代码。Stage 0、Stage 1 知识建模及
-Stage 3 文本／图像提示词生成默认采用本地 Qwen2-VL-7B-Instruct，
-Stage 2 关系精选与 Stage 4 GPT 评分继续采用 GPT-4o-mini。
+当前 MMKGC 五阶段多模态知识图谱补全代码。Stage 0、Stage 1 知识建模、Stage 2
+关系精选及 Stage 3 文本／图像提示词生成默认采用本地 Qwen2-VL-7B-Instruct，
+Stage 4 的 GPT 评分采用 GPT-4o-mini。
 
 | 阶段 | 职责 |
 | --- | --- |
 | Stage 0 | Qwen2-VL-7B-Instruct 进行关系语义粗筛 |
 | Stage 1 | Qwen2-VL-7B-Instruct 构建知识模型，Qwen3-Reranker-4B 匹配证据 |
-| Stage 2 | GPT-4o-mini 选择事实角色、证据引用和候选配额 |
+| Stage 2 | Qwen2-VL-7B-Instruct 选择事实角色、证据引用和候选配额 |
 | Stage 3 | Qwen2-VL-7B-Instruct 生成文本或图像提示词，SDXL 生成候选图像 |
 | Stage 4 | GPT-4o-mini、CLIP、BLIP 等评分器进行候选排序 |
 
 Stage 2 按事实约束证据引用，保留每个事实的角色记录，并由模型单独选择固定数量
 的候选锚点。程序统计锚点出现次数得到配额，辅助事实允许零配额。
 一次反馈全部可检测的契约错误，最多请求模型修正两轮，对重复的无效响应提前停止。
+千问遇到孤立的漏写事实、候选槽位或支持引用错误时，只请求模型补答对应字段，
+小响应按实际事实或槽位键约束；保留其他合法决策，合并后再次执行完整校验。
 
 Stage 1 对漏写、重复或未知事实 ID 等契约错误同样提供具体修正反馈：列出完整
 ID 集合及其原始三元组，最多额外修正两次。程序保留完整性校验，不补写模型 claim。
+
+Stage 2 每轮模型调用对超时、断连等瞬时故障默认重试一次，与业务修正分别计数，阶段总时限为 300 秒。
+仅支持引用出错时，修正 Schema 按已确定角色限制合法支持 ID，修正请求不携带错误响应原文。
+本地千问 Stage 3 遇到重复或截断时使用短请求、JSON 约束及有界重生成。
 
 Stage 4 的 GPT 请求支持候选间并发，配置为 `max_concurrency: 10`。每实体
 5 张候选图时实际最多并发 5 个评分请求，实体之间仍按顺序处理。
@@ -45,7 +51,7 @@ cp .env.example .env
 
 ```text
 datasets/MKG-W/                         # entity2id.txt、relation2id.txt、train.txt 等
-Qwen/Qwen2-VL-7B-Instruct/              # Stage 0 / 1 / 3 本地语言模型服务
+Qwen/Qwen2-VL-7B-Instruct/              # Stage 0 / 1 / 2 / 3 本地语言模型服务
 Qwen3-Reranker-4B/                      # Stage 1 证据匹配
 SDXL/stable-diffusion-xl-base-1.0/       # 图像生成
 CLIP/                                  # 本地 CLIP 权重
@@ -56,9 +62,14 @@ models/bertscore/roberta-large/         # 可选 BERTScore
 
 `configs/stage4-model-fusion.yaml` 配置评分器及设备；
 `configs/qwen7b-mainline.yaml` 配置 Stage 0 / 3，`configs/qwen7b-stage1.yaml`
-配置 Stage 1 知识建模；默认连接本机 12345 端口的千问服务。
-`configs/openai-gpt4o-mini-judge.yaml` 配置 Stage 2 及 GPT 评分器。
+配置 Stage 1 知识建模，`configs/qwen7b-stage2.yaml` 配置 Stage 2；
+三者默认连接本机 12345 端口的千问服务。
+`configs/openai-gpt4o-mini-judge.yaml` 配置 Stage 4 GPT 评分器。
 `configs/gpt4omini-mainline.yaml` 保留为显式指定的 GPT 对照配置。
+需要对照时可传 `--stage2-model-config configs/openai-gpt4o-mini-judge.yaml`；
+4 / 10 / 50 实体脚本也支持 `STAGE2_MODEL_CONFIG` 覆盖。
+Stage 2 千问通过普通生成接口输出 JSON，提示词列出完整输出模板；
+本地继续执行同样的事实完整性、证据、角色、候选槽位校验及有界修正。
 
 ## 运行
 
@@ -95,6 +106,9 @@ CUDA_VISIBLE_DEVICES=1 python -m mmkgc.run \
 ```bash
 python -m pip install -r requirements-dev.txt
 PYTHONDONTWRITEBYTECODE=1 python -m pytest -q \
+  tests/test_stage2_qwen_targeted_repair.py \
+  tests/test_stage2_qwen.py \
+  tests/test_failed8_recovery.py \
   tests/test_stage1_contract_repair.py \
   tests/test_qwen7b_original_prompts.py \
   tests/test_stage3_concurrency.py \
@@ -106,8 +120,12 @@ PYTHONDONTWRITEBYTECODE=1 python -m pytest -q \
   tests/test_stage03_semantic.py tests/test_qwen_adapter.py tests/test_stage3_feedback.py
 ```
 
-上述相关离线测试在 2026-10-27 的本地环境通过。仓库还保留较早接口的测试及
+上述 336 项相关离线测试于 2026-10-28 在本地通过。仓库还保留较早接口的测试及
 历史设计文档，部分旧测试尚未适配当前五阶段主流程；该记录不代表整个测试集均通过。
+
+Stage 2 千问加入定向修正后，7 个实体重新规划全部通过；先前版本为 4/7。
+该验证未运行其余四阶段，也未重跑全部 50 个实体。
+结果和限制见 [Stage 2 定向修正验证](docs/evaluation/2026-10-28-stage2-qwen-targeted-repair.zh.md)。
 
 ## 文档
 
@@ -116,6 +134,9 @@ PYTHONDONTWRITEBYTECODE=1 python -m pytest -q \
 - [GPT 对照提示词 v2](docs/gpt4omini-prompts-v2.zh.md)
 - [Stage 2 契约与修正反馈](docs/evaluation/2026-10-27-stage2-contract-v2.zh.md)
 - [Stage 1 事实 ID 完整性修正](docs/evaluation/2026-10-27-stage1-fact-id-repair.zh.md)
+- [8 个失败实体的网络与生成恢复优化](docs/evaluation/2026-10-28-failed8-recovery.zh.md)
+- [Stage 2 切换千问 7B](docs/evaluation/2026-10-28-stage2-qwen7b.zh.md)
+- [千问 Stage 2 定向修正](docs/evaluation/2026-10-28-stage2-qwen-targeted-repair.zh.md)
 - [五阶段设计](docs/five-stage-pipeline-current-design.zh.md)
 
 本仓库保存当前工作代码快照；本地实验日志、运行产物和第三方模型资源单独管理。
