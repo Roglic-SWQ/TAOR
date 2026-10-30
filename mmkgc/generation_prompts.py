@@ -120,5 +120,9 @@ def build_generation_prompt(kind: str, payload: dict[str, Any]) -> str:
     repair_rules = (
         "If regeneration_feedback is present, apply its repair_actions as editing requirements "
         "while preserving supported identity and evidence. Feedback is not an additional fact source.\n"
+        "Apply operations only to this candidate's previous_content or previous_prompt. Replace explicit "
+        "conflicts, add supported required omissions, remove the specified unsupported assertions, "
+        "and preserve correct content. Unverifiable and uncertain facts are not missing visual details. "
+        "Return final revised content, not editing instructions.\n"
     )
     return rules + repair_rules + "INPUT_JSON:\n" + json.dumps(payload, ensure_ascii=False)

@@ -57,10 +57,10 @@ class Response:
 
 
 @pytest.mark.parametrize("mode", ["text", "image"])
-@pytest.mark.parametrize("workers", [1, 2, 5])
+@pytest.mark.parametrize("workers,budget", [(1, 5), (2, 5), (3, 3), (5, 5)])
 @pytest.mark.parametrize("safe_retry", [False, True])
-def test_bounded_stage3_requests_keep_candidates_logs_and_gpu_on_caller(monkeypatch, mode, workers, safe_retry):
-    record, knowledge, selection, reasoning = fixture(mode)
+def test_bounded_stage3_requests_keep_candidates_logs_and_gpu_on_caller(monkeypatch, mode, workers, budget, safe_retry):
+    record, knowledge, selection, reasoning = fixture(mode, budget=budget)
     original = deepcopy((knowledge, selection, reasoning))
     config = QwenConfig("gpt-4o-mini", "http://localhost/v1", "test-key", stage3_max_concurrency=workers)
     text, image = QwenLocalTextGenerator(config), QwenLocalImagePromptGenerator(config)
@@ -91,7 +91,7 @@ def test_bounded_stage3_requests_keep_candidates_logs_and_gpu_on_caller(monkeypa
     class ImageGenerator:
         def generate(self, entity_key, candidate_id, positive_prompt, negative_prompt):
             assert threading.get_ident() == main_thread
-            assert len(finished) == 5
+            assert len(finished) == budget
             gpu_calls.append(candidate_id)
             return GeneratedImageArtifact(
                 entity_key=entity_key, candidate_id=candidate_id,
@@ -104,12 +104,12 @@ def test_bounded_stage3_requests_keep_candidates_logs_and_gpu_on_caller(monkeypa
     monkeypatch.setattr("mmkgc.adapters.qwen.request.urlopen", request)
     args = (record, mode, knowledge, reasoning, selection, text, image, ImageGenerator())
     if safe_retry:
-        result = safer_relation_alternation_generation(*args, candidate_budget=5, failed_ranking={},
+        result = safer_relation_alternation_generation(*args, candidate_budget=budget, failed_ranking={},
             stage3_feedback={"repair_actions": ["remove unsupported details"], "preserve": ["entity identity"]})
     else:
-        result = relation_alternation_generation(*args, candidate_budget=5)
+        result = relation_alternation_generation(*args, candidate_budget=budget)
     candidates = result["relation_alternation_generation"][f"{mode}_candidates"]
-    ids = [f"{mode}_{'safe_' if safe_retry else ''}{index:03d}" for index in range(1, 6)]
+    ids = [f"{mode}_{'safe_' if safe_retry else ''}{index:03d}" for index in range(1, budget + 1)]
     assert [candidate["candidate_id"] for candidate in candidates] == ids
     assert peak == workers
     calls = [call for call in result["model_calls"] if call.get("modality") != "image"]

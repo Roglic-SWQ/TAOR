@@ -35,7 +35,7 @@ y_m* = argmax_y Consistency(y | x_e, G_e)
 | Think | Stage 0–2 | 哪些证据可靠，哪些关系值得驱动生成？ | 知识模型、事实可信度、关系计划 |
 | Act | Stage 3 | 如何把关系计划转化为生成行为？ | prompt、文本候选或图像候选 |
 | Observe | Stage 4 | 候选是否符合实体、事实和关系约束？ | 质量分数、违反项、覆盖信号 |
-| Reflect | 反馈到 Stage 3，必要时反馈到 Stage 2 | 如何修复违反和遗漏？ | 结构化修正反馈、重新生成结果 |
+| Reflect | 反馈到 Stage 3 | 如何修复违反和遗漏？ | 按候选和事实绑定的修正操作、重新生成结果 |
 
 整体过程可以表示为：
 
@@ -208,7 +208,7 @@ F1 = 2 · Precision · Recall / (Precision + Recall)
 
 在论文表述中，观察模块不应只报告一个总分，还应将低 Recall 解释为潜在遗漏，将低 Precision 解释为潜在无依据内容。
 
-当前工程实现已经保留候选关系覆盖、结构化 KG 对齐、hard/soft violation 和 Judge evidence 等诊断字段，这些字段共同构成 Observe 的输出。
+当前工程实现除保留候选关系覆盖、文本结构化 KG 对齐、hard/soft violation 和 Judge evidence 外，还按候选自己的 `verification_targets` 输出逐项 `fact_checks`，区分 supported、contradicted、missing、unverifiable 和 uncertain，并单独记录 unsupported_claims。图片由现有视觉 Judge 查看实际像素，当前主链路没有启用视觉关系图对齐。字段和实现边界见 [事实观察与定向修复](fact-observation-reflection.zh.md)。
 
 ## 6. Reflect：约束保持的反馈与安全重生成
 
@@ -243,7 +243,7 @@ P' = UpdatePrompt(P, Δ)
 }
 ```
 
-本文采用有限反思策略。若候选没有有效结果，或观察结果包含可由生成器修复的严重违反项，系统构造 safer regeneration feedback 并重新生成一次候选；否则直接保留当前排序结果。
+本文采用有限反思策略。当前最佳候选存在高置信的明确冲突、无依据断言，或可直接验证的必需事实遗漏时，系统根据原内容及具体事实条目执行一次定向修复；没有合格候选时选择一个存在可修复观察的候选。推荐事实遗漏、无法验证或不确定不单独触发修复。程序保留原结果和修复后的观察，实际问题得到解决且没有新增事实退化时才允许修复版本参与最终选择；生成或评估异常时保留原结果。当前没有反馈至 Stage 2 的重新规划分支。
 
 这种设计保证反思过程可审计、成本可控，也避免生成系统陷入无界循环。
 
@@ -281,7 +281,7 @@ Input: entity e, local KG G_e, existing modality x_e, target modality m
 | Think | Stage 0–2 | coarse filtering、knowledge modeling、credibility/constraint compilation、relation selection |
 | Act | Stage 3 | 关系条件化候选生成；图像路径为 Qwen prompt planner + SDXL |
 | Observe | Stage 4 | hard gate、文本结构化 KG 对齐、CLIP/BLIP、Visual Judge、KG-aware Judge |
-| Reflect | Stage 3 feedback | 当前为一次 safer regeneration；反馈来自 Stage 4 的可修复 violations |
+| Reflect | Stage 3 feedback | 一次按候选和事实绑定的定向修复；反馈包含原内容、具体操作及来源证据 |
 
 ## 9. 方法边界与论文表述建议
 

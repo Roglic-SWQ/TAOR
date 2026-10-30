@@ -50,7 +50,7 @@ class Qwen3EvidenceReranker:
         from packaging.version import Version
 
         if Version(version("transformers")) < Version("4.51.0"):
-            raise RuntimeError("Qwen3-Reranker requires transformers>=4.51.0; use requirements-stage1-reranker.txt in the pipeline environment")
+            raise RuntimeError("Qwen3-Reranker requires transformers>=4.51.0; use requirements.txt in the pipeline environment")
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
 

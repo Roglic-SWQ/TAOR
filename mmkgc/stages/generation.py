@@ -5,10 +5,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
+import json
 from typing import Any
 
 from mmkgc.adapters import GeneratedImageArtifact, ImageGenerator, ImagePromptGenerator, TextGenerator
 from mmkgc.generation_prompts import PROMPT_VERSION, QWEN_PROMPT_VERSION
+from mmkgc.observation import REPAIR_CONFIDENCE, observation_priority, repair_operations
 
 
 STAGE_OWNED_METADATA_KEYS = {
@@ -447,6 +449,7 @@ def _model_generation_context(
         "candidate_visual_cues": deepcopy(visual.get("visual_scene_cues", [])),
         "regeneration_feedback": {key: deepcopy(feedback[key]) for key in (
             "repair_actions", "preserve", "hard_violations", "soft_violations",
+            "operations", "observation", "previous_content", "previous_prompt", "source_candidate_id",
         ) if key in feedback},
     }
 
@@ -568,6 +571,7 @@ def _candidate_base(
         ))
     return {
         "candidate_id": candidate_id,
+        "verification_targets": deepcopy(item.get("verification_targets", [])),
         "target_modality": modality,
         "primary_relation": relation,
         "source_plan_id": item.get("plan_id"),
@@ -647,6 +651,9 @@ def _generate_modality_candidates(
     model_calls = []
     image_artifacts = []
     safe_variant = bool(regeneration_feedback)
+    repair_by_id = {
+        item["candidate_id"]: item for item in (regeneration_feedback or {}).get("candidate_feedback", [])
+    }
     generator = text_generator if modality == "text" else image_prompt_generator
     original_qwen_prompts = getattr(generator, "prompt_version", None) == QWEN_PROMPT_VERSION
     workers = getattr(generator, "max_concurrency", 1)
@@ -655,6 +662,8 @@ def _generate_modality_candidates(
 
     def prepare(entry):
         index, relation_item = entry
+        source_candidate_id = f"{modality}_{index + 1:03d}"
+        feedback = repair_by_id.get(source_candidate_id, regeneration_feedback)
         candidate_calls = []
         angle_specs = _generation_angle_specs(modality, relation_item, knowledge)
         angle_spec = angle_specs[index % len(angle_specs)]
@@ -664,8 +673,8 @@ def _generate_modality_candidates(
         if safe_variant:
             diversity_axis = f"safer regeneration of {diversity_axis}"
         facts = _facts_for_relation(relation_item, knowledge, reasoning, modality)
-        if original_qwen_prompts and regeneration_feedback:
-            facts = _feedback_facts(regeneration_feedback) + facts
+        if original_qwen_prompts and feedback and not feedback.get("operations"):
+            facts = _feedback_facts(feedback) + facts
         brief = _generation_brief(
             modality,
             relation_item,
@@ -693,6 +702,7 @@ def _generate_modality_candidates(
         base["generation_context"] = generation_context
         base["generation_brief"] = brief
         if regeneration_feedback:
+            base["source_candidate_id"] = source_candidate_id
             if not base["expected_relation_coverage"]:
                 base["expected_relation_coverage"] = ["global_profile"]
                 base["expected_relation_coverage_detail"] = {
@@ -702,21 +712,21 @@ def _generate_modality_candidates(
             base["metadata"].update(_regeneration_candidate_metadata(regeneration_feedback))
         relation = str(relation_item.get("relation", "global_profile"))
         structured_generate = getattr(generator, "generate_with_context", None)
-        if not getattr(generator, "uses_structured_prompts", True):
+        if not getattr(generator, "uses_structured_prompts", True) and not (feedback or {}).get("operations"):
             structured_generate = None
         if getattr(generator, "prompt_version", None):
             base["metadata"]["prompt_version"] = generator.prompt_version
         model_context = _model_generation_context(
-            knowledge, relation_item, reasoning, modality, angle, diversity_axis, regeneration_feedback,
+            knowledge, relation_item, reasoning, modality, angle, diversity_axis, feedback,
         ) if callable(structured_generate) else {}
         legacy_facts = (
-            _feedback_facts(regeneration_feedback) + facts
-            if regeneration_feedback and not original_qwen_prompts else facts
+            _feedback_facts(feedback) + facts
+            if feedback and not original_qwen_prompts else facts
         )
         if modality == "text":
             if callable(structured_generate):
                 generated = structured_generate(record_label, entity_type, relation, angle, facts, context=model_context)
-                base["metadata"]["prompt_version"] = PROMPT_VERSION
+                base["metadata"]["prompt_version"] = getattr(generator, "prompt_version", PROMPT_VERSION)
             else:
                 generated = text_generator.generate(
                     record_label, entity_type, relation, angle, [_brief_instruction(brief), *legacy_facts]
@@ -734,7 +744,7 @@ def _generate_modality_candidates(
         else:
             if callable(structured_generate):
                 prompt = structured_generate(record_label, entity_type, relation, angle, facts, context=model_context)
-                base["metadata"]["prompt_version"] = PROMPT_VERSION
+                base["metadata"]["prompt_version"] = getattr(generator, "prompt_version", PROMPT_VERSION)
             else:
                 prompt = image_prompt_generator.generate(
                     record_label, entity_type, relation, angle, [_brief_instruction(brief), *legacy_facts]
@@ -774,13 +784,16 @@ def _generate_modality_candidates(
             setattr(exc, "candidate_id", candidate_id)
             raise
 
-    if workers > 1 and len(sequence) > 1:
+    entries = list(enumerate(sequence))
+    if regeneration_feedback and regeneration_feedback.get("schema_version") == "candidate_fact_repair_v1":
+        entries = [(index, item) for index, item in entries if f"{modality}_{index + 1:03d}" in repair_by_id]
+    if workers > 1 and len(entries) > 1:
         with ThreadPoolExecutor(
             max_workers=min(workers, len(sequence)), thread_name_prefix="mmkgc-stage3",
         ) as executor:
-            prepared = list(executor.map(prepare_with_audit, enumerate(sequence)))
+            prepared = list(executor.map(prepare_with_audit, entries))
     else:
-        prepared = [prepare_with_audit(entry) for entry in enumerate(sequence)]
+        prepared = [prepare_with_audit(entry) for entry in entries]
 
     # Merge in candidate order and keep the shared local GPU pipeline on the caller thread.
     for base, candidate_calls in prepared:
@@ -967,7 +980,16 @@ def build_stage3_feedback(
     failed_ranking: Mapping[str, Any],
     *,
     attempt: int,
+    generation: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if any(
+        item.get("observation") is not None
+        for section in ("text_ranking", "image_ranking")
+        for item in failed_ranking.get(section, {}).get(
+            "ranked_candidates", failed_ranking.get(section, {}).get("rejected_candidates", []),
+        )
+    ):
+        return _fact_stage3_feedback(failed_ranking, attempt, generation or {})
     candidate_feedback: list[dict[str, Any]] = []
     hard: list[str] = []
     soft: list[str] = []
@@ -1030,6 +1052,54 @@ def build_stage3_feedback(
     }
 
 
+def _fact_stage3_feedback(ranking: Mapping[str, Any], attempt: int, generation: Mapping[str, Any]) -> dict[str, Any]:
+    """Repair only the best available candidate, with its own evidence and original prompt."""
+    tasks = []
+    originals = {
+        item["candidate_id"]: item for modality in ("text", "image")
+        for item in generation.get(f"{modality}_candidates", [])
+    }
+    for modality in ("text", "image"):
+        section = ranking.get(f"{modality}_ranking", {})
+        items = section.get("ranked_candidates", section.get("rejected_candidates", []))
+        if not items:
+            continue
+        candidate = next((item for item in items if item["candidate_id"] == section.get("best_candidate_id")), None)
+        if candidate is None:
+            repairable = [item for item in items if repair_operations(item.get("observation") or {})]
+            if not repairable:
+                continue
+            candidate = min(repairable, key=lambda item: (observation_priority(item), -float(item.get("final_score", 0))))
+        observation = candidate.get("observation") or {}
+        operations = repair_operations(observation)
+        if not operations:
+            continue
+        candidate_id = candidate["candidate_id"]
+        original = originals.get(candidate_id, candidate)
+        preserve = [item["expected"] for item in observation.get("fact_checks", [])
+                    if item["status"] == "supported" and item["confidence"] >= REPAIR_CONFIDENCE]
+        actions = [
+            (f"remove unsupported content: {item['observed']}" if item["action"] == "remove" else
+             f"{item['action']} the content for {item['check_id']} using supported fact: {item['expected']}")
+            for item in operations
+        ]
+        tasks.append({
+            "candidate_id": candidate_id, "source_candidate_id": candidate_id, "modality": modality,
+            "observation": deepcopy(observation), "operations": operations,
+            "previous_content": deepcopy(original.get("generated_content", {})),
+            "previous_prompt": original.get("positive_prompt") or original.get("prompt_or_instruction", ""),
+            "repair_actions": actions, "preserve": [*_STAGE3_PRESERVE, *preserve],
+            "hard_violations": ["unsupported_claim"] if any(item["action"] == "remove" for item in operations) else [],
+            "soft_violations": ["fact_repair_required"],
+        })
+    return {
+        "schema_version": "candidate_fact_repair_v1", "attempt": max(1, int(attempt)),
+        "target_modality": _feedback_modality(tasks), "candidate_feedback": tasks,
+        "repair_needed": bool(tasks), "repair_actions": [],
+        "hard_violations": [], "soft_violations": [], "preserve": list(_STAGE3_PRESERVE),
+    }
+
+
 def _stage3_repairable_codes(values: Any) -> list[str]:
     if not isinstance(values, (list, tuple, set, frozenset)):
         return []
@@ -1077,6 +1147,10 @@ def _feedback_facts(feedback: Mapping[str, Any]) -> list[str]:
     actions = feedback.get("repair_actions", [])
     if isinstance(actions, (list, tuple)) and actions:
         facts.append("Apply these Stage 3 repair actions: " + "; ".join(str(action) for action in actions))
+    if feedback.get("operations"):
+        facts.append("Candidate-specific repair data (not a source of new facts): " + json.dumps({
+            key: feedback[key] for key in ("operations", "previous_content", "previous_prompt", "preserve") if key in feedback
+        }, ensure_ascii=False))
     return facts
 
 

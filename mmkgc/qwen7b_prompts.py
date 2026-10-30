@@ -229,6 +229,12 @@ def build_image_prompt(
         "text_context_cues": context.get("text_context_cues", []),
         "relation_plan": context.get("relation_plan", {}),
     }
+    if context.get("regeneration_feedback"):
+        payload["regeneration_feedback"] = context["regeneration_feedback"]
+        for key in ("source_facts", "source_evidence", "must_include", "should_include",
+                    "context_only", "identity_context", "supported_visual_details"):
+            if key in context:
+                payload[key] = context[key]
     return (
         "Rewrite an SDXL image prompt for MMKGC Stage 3.\n"
         "Use only low-risk visual scene details supported by the entity text, "
@@ -241,5 +247,9 @@ def build_image_prompt(
         "omitted_risky_details.\n"
         "The positive_prompt should be one concise comma-separated SDXL prompt, "
         "roughly 25-55 words, visually concrete, and not a paragraph.\n"
-        f"Input JSON:\n{json.dumps(payload, ensure_ascii=False)}"
+        + ("Apply the candidate-specific regeneration_feedback operations to the previous_prompt. "
+           "Preserve supported content and use only source-supported replacements. Unverifiable facts "
+           "remain context; do not invent visual symbols for them. Output the revised final prompt, "
+           "not the editing instructions.\n" if context.get("regeneration_feedback") else "")
+        + f"Input JSON:\n{json.dumps(payload, ensure_ascii=False)}"
     )

@@ -14,6 +14,15 @@ inference:
 `qwen7b-stage1.yaml`，以及可选的 `qwen-local.yaml` 均已启用该设置。
 调用日志和候选元数据记录 `qwen7b_original_v1`，便于区分之前的 GPT 实验。
 
+后续修复增加 Stage 1 业务契约错误的有界修正：初次模板保持原样，漏 ID 等错误
+触发独立的结构化反馈请求，标记为 `stage1_complete_fact_repair_v3`。
+初次 JSON 语法修正提示保留；如果仍然无效，剩余预算使用完整源数据重建。
+两种修正共享最多两次额外请求的预算；业务修正不再引用错误响应原文。
+
+2026-10-28 另为本地千问 Stage 3 增加重复／截断恢复：首次请求的原始模板不变，
+修正时使用原始事实和约束构建独立短请求，并启用 lm-format-enforcer JSON 约束。
+这项恢复最多额外请求两次，说明见 `docs/evaluation/2026-10-28-failed8-recovery.zh.md`。
+
 | 位置 | 恢复内容 |
 | --- | --- |
 | Stage 0 | 原始关系粗筛任务说明、system 指令和输入 JSON；恢复紧凑列表最多 3 项的文字要求 |
@@ -25,8 +34,8 @@ Stage 3 同时恢复原来的 generation brief 输入方式、各 brief 列表�
 grounded_facts 取前 8 项，以及程序在 SDXL 正向提示词后附加的 brief 片段。
 Stage 4 反馈触发重生成时，继续使用原来的反馈事实前缀和提示词形式。
 
-这次恢复保留当前的 Stage 1 Qwen3-Reranker-4B、Stage 2 GPT 槽位方案及严格校验、
-Stage 3 并发和线程日志隔离、Stage 4 评分配置。千问 Stage 3 默认并发 1，仍可配置。
+这次恢复保留当前的 Stage 1 Qwen3-Reranker-4B、Stage 2 槽位方案及严格校验、
+Stage 3 并发和线程日志隔离、Stage 4 评分配置。千问 Stage 3 默认并发 3，仍可配置。
 显式使用 `gpt4omini-mainline.yaml` 时继续使用 GPT v2 提示词。
 
 `tests/fixtures/qwen7b_original_prompts.json` 的参考摘要由修改前备份的真实 Python
@@ -35,4 +44,5 @@ Stage 3 并发和线程日志隔离、Stage 4 评分配置。千问 Stage 3 默�
 Stage 3 的初次生成、反馈重生成与最终 SDXL 提示词。另验证新 Stage 2 槽位顺序在
 原始千问提示词并发调用后仍被保留，且候选与日志正确对应。
 
-本次验证不调用外部 API 或启动本地权重推理；实际效果需启动千问服务后复测。
+原始模板恢复的参考摘要验证不调用模型服务。后续 Stage 1 修正另通过本地千问服务
+进行失败响应重放验证，过程与结果见 `docs/evaluation/2026-10-27-stage1-fact-id-repair.zh.md`。

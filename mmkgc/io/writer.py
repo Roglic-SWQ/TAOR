@@ -720,6 +720,8 @@ def _compact_stage3_candidate(item: Any) -> tuple[Any, list[str]]:
     }
     if item.get("source_candidate_id"):
         compact["source_candidate_id"] = item.get("source_candidate_id")
+    if item.get("verification_targets") is not None:
+        compact["verification_targets"] = item["verification_targets"]
     content = _stage3_compact_generated_content(item.get("generated_content"))
     if content:
         if content.get("type") == "text":
@@ -812,6 +814,8 @@ def _compact_stage4_ranking(payload: dict[str, Any]) -> dict[str, Any]:
     pair_ranking = _compact_stage4_pair_ranking(payload.get("pair_ranking"))
     return {
         "ranking_status": payload.get("ranking_status"),
+        "observation_version": payload.get("observation_version"),
+        "stage3_regeneration": payload.get("stage3_regeneration"),
         "target_modalities": _stage4_target_modalities(reference, text_ranking, image_ranking),
         "candidate_budget": reference.get("candidate_num") or payload.get("candidate_budget"),
         "evaluated_text_candidate_count": len(text_ranking["ranked_candidates"]),
@@ -892,6 +896,9 @@ def _compact_stage4_candidate(
     candidate_id = str(item.get("candidate_id") or "")
     compact: dict[str, Any] = {
         "candidate_id": candidate_id,
+        "source_candidate_id": item.get("source_candidate_id"),
+        "verification_targets": item.get("verification_targets"),
+        "observation": item.get("observation"),
         "candidate_ref": f"stage3:{candidate_id}" if candidate_id else None,
         "rank": rank,
         "target_modality": item.get("target_modality") or fallback_modality,

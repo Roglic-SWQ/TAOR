@@ -5,6 +5,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from mmkgc.observation import compile_verification_targets
+
 SELECTION_SOURCE = "stage2_fact_plan"
 
 
@@ -68,6 +70,9 @@ def compile_plan_context(
                 "candidate_quota": item["candidate_quota"],
                 "candidate_quota_by_modality": deepcopy(item["candidate_quota_by_modality"]),
             }
+            item["verification_targets"] = compile_verification_targets(
+                item["generation_context"], knowledge, missing_mode,
+            )
     return result, {
         "schema_version": "plan_generation_context_v1",
         "supported_facts": supported, "safe_inferences": [],

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import math
 import re
@@ -15,6 +15,7 @@ from mmkgc.ranking.context import RankingContext
 from mmkgc.ranking.contracts import GateResult, ScoreResult
 from mmkgc.ranking.image_input import ImageInput
 from mmkgc.utils import clamp01
+from mmkgc.observation import bind_observation, observation_response_schema
 
 
 ALLOWED_HARD_REJECTION_CODES = frozenset(
@@ -70,7 +71,7 @@ JUDGE_RESPONSE_INSTRUCTIONS = (
     "markdown, prose, code fences, or extra keys. The object must match the "
     "response_schema exactly. Required keys are score, confidence, hard_reject, "
     "hard_rejection_codes, soft_violations, evidence, and reason. Include every "
-    "required key even when the value is an empty array. Evidence strings must "
+    "required key, including observation when required by response_schema, even when the value is an empty array. Evidence strings must "
     "cite candidate or context facts, not these instructions. Keep evidence "
     "strings and reason concise. Start the response with { and end it with }."
 )
@@ -88,12 +89,14 @@ class GPT4OMiniJudgeParseError(ValueError):
 class TextJudgeResult:
     score: ScoreResult
     gate: GateResult
+    observation: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
 class ImageJudgeResult:
     score: ScoreResult
     gate: GateResult
+    observation: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -107,6 +110,7 @@ def build_text_judge_prompt(context: RankingContext, candidate: dict[str, Any]) 
         task="text",
         context=context,
         candidate_payload={"text_candidate": _candidate_generated_payload(candidate)},
+        verification_targets=candidate.get("verification_targets"),
     )
 
 
@@ -124,6 +128,7 @@ def build_image_judge_prompt(
             **_attached_image_payload(image_input),
         },
         uses_attached_image=image_input is not None,
+        verification_targets=candidate.get("verification_targets"),
     )
 
 
@@ -370,12 +375,12 @@ def build_pair_judge_prompt(
 
 def parse_text_judge_response(response_text: str, *, model_name: str = "gpt4omini-ranking-judge") -> TextJudgeResult:
     score, gate = _parse_judge_response(response_text, model_name=model_name)
-    return TextJudgeResult(score=score, gate=gate)
+    return TextJudgeResult(score=score, gate=gate, observation=_load_judge_payload(response_text).get("observation"))
 
 
 def parse_image_judge_response(response_text: str, *, model_name: str = "gpt4omini-ranking-judge") -> ImageJudgeResult:
     score, gate = _parse_judge_response(response_text, model_name=model_name)
-    return ImageJudgeResult(score=score, gate=gate)
+    return ImageJudgeResult(score=score, gate=gate, observation=_load_judge_payload(response_text).get("observation"))
 
 
 def parse_pair_judge_response(response_text: str, *, model_name: str = "gpt4omini-ranking-judge") -> PairJudgeResult:
@@ -421,6 +426,7 @@ class GPT4OMiniRankingJudge:
             parse_text_judge_response,
             kind="text",
             candidate_id=str(candidate.get("candidate_id", "")),
+            verification_targets=candidate.get("verification_targets"),
         )
 
     def extract_text_graph(self, candidate: Mapping[str, Any]) -> dict[str, Any]:
@@ -511,6 +517,7 @@ class GPT4OMiniRankingJudge:
             image_input=image_input,
             kind="image",
             candidate_id=str(candidate.get("candidate_id", "")),
+            verification_targets=candidate.get("verification_targets"),
         )
 
     def judge_pair(
@@ -546,7 +553,21 @@ class GPT4OMiniRankingJudge:
         image_input: ImageInput | None = None,
         kind: str,
         candidate_id: str,
+        verification_targets: Any = None,
     ) -> Any:
+        if verification_targets:
+            original_parser = parser
+
+            def parser(response, *, model_name):
+                result = original_parser(response, model_name=model_name)
+                try:
+                    observation = bind_observation(
+                        result.observation, verification_targets, kind, candidate_id,
+                    )
+                except (ValueError, TypeError) as exc:
+                    raise GPT4OMiniJudgeParseError(str(exc)) from exc
+                return replace(result, observation=observation)
+
         response = self._complete_with_retries(
             prompt,
             image_input=image_input,
@@ -565,8 +586,11 @@ class GPT4OMiniRankingJudge:
             if salvaged is not None:
                 return salvaged
             repaired_response = self._complete_with_retries(
-                _build_contract_repair_prompt(response, exc),
-                image_input=None,
+                (prompt + "\n\nThe previous response violated the contract: " + str(exc)
+                 + "\nPrevious response:\n" + _truncate_repair_response(response)
+                 + "\nReturn a corrected judgment, checking every supplied check_id exactly once."
+                 if verification_targets else _build_contract_repair_prompt(response, exc)),
+                image_input=image_input if verification_targets else None,
                 kind=f"{kind}_contract_repair",
                 candidate_id=candidate_id,
             )
@@ -605,7 +629,7 @@ class GPT4OMiniRankingJudge:
                 latency_ms=result.score.latency_ms,
                 details=details,
             )
-            return type(result)(score=score, gate=result.gate)
+            return replace(result, score=score)
 
     def _complete_with_retries(
         self,
@@ -734,7 +758,7 @@ def _try_salvage_partial_response(
         latency_ms=result.score.latency_ms,
         details=details,
     )
-    return type(result)(score=score, gate=result.gate)
+    return replace(result, score=score)
 
 
 def _build_prompt(
@@ -743,6 +767,7 @@ def _build_prompt(
     context: RankingContext,
     candidate_payload: dict[str, Any],
     uses_attached_image: bool = False,
+    verification_targets: Any = None,
 ) -> str:
     payload = {
         "task": f"stage4_{task}_ranking_judge",
@@ -762,6 +787,28 @@ def _build_prompt(
             "reason": "string",
         },
     }
+    if verification_targets:
+        payload["verification_targets"] = verification_targets
+        payload["response_schema"]["observation"] = observation_response_schema()
+        payload["observation_guidance"] = (
+            "Return observation in addition to ALL normal judgment fields. Check exactly the supplied "
+            "candidate-local targets, each check_id once; never add targets or borrow another candidate's "
+            "requirements. The expected claims are requirements, not observations. Assess subject, "
+            "relation, object, direction and negation. supported means expressed with actual content "
+            "evidence; contradicted requires an explicit conflict, not mere absence; missing requires "
+            "an expressible, directly verifiable target and enough content visibility to establish absence. "
+            "Use uncertain when evidence is ambiguous, cropped, occluded or too weak. For images first "
+            "decide whether the FULL fact is verifiable from pixels. Authorship, credits, dates, birthplace, "
+            "administrative relations and named identity usually cannot be verified from appearance. "
+            "Return unverifiable for invisible facts, never missing; appearance_only may describe matching "
+            "visible cues but cannot support, contradict or establish absence of the full KG fact. "
+            "Do not invent portraits, logos, readable text or settings to visualize non-visual relations. "
+            "A fixed unverifiable target must stay unverifiable. Evidence must describe actual pixels "
+            "with pixel: or quote actual text with text:. Missing text may cite absence explicitly. "
+            "unsupported_claims lists concrete assertions unsupported by ANY supplied evidence, not "
+            "ordinary rendering choices; absence from KG alone does not mean false. Give confidence "
+            "per check. A should_include omission can lower quality without requiring regeneration."
+        )
     return (
         JUDGE_RESPONSE_INSTRUCTIONS
         + "\n\nInput JSON:\n"
@@ -936,9 +983,11 @@ def _parse_judge_response(response_text: str, *, model_name: str) -> tuple[Score
     missing = sorted(REQUIRED_RESPONSE_FIELDS - payload.keys())
     if missing:
         raise GPT4OMiniJudgeParseError(f"missing required field: {missing[0]}")
-    extra = sorted(payload.keys() - REQUIRED_RESPONSE_FIELDS)
+    extra = sorted(payload.keys() - REQUIRED_RESPONSE_FIELDS - {"observation"})
     if extra:
         raise GPT4OMiniJudgeParseError(f"unexpected field: {extra[0]}")
+    if "observation" in payload and not isinstance(payload["observation"], Mapping):
+        raise GPT4OMiniJudgeParseError("observation must be an object")
 
     score = _finite_number("score", payload["score"])
     if not 0.0 <= score <= 100.0:

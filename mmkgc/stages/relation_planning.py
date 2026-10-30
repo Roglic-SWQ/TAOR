@@ -125,6 +125,8 @@ def selection_prompt(
         "supporting_fact_ids links candidate anchors to relevant secondary facts; "
         "every referenced fact must have role secondary in this same response. "
         "Never reference a primary, context or excluded fact, even if relevant; "
+        "For example, if A is primary and B is secondary, A may list B as support; "
+        "B must NOT list A as support. These are directed links, not a list of related facts. "
         "use an empty list when no secondary fact is needed. Do not link an "
         "anchor to itself. Context/excluded have no support links or candidate "
         "slots. With status ready, at least one primary is required, every primary "
@@ -175,6 +177,88 @@ class RelationPlanValidationError(ValueError):
     def __init__(self, errors: list[dict[str, Any]]) -> None:
         self.errors = errors
         super().__init__("; ".join(f"{item['path'] or '/'}: {item['message']}" for item in errors))
+
+
+def support_repair_constraints(response: Any, errors: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Freeze valid decisions only when support links are the sole invalid fields."""
+    if not errors or any(error['code'] != 'invalid_support_target' for error in errors):
+        return None
+    plan = response['plan']
+    return {'status': plan['status'], 'roles': {p['fact_id']: p['role'] for p in plan['relation_plans']},
+            'candidate_anchors': list(plan['candidate_anchors'])}
+
+
+def support_repair_errors(response: Any, frozen: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not frozen or not isinstance(response, dict) or not isinstance(response.get('plan'), dict):
+        return []
+    plan = response['plan']
+    errors = []
+    if plan.get('status') != frozen['status']:
+        errors.append({'code': 'repair_changed_status', 'path': '/plan/status',
+                       'message': 'Support-only repair must preserve the previously valid status', 'expected': frozen['status']})
+    if plan.get('candidate_anchors') != frozen['candidate_anchors']:
+        errors.append({'code': 'repair_changed_anchors', 'path': '/plan/candidate_anchors',
+                       'message': 'Support-only repair must preserve candidate slot order and counts', 'expected': frozen['candidate_anchors']})
+    for index, item in enumerate(plan.get('relation_plans', []) if isinstance(plan.get('relation_plans'), list) else []):
+        if (isinstance(item, dict) and isinstance(item.get('fact_id'), str)
+                and item['fact_id'] in frozen['roles'] and item.get('role') != frozen['roles'][item['fact_id']]):
+            errors.append({'code': 'repair_changed_role', 'path': f'/plan/relation_plans/{index}/role',
+                           'message': 'Support-only repair must preserve previously valid roles',
+                           'expected': frozen['roles'][item['fact_id']]})
+    return errors
+
+
+def candidate_slot_repair_request(
+    knowledge: dict[str, Any], candidate_budget: int, response: Any,
+    errors: list[dict[str, Any]], frozen: dict[str, Any] | None,
+) -> tuple[str, dict[str, Any]]:
+    """Build a source-based repair; invalid response text is never reintroduced."""
+    schema = candidate_slot_response_schema(knowledge, candidate_budget)
+    facts = knowledge['relation_facts']
+    roles = frozen['roles'] if frozen else {}
+    allowed = {f['fact_id']: [fid for fid, role in roles.items() if role == 'secondary' and fid != f['fact_id']]
+               if roles.get(f['fact_id']) in {'primary', 'secondary'} else [] for f in facts}
+    template = {'plan': {'status': frozen['status'] if frozen else '', 'relation_plans': [],
+                         'candidate_anchors': list(frozen['candidate_anchors']) if frozen else []}}
+    old_plans = response.get('plan', {}).get('relation_plans', []) if isinstance(response, dict) and isinstance(response.get('plan'), dict) else []
+    old = {p['fact_id']: p for p in old_plans if isinstance(p, dict) and isinstance(p.get('fact_id'), str)} if isinstance(old_plans, list) else {}
+    for fact in facts:
+        fid = fact['fact_id']
+        previous = old.get(fid, {})
+        template['plan']['relation_plans'].append({
+            'fact_id': fid, 'role': roles.get(fid, ''),
+            'evidence_refs': list(previous.get('evidence_refs', [])) if frozen else [],
+            'supporting_fact_ids': [], 'reason': previous.get('reason', '') if frozen else '',
+        })
+    if frozen:
+        schema['properties']['plan']['anyOf'] = [branch for branch in schema['properties']['plan']['anyOf']
+            if branch['properties']['status']['enum'] == [frozen['status']]]
+        for item in schema['$defs']['ready_relation_plans']['items'].get('anyOf', []):
+            fid = item['properties']['fact_id']['enum'][0]
+            item['properties']['role']['enum'] = [roles[fid]]
+            item['properties']['supporting_fact_ids'] = {
+                'type': 'array', 'maxItems': len(allowed[fid]),
+                'items': {'type': 'string', **({'enum': allowed[fid]} if allowed[fid] else {})},
+            }
+    feedback = {'candidate_budget': candidate_budget, 'validation_errors': errors,
+                'expected_fact_ids': [f['fact_id'] for f in facts], 'response_template': template,
+                'frozen_decisions': frozen, 'allowed_supporting_fact_ids': allowed if frozen else None}
+    prompt = (
+        'Rebuild a complete Stage 2 plan from the ORIGINAL input and ALL validator errors. '
+        'Return a complete replacement JSON object, not a patch. The previous invalid response '
+        'is intentionally omitted. Keep every fact_id once and cite only its own evidence. '
+        'supporting_fact_ids points FROM a candidate anchor TO secondary supporting facts. '
+        'If A is primary and B is secondary, A may cite B; B must not cite A. Use [] when '
+        'no eligible support is needed; relevance does not override role eligibility. '
+        'When frozen_decisions is present, preserve its status, every role and the exact '
+        'candidate_anchors sequence. Choose each support list from the corresponding allowed IDs. '
+        'Empty support lists in the template are placeholders for YOUR decision, not automatic repairs. '
+        'Otherwise decide all roles and exactly candidate_budget anchors for ready, or only '
+        'context/excluded roles and no anchors for insufficient_evidence. Never return candidate_quota. '
+        'Fill every empty role/reason placeholder with an evidence-grounded decision. '
+        'Return JSON only.\nVALIDATION_ERRORS_JSON:\n' + json.dumps(feedback, ensure_ascii=False, separators=(',', ':'))
+    )
+    return prompt, schema
 
 
 def apply_candidate_slot_plans(

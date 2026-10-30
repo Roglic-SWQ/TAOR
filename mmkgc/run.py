@@ -65,7 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--stage1-reranker-max-length", type=int, default=8192)
     parser.add_argument("--stage1-model-config", default="configs/qwen7b-stage1.yaml")
-    parser.add_argument("--stage2-model-config", default="configs/openai-gpt4o-mini-judge.yaml")
+    parser.add_argument("--stage2-model-config", default="configs/qwen7b-stage2.yaml")
     parser.add_argument("--output-root", default="outputs")
     parser.add_argument("--run-name", default=None)
     parser.add_argument("--model-config", default="configs/qwen7b-mainline.yaml")
@@ -160,6 +160,8 @@ def main(argv: list[str] | None = None) -> int:
     profile = getattr(getattr(pipeline, "ranking_engine", None), "profile", None)
     stage4_profile_name = getattr(profile, "profile_name", None)
     stage4_score_version = "stage4_structured_graph_v3"
+    relation_planner = getattr(pipeline, "relation_planner", None)
+    stage2_model_config = getattr(relation_planner, "config", None)
 
     config: dict[str, Any] = {
         "dataset_dir": args.dataset_dir,
@@ -181,7 +183,9 @@ def main(argv: list[str] | None = None) -> int:
         "run_name": run_name,
         "text_generator": "openai-compatible",
         "image_prompt_generator": "openai-compatible",
-        "stage2_planner": "gpt4omini-global-relation-planner",
+        "stage2_planner": getattr(relation_planner, "planner_name", None),
+        "stage2_model_name": getattr(stage2_model_config, "model_name", None),
+        "stage2_base_url": getattr(stage2_model_config, "base_url", None),
         "stage3_max_concurrency": getattr(
             getattr(pipeline, "text_generator" if args.missing_mode == "text" else "image_prompt_generator", None),
             "max_concurrency", 1,

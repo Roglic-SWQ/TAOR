@@ -10,6 +10,7 @@ from typing import Any
 
 from mmkgc.ranking.contracts import freeze_value
 from mmkgc.ranking.image_input import ImageInput
+from mmkgc.observation import validate_verification_targets
 
 
 CONTEXT_SCHEMA_VERSION = "ranking_context_v1"
@@ -173,6 +174,8 @@ _CONSTRAINT_FIELDS = (
 _CONSTRAINT_BUCKETS = ("must_include", "should_include", "context_only", "avoid")
 _CANDIDATE_FIELDS = (
     "candidate_id",
+    "source_candidate_id",
+    "verification_targets",
     "target_modality",
     "primary_relation",
     "supporting_relations",
@@ -189,6 +192,7 @@ _CANDIDATE_FIELDS = (
 )
 _CANDIDATE_STRING_FIELDS = {
     "candidate_id",
+    "source_candidate_id",
     "target_modality",
     "primary_relation",
     "relation_role",
@@ -711,6 +715,8 @@ def _sanitize_candidate(value: Any, modality: str) -> dict[str, Any]:
         item = value.get(key)
         if key == "target_modality":
             result[key] = modality
+        elif key == "verification_targets" and item is not None:
+            result[key] = validate_verification_targets(item)
         elif key in _CANDIDATE_STRING_FIELDS:
             if (text := _clean_string(item)) is not None:
                 result[key] = text

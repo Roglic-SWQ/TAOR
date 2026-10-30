@@ -1,11 +1,38 @@
-# Install a Torch/torchvision build appropriate for the local CUDA runtime first.
--r requirements-stage1-reranker.txt
-numpy==1.26.4
-Pillow==11.3.0
-PyYAML==6.0.2
+# MMKGC: Linux x86_64, Python 3.11, CUDA 12.1 wheels.
+# Install in the main Conda environment: python -m pip install -r requirements.txt
+--extra-index-url https://download.pytorch.org/whl/cu121
+
+# GPU runtime and local Qwen service. Keep these binary versions together.
+torch==2.5.1+cu121
+torchvision==0.20.1+cu121
+vllm==0.6.4.post1
+xformers==0.0.28.post3
+
+# Main pipeline: Qwen3 reranker, generation and model loading.
+transformers==4.51.3
+tokenizers==0.21.4
+safetensors>=0.4.3
+huggingface-hub==0.36.2
 diffusers==0.31.0
 accelerate==1.1.1
+
+# Text/image scoring.
 sentence-transformers==5.6.0
 bert-score==0.3.13
 openai-clip==1.0.1
+
+# Data, configuration and concurrent HTTP requests.
+numpy==1.26.4
+Pillow==11.3.0
+PyYAML==6.0.2
 packaging>=23
+python-dotenv>=1.0,<2
+httpx>=0.27,<1
+jsonschema==4.26.0
+
+# Offline validation.
+pytest==9.0.3
+
+# Qwen service overlay: create .venv-qwen7b with --system-site-packages, then
+# install transformers==4.46.1 tokenizers==0.20.1 ONLY in that venv.
+# It inherits every other dependency above; full commands are in README_ENV.md.

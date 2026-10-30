@@ -8,4 +8,4 @@ inference:
   max_token: 4096
   image_prompt_max_token: 384
   temperature: 0.0
-  stage3_max_concurrency: 1
+  stage3_max_concurrency: 3

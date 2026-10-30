@@ -258,7 +258,7 @@ class _OpenAICompatibleCompletionClient:
         try:
             import httpx
         except ImportError as exc:
-            raise RuntimeError("Concurrent GPT requests require httpx; install requirements-stage1-reranker.txt") from exc
+            raise RuntimeError("Concurrent GPT requests require httpx; install requirements.txt") from exc
 
         async def fetch():
             try:

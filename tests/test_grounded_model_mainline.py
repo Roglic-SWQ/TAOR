@@ -306,21 +306,23 @@ def test_gpt_http_request_uses_existing_config_and_strict_schema(monkeypatch):
     captured = []
     config = QwenConfig("gpt-4o-mini", "http://localhost:12345/v1", "secret-test-key")
 
-    class Response:
-        def __enter__(self):
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
             return self
 
-        def __exit__(self, *args):
+        async def __aexit__(self, *args):
             return False
 
-        def read(self):
-            return json.dumps({"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(slot_response(decisions(value)))}}]}).encode()
+        async def post(self, url, json, headers):
+            import httpx
+            captured.append(json)
+            payload = {"choices": [{"finish_reason": "stop", "message": {"content": __import__('json').dumps(slot_response(decisions(value)))}}]}
+            return httpx.Response(200, json=payload, request=httpx.Request('POST', url))
 
-    def request(req, **kwargs):
-        captured.append(json.loads(req.data))
-        return Response()
-
-    monkeypatch.setattr("mmkgc.adapters.relation_planner.request.urlopen", request)
+    monkeypatch.setattr("httpx.AsyncClient", Client)
     planner = GPT4oMiniRelationPlanner(config)
     planner.plan(record(), "text", value, 5)
     assert captured[0]["model"] == "gpt-4o-mini"
@@ -358,10 +360,12 @@ def test_gpt_plan_contract_repair_uses_original_input_and_revalidates(monkeypatc
     assert result["fine_grained_relation_selection"]["quota_summary"]["assigned_total"] == 5
     assert len(captured) == 2
     assert captured[1][0][:2] == captured[0][0]
-    assert [message["role"] for message in captured[1][0]] == ["system", "user", "assistant", "user"]
-    assert captured[1][0][2]["content"] == json.dumps(slot_response(invalid))
-    assert "VALIDATION_ERRORS_JSON:" in captured[1][0][3]["content"]
-    assert captured[1][1] == captured[0][1]
+    assert [message["role"] for message in captured[1][0]] == ["system", "user", "user"]
+    assert "VALIDATION_ERRORS_JSON:" in captured[1][0][2]["content"]
+    if problem == 'primary_support':
+        assert captured[1][1] != captured[0][1]
+    else:
+        assert captured[1][1] == captured[0][1]
     assert planner.calls[0]["contract_repair_retries"] == 1
     assert planner.calls[0]["contract_repair_original_response"] == json.dumps(slot_response(invalid))
     assert planner.calls[0]["status"] == "applied"
@@ -388,7 +392,7 @@ def test_gpt_plan_contract_repair_is_bounded_and_does_not_change_invalid_plan(mo
 
 
 def test_gpt_plan_transport_failure_does_not_trigger_contract_repair(monkeypatch):
-    planner = GPT4oMiniRelationPlanner(QwenConfig("gpt-4o-mini", "http://localhost/v1", "test-key"))
+    planner = GPT4oMiniRelationPlanner(QwenConfig("gpt-4o-mini", "http://localhost/v1", "test-key"), retry_backoff_seconds=0)
     calls = []
 
     def complete(*args):
@@ -398,7 +402,8 @@ def test_gpt_plan_transport_failure_does_not_trigger_contract_repair(monkeypatch
     monkeypatch.setattr(planner, "_complete", complete)
     with pytest.raises(TimeoutError):
         planner.plan(record(), "image", knowledge(), 5)
-    assert len(calls) == 1
+    assert len(calls) == 2
+    assert not planner.calls[0]['validation_attempts']
     assert planner.calls[0]["status"] == "failed"
 
 

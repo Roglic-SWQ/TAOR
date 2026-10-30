@@ -14,7 +14,7 @@ STAGE1_RERANKER_MODEL_DIR="${STAGE1_RERANKER_MODEL_DIR:-${PROJECT_ROOT}/Qwen3-Re
 STAGE4_CONFIG="${STAGE4_CONFIG:-${PROJECT_ROOT}/configs/stage4-model-fusion-gpu1-visible.yaml}"
 MODEL_CONFIG="${MODEL_CONFIG:-${PROJECT_ROOT}/configs/qwen7b-mainline.yaml}"
 STAGE1_MODEL_CONFIG="${STAGE1_MODEL_CONFIG:-${PROJECT_ROOT}/configs/qwen7b-stage1.yaml}"
-STAGE2_MODEL_CONFIG="${STAGE2_MODEL_CONFIG:-${PROJECT_ROOT}/configs/openai-gpt4o-mini-judge.yaml}"
+STAGE2_MODEL_CONFIG="${STAGE2_MODEL_CONFIG:-${PROJECT_ROOT}/configs/qwen7b-stage2.yaml}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-${PROJECT_ROOT}/outputs}"
 RUN_NAME="${RUN_NAME:-qwen7b_sdxl_four_$(date +%Y%m%d_%H%M%S)}"
 

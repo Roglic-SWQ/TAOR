@@ -1,3 +1,0 @@
-# Install in .venv-qwen7b, sharing the kb environment's Torch and vLLM packages.
-transformers==4.46.1
-tokenizers==0.20.1

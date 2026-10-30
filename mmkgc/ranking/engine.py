@@ -36,6 +36,7 @@ from mmkgc.ranking.graph_alignment import (
 from mmkgc.ranking.image_input import ImageInput, ImageInputError
 from mmkgc.ranking.profiles import Stage4Profile, required_scorers_for_mode
 from mmkgc.ranking.scorers.gpt4omini_judge import GPT4OMiniJudgeParseError
+from mmkgc.observation import OBSERVATION_VERSION
 
 
 SCORE_VERSION = "stage4_image_fusion_v4_no_visual_graph"
@@ -55,6 +56,7 @@ class ModelFusionRankingEngine:
     ) -> None:
         self.profile = profile
         self.scorers = dict(scorers)
+        self.judge_wait_callback = None
 
     def rank(self, context: RankingContext) -> dict[str, Any]:
         required = sorted(
@@ -105,6 +107,7 @@ class ModelFusionRankingEngine:
             "ranking_status": status,
             "ranker": RANKER_NAME,
             "score_version": SCORE_VERSION,
+            "observation_version": OBSERVATION_VERSION,
             "profile_name": self.profile.profile_name,
             "required_scorers": required,
             "optional_scorers": optional,
@@ -370,6 +373,9 @@ class ModelFusionRankingEngine:
             items[index]["hard_gate"] = _gate_payload(gate)
             items[index]["soft_violations"] = list(gate.soft_violations)
             items[index]["ranking_reason"] = gate.reason
+            observation = getattr(result, "observation", None)
+            if observation is not None:
+                items[index]["observation"] = _plain(observation)
             model_calls.append(
                 _model_call(
                     scorer=JUDGE_OUTPUT_SCORER_NAME,
@@ -381,6 +387,8 @@ class ModelFusionRankingEngine:
                 )
             )
             model_calls[-1]["latency_ms"] = latency_ms
+            if observation is not None:
+                model_calls[-1]["observation"] = _plain(observation)
 
     def _judge_candidate_outcomes(
         self,
@@ -390,6 +398,9 @@ class ModelFusionRankingEngine:
         survivors: list[tuple[int, dict[str, Any]]],
     ):
         """Run independent remote calls concurrently; merge results in input order."""
+        if not survivors:
+            return
+
         def invoke(entry):
             _index, candidate = entry
             started = time.perf_counter()
@@ -406,7 +417,7 @@ class ModelFusionRankingEngine:
                 return None, exc, int((time.perf_counter() - started) * 1000)
 
         workers = self.profile.gpt4omini_judge.max_concurrency
-        if workers == 1 or len(survivors) < 2:
+        if self.judge_wait_callback is None and (workers == 1 or len(survivors) < 2):
             for entry in survivors:
                 yield invoke(entry)
             return
@@ -414,7 +425,13 @@ class ModelFusionRankingEngine:
             max_workers=min(workers, len(survivors)), thread_name_prefix="mmkgc-gpt-judge",
         ) as executor:
             # Workers never modify candidate scores, logs, or local GPU models.
-            yield from executor.map(invoke, survivors)
+            futures = [executor.submit(invoke, entry) for entry in survivors]
+            # Only remote judge calls run on workers. A bounded batch scheduler
+            # may prepare the next entity here, on the same local-model thread.
+            if self.judge_wait_callback is not None and any(not future.done() for future in futures):
+                self.judge_wait_callback()
+            for future in futures:
+                yield future.result()
 
     def _apply_text_scores(
         self,

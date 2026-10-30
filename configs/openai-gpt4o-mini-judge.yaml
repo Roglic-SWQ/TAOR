@@ -4,6 +4,6 @@ lmm:
   api_key_env: OPENAI_API_KEY
 
 inference:
-  max_token: 1024
+  max_token: 4096
   image_prompt_max_token: 384
   temperature: 0.0
