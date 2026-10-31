@@ -15,7 +15,7 @@ from mmkgc.ranking.context import RankingContext
 from mmkgc.ranking.contracts import GateResult, ScoreResult
 from mmkgc.ranking.image_input import ImageInput
 from mmkgc.utils import clamp01
-from mmkgc.observation import bind_observation, observation_response_schema
+from mmkgc.observation import bind_observation, observation_response_schema, validate_verification_targets
 
 
 ALLOWED_HARD_REJECTION_CODES = frozenset(
@@ -42,6 +42,86 @@ REQUIRED_RESPONSE_FIELDS = frozenset(
     }
 )
 MAX_REPAIR_RESPONSE_CHARS = 4000
+OBSERVATION_CONTRACT_VERSION = "candidate_observation_contract_v2"
+
+
+def _object_schema(properties: dict[str, Any]) -> dict[str, Any]:
+    return {"type": "object", "additionalProperties": False,
+            "properties": properties, "required": list(properties)}
+
+
+def observation_judgment_schema(targets: Any, modality: str) -> dict[str, Any]:
+    """Constrain output structure and legal status/mode pairs, retaining local validation."""
+    targets = validate_verification_targets(targets)
+    text = {"type": "string"}
+    number = {"type": "number", "minimum": 0, "maximum": 1}
+    strings = {"type": "array", "items": text}
+    branches = []
+    for target in targets:
+        pairs = [("unverifiable", ["unverifiable"])]
+        if target["verification_mode"] != "unverifiable":
+            pairs += [("direct", ["supported", "contradicted", "missing", "uncertain"]),
+                      ("appearance_only", ["unverifiable", "uncertain"])]
+        for mode, statuses in pairs:
+            branches.append(_object_schema({
+                "check_id": {"type": "string", "enum": [target["check_id"]]},
+                "status": {"type": "string", "enum": statuses},
+                "verification_mode": {"type": "string", "enum": [mode]},
+                "observed": text,
+                "evidence": {"type": "array", "items": {
+                    "type": "string", "pattern": "^" + ("pixel:" if modality == "image" else "text:") + r"\s*\S"}},
+                "confidence": number, "reason": text,
+            }))
+    return _object_schema({
+        "score": {"type": "number", "minimum": 0, "maximum": 100},
+        "confidence": number, "hard_reject": {"type": "boolean"},
+        "hard_rejection_codes": {"type": "array", "items": {
+            "type": "string", "enum": sorted(ALLOWED_HARD_REJECTION_CODES)}},
+        "soft_violations": strings, "evidence": strings, "reason": text,
+        "observation": _object_schema({
+            "fact_checks": {"type": "array", "minItems": len(targets), "maxItems": len(targets),
+                            "items": {"anyOf": branches}},
+            "unsupported_claims": {"type": "array", "items": _object_schema({
+                "claim": text, "evidence": {"type": "array", "minItems": 1,
+                    "items": {"type": "string", "pattern": "^" + ("pixel:" if modality == "image" else "text:") + r"\s*\S"}},
+                "confidence": number, "reason": text})},
+        }),
+    })
+
+
+def observation_output_template(targets: Any) -> dict[str, Any]:
+    return {"score": 0, "confidence": 0, "hard_reject": False, "hard_rejection_codes": [],
+            "soft_violations": [], "evidence": [], "reason": "",
+            "observation": {"fact_checks": [
+                {"check_id": t["check_id"], "status": "", "verification_mode": "", "observed": "",
+                 "evidence": [], "confidence": 0, "reason": ""}
+                for t in validate_verification_targets(targets)], "unsupported_claims": []}}
+
+
+def observation_contract_instructions(targets: Any, modality: str) -> str:
+    targets = validate_verification_targets(targets)
+    rules = [{"check_id": t["check_id"], "required_mode": t["verification_mode"],
+              "legal_status_mode_pairs": (["unverifiable/unverifiable"] if t["verification_mode"] == "unverifiable" else
+                  ["supported/direct", "contradicted/direct", "missing/direct", "uncertain/direct",
+                   "uncertain/appearance_only", "unverifiable/appearance_only", "unverifiable/unverifiable"])}
+             for t in targets]
+    return (
+        "\nMANDATORY OBSERVATION OUTPUT CONTRACT " + OBSERVATION_CONTRACT_VERSION + ":\n"
+        "Return ALL eight top-level fields in the template, including observation. "
+        "Complete every listed check_id exactly once. Empty strings are placeholders to fill. "
+        "Do not copy 'assess' from an input target into verification_mode. "
+        "For invisible facts choose status unverifiable and verification_mode unverifiable. "
+        "For appearance_only choose only uncertain or unverifiable. Never use supported, missing or "
+        "contradicted for an invisible fact or mere appearance. Evidence entries must each start with "
+        + ("pixel:" if modality == "image" else "text:") +
+        " followed by a concrete description of actual candidate content, not expected KG facts. "
+        "Use unsupported_claims: [] unless a concrete unsupported assertion is observed. "
+        "Use only IDs from this candidate. Keep each observed/reason short.\n"
+        "LEGAL_PAIRS_BY_CHECK:\n" + json.dumps(rules, ensure_ascii=False) +
+        "\nCOMPLETE_THIS_EXACT_OUTPUT_TEMPLATE:\n" +
+        json.dumps(observation_output_template(targets), ensure_ascii=False) +
+        "\nReturn only the completed JSON judgment, with observation inside it."
+    )
 RETRYABLE_JUDGE_ERROR_NAMES = frozenset(
     {
         "TimeoutError",
@@ -556,17 +636,10 @@ class GPT4OMiniRankingJudge:
         verification_targets: Any = None,
     ) -> Any:
         if verification_targets:
-            original_parser = parser
-
-            def parser(response, *, model_name):
-                result = original_parser(response, model_name=model_name)
-                try:
-                    observation = bind_observation(
-                        result.observation, verification_targets, kind, candidate_id,
-                    )
-                except (ValueError, TypeError) as exc:
-                    raise GPT4OMiniJudgeParseError(str(exc)) from exc
-                return replace(result, observation=observation)
+            return self._judge_observation_with_repairs(
+                prompt, parser, image_input=image_input, kind=kind,
+                candidate_id=candidate_id, targets=verification_targets,
+            )
 
         response = self._complete_with_retries(
             prompt,
@@ -631,6 +704,54 @@ class GPT4OMiniRankingJudge:
             )
             return replace(result, score=score)
 
+    def _judge_observation_with_repairs(self, prompt, parser, *, image_input, kind, candidate_id, targets):
+        schema = observation_judgment_schema(targets, kind)
+        attempts = []
+        details = {"observation_contract_version": OBSERVATION_CONTRACT_VERSION}
+        request_prompt = prompt
+        seen = set()
+        for attempt in range(3):
+            response = self._complete_with_retries(
+                request_prompt, image_input=image_input, kind=kind if not attempt else f"{kind}_contract_repair",
+                candidate_id=candidate_id, response_schema=schema,
+            )
+            try:
+                result = parser(response, model_name=self.model_name)
+                observation = bind_observation(result.observation, targets, kind, candidate_id)
+            except (GPT4OMiniJudgeParseError, ValueError, TypeError) as error:
+                attempts.append({"attempt": attempt, "error_type": type(error).__name__,
+                                 "error": str(error), "response_text": response})
+                if not attempt:
+                    details.update(_contract_repair_details(response, error))
+                details.update(contract_repair_retries=attempt, contract_repair_failed=True,
+                               contract_repair_failure_error_type=type(error).__name__,
+                               contract_repair_failure_error=str(error))
+                fingerprint = response.strip()
+                if fingerprint in seen or attempt == 2:
+                    details["contract_repair_stopped_reason"] = (
+                        "repeated_invalid_response" if fingerprint in seen else "repair_limit_reached")
+                    details["validation_attempts"] = attempts
+                    raise GPT4OMiniJudgeParseError("observation contract repair failed", details=details) from error
+                seen.add(fingerprint)
+                request_prompt = (
+                    prompt + "\n\nOBSERVATION_VALIDATION_ERROR: " + str(error) +
+                    "\nThe previous judgment did not satisfy the output contract. Return a COMPLETE "
+                    "replacement. Retain valid judgments; correct every illegal status/mode pair "
+                    "and evidence field, and fill every required observation check. "
+                    "If the FULL claim is invisible from the image, use unverifiable/unverifiable. "
+                    "Do not use missing/direct or supported/appearance_only for such a claim.\n"
+                    "PREVIOUS_JUDGMENT:\n" + _truncate_repair_response(response) +
+                    observation_contract_instructions(targets, kind)
+                )
+            else:
+                attempts.append({"attempt": attempt, "response_text": response, "errors": []})
+                details.update(contract_repair_retries=attempt, validation_attempts=attempts)
+                for key in ("contract_repair_failed", "contract_repair_failure_error_type", "contract_repair_failure_error"):
+                    details.pop(key, None)
+                return replace(result, observation=observation,
+                               score=replace(result.score, details={**result.score.details, **details}))
+        raise RuntimeError("Observation repair loop exhausted")
+
     def _complete_with_retries(
         self,
         prompt: str,
@@ -638,12 +759,13 @@ class GPT4OMiniRankingJudge:
         image_input: ImageInput | None,
         kind: str,
         candidate_id: str,
+        response_schema: dict[str, Any] | None = None,
     ) -> str:
         attempts = self.max_retries + 1
         for attempt in range(1, attempts + 1):
             started = time.monotonic()
             try:
-                return self._complete(prompt, image_input=image_input)
+                return self._complete(prompt, image_input=image_input, response_schema=response_schema)
             except Exception as exc:
                 retryable = _is_retryable_judge_error(exc)
                 will_retry = retryable and attempt < attempts
@@ -673,14 +795,19 @@ class GPT4OMiniRankingJudge:
                     time.sleep(delay)
         raise RuntimeError("unreachable judge retry state")
 
-    def _complete(self, prompt: str, *, image_input: ImageInput | None = None) -> str:
+    def _complete(self, prompt: str, *, image_input: ImageInput | None = None,
+                  response_schema: dict[str, Any] | None = None) -> str:
         if image_input is not None:
+            if response_schema is not None and hasattr(self.client, "complete_multimodal_structured"):
+                return str(self.client.complete_multimodal_structured(prompt, image_input.as_data_url(), response_schema))
             if hasattr(self.client, "complete_multimodal"):
                 return str(self.client.complete_multimodal(prompt, image_input.as_data_url()))
             raise TypeError(
                 "GPT4OMiniRankingJudge multimodal image/pair judge requires "
                 "client.complete_multimodal(prompt, image_data_url)"
             )
+        if response_schema is not None and hasattr(self.client, "complete_structured"):
+            return str(self.client.complete_structured(prompt, response_schema))
         if hasattr(self.client, "complete"):
             return str(self.client.complete(prompt))
         if callable(self.client):
@@ -815,6 +942,7 @@ def _build_prompt(
         + json.dumps(payload, ensure_ascii=False, sort_keys=True)
         + "\n\nDo not repeat the input JSON. Return only the judgment object with "
         "the required response_schema fields.\nJudgment JSON:"
+        + (observation_contract_instructions(verification_targets, task) if verification_targets else "")
     )
 
 

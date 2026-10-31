@@ -102,9 +102,14 @@ class ModelFusionRankingEngine:
             image_items,
             failed_optional_scorers,
         )
+        evaluation_failures = [call for call in model_calls
+                               if call.get("scorer") == JUDGE_OUTPUT_SCORER_NAME and call.get("status") == "failed"]
+        if status == "no_valid_candidate" and evaluation_failures:
+            status = "evaluation_failed"
 
         return {
             "ranking_status": status,
+            "evaluation_failures": evaluation_failures,
             "ranker": RANKER_NAME,
             "score_version": SCORE_VERSION,
             "observation_version": OBSERVATION_VERSION,

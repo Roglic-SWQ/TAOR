@@ -111,13 +111,13 @@ class MMKGCPipeline:
         model_calls.extend(getattr(self.relation_planner, "calls", [])[relation_call_start:])
         return PreparedEntity(record, missing_mode, coarse, knowledge, selection, reasoning, model_calls)
 
-    def finish(self, prepared: PreparedEntity) -> dict[str, Any]:
+    def finish(self, prepared: PreparedEntity, *, generation_result: dict[str, Any] | None = None) -> dict[str, Any]:
         """Observe candidates and perform at most one candidate-local factual repair."""
         record, missing_mode = prepared.record, prepared.missing_mode
         coarse, knowledge = prepared.coarse, prepared.knowledge
         selection, reasoning = prepared.selection, prepared.reasoning
         model_calls = list(prepared.model_calls)
-        generation = relation_alternation_generation(
+        generation = generation_result if generation_result is not None else relation_alternation_generation(
             record,
             missing_mode,
             knowledge,

@@ -146,6 +146,8 @@ class OpenAICompatibleRelationPlanner:
         return QWEN_PROMPT_VERSION if self.uses_local_qwen else PROMPT_VERSION
 
     def _complete(self, messages: list[dict[str, str]], schema: dict[str, Any]) -> str:
+        context = self._request_context.get() or {}
+        event = context.get('event', {})
         payload = {
             "model": self.config.model_name,
             "messages": (_qwen_planning_messages(messages, schema)
@@ -161,19 +163,23 @@ class OpenAICompatibleRelationPlanner:
             # Use the same normal generation path as Stage 0/1; this vLLM's constrained decoder is slow.
             payload.pop('response_format')
             payload['repetition_penalty'] = 1.05
+            # Constrain syntax only after a failed model response. Keep the
+            # fast initial generation path; never compile the large global schema.
+            if event.get('contract_attempt', 0) > 0:
+                from mmkgc.adapters.json_contract import local_relation_json_schema
+                payload['guided_json'] = local_relation_json_schema()
+                payload['guided_decoding_backend'] = 'lm-format-enforcer'
             if TASK_MARKER in schema and 'properties' in schema:
                 # Constrain only the tiny focused reply, never the global Stage 2 anyOf schema.
                 payload['guided_json'] = {k: deepcopy(v) for k, v in schema.items() if k != TASK_MARKER}
                 payload['guided_decoding_backend'] = 'lm-format-enforcer'
         import httpx
 
-        context = self._request_context.get() or {}
-        event = context.get('event', {})
         timeout = context.get('timeout', self.timeout_seconds)
         event['request_bytes'] = len(json.dumps(payload).encode('utf-8'))
         event['response_format'] = payload.get('response_format', {}).get('type', 'text')
         if 'guided_json' in payload:
-            event['response_format'] = 'targeted_guided_json'
+            event['response_format'] = 'targeted_guided_json' if TASK_MARKER in schema else 'syntax_guided_json'
         if self.uses_local_qwen:
             event['output_contract_prompt'] = payload['messages'][-1]['content']
             event['targeted_repair_kind'] = schema.get(TASK_MARKER)

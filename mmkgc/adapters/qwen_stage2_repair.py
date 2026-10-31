@@ -8,7 +8,7 @@ from typing import Any
 
 from mmkgc.stages.relation_planning import RelationPlanValidationError
 
-REPAIR_VERSION = 'qwen_stage2_targeted_repair_v1'
+REPAIR_VERSION = 'qwen_stage2_targeted_repair_v2'
 TASK_MARKER = 'x-mmkgc-qwen-repair'
 FACT_FIELDS = {'role', 'evidence_refs', 'supporting_fact_ids', 'reason'}
 
@@ -64,7 +64,8 @@ def targeted_repair_tasks(source_prompt: str, response: Any, errors: list[dict[s
         tasks.append(RepairTask(kind, tuple(keys), instructions + '\nINPUT_JSON:\n'
                                 + json.dumps(payload, ensure_ascii=False, separators=(',', ':')), schema))
 
-    if codes == {'missing_facts'} and isinstance(plan.get('candidate_anchors'), list):
+    slot_codes = {'candidate_slot_count', 'unknown_anchor', 'invalid_anchor_role', 'unanchored_primary', 'invalid_anchors'}
+    if 'missing_facts' in codes and codes <= {'missing_facts', *slot_codes} and isinstance(plan.get('candidate_anchors'), list):
         missing = [fid for fid in facts if fid not in roles]
         # Four fact decisions per request keep review cardinality unrelated to the image budget.
         for start in range(0, len(missing), 4):
@@ -72,6 +73,7 @@ def targeted_repair_tasks(source_prompt: str, response: Any, errors: list[dict[s
             properties = {}
             for fid in batch:
                 allowed_roles = (['context', 'excluded'] if status == 'insufficient_evidence'
+                                 else ['primary', 'secondary', 'context', 'excluded'] if fid in plan['candidate_anchors']
                                  else ['secondary', 'context', 'excluded'])
                 support_ids = [key for key in facts if key != fid and (key in missing or roles.get(key) == 'secondary')]
                 properties[fid] = object_schema({
@@ -112,7 +114,6 @@ def targeted_repair_tasks(source_prompt: str, response: Any, errors: list[dict[s
                'Do not return role decisions, plan or image slots; those decisions are fixed.',
                object_schema({'supports': object_schema({fid: id_array(allowed[fid]) for fid in batch})}))
     else:
-        slot_codes = {'candidate_slot_count', 'unknown_anchor', 'invalid_anchor_role', 'unanchored_primary', 'invalid_anchors'}
         slot_only = all(e['code'] in slot_codes or (e['code'] == 'missing_field'
                         and e['path'] == '/plan/candidate_anchors') for e in errors)
         primary = [fid for fid, role in roles.items() if role == 'primary']

@@ -405,6 +405,13 @@ def persist_entity_result(job, writer, entry, result):
          "label": record.label, "description": record.description})
     atomic_text(entity_dir / "entity_description.txt", record.label + "\n\n" + record.description + "\n")
     publish_entity_directory(job, row, entity_dir)
+    ranking = result.get("kg_aware_candidate_consistency_ranking", {})
+    if ranking.get("ranking_status") == "evaluation_failed":
+        row.update(status="failed", failed_stage="stage4", error_type="RankingEvaluationError",
+                   error_message="Required image judgment could not be validated; generated candidates preserved")
+        save(entity_dir / "failure.json", {key: row.get(key) for key in
+             ("entity_key", "status", "failed_stage", "error_type", "error_message")})
+        return
     entry["phase"] = "export"
     exported = export_best(entity_dir, job.root / "completed_images" / key / "image.png")
     row.update(status="completed" if exported else "no_valid_image")

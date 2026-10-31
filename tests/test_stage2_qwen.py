@@ -14,7 +14,8 @@ from mmkgc.stages.relation_planning import candidate_slot_response_schema
 
 
 @pytest.mark.parametrize('local', [True, False])
-def test_stage2_transport_selects_backend_without_altering_contract(monkeypatch, local):
+@pytest.mark.parametrize('repair', [False, True])
+def test_stage2_transport_selects_backend_without_altering_contract(monkeypatch, local, repair):
     captured = []
 
     class Client:
@@ -42,6 +43,7 @@ def test_stage2_transport_selects_backend_without_altering_contract(monkeypatch,
     schema = candidate_slot_response_schema({'relation_facts': []}, 5)
     schema['$defs']['reason'] = {'type': 'string', 'minLength': 1, 'pattern': r'\S'}
     original = deepcopy(schema)
+    planner._request_context.set({'event': {'contract_attempt': int(repair)}})
     assert planner._complete([{'role': 'user', 'content': 'Plan from evidence.'}], schema) == '{"plan":{}}'
     url, payload = captured[0]
     assert url == base + '/chat/completions'
@@ -51,7 +53,14 @@ def test_stage2_transport_selects_backend_without_altering_contract(monkeypatch,
     if local:
         assert 'response_format' not in payload
         assert 'Return ONLY this object after filling it:' in payload['messages'][-1]['content']
-        assert 'guided_decoding_backend' not in payload
+        if repair:
+            assert set(payload['guided_json']['properties']) == {'plan'}
+            assert '$defs' not in payload['guided_json']
+            plan = payload['guided_json']['properties']['plan']['properties']
+            assert plan['relation_plans']['items']['properties']['reason']['maxLength'] == 160
+            assert payload['guided_decoding_backend'] == 'lm-format-enforcer'
+        else:
+            assert 'guided_json' not in payload and 'guided_decoding_backend' not in payload
         assert payload['repetition_penalty'] == 1.05
     else:
         assert payload['response_format']['json_schema']['schema'] == original

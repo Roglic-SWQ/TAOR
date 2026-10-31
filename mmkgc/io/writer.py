@@ -814,6 +814,7 @@ def _compact_stage4_ranking(payload: dict[str, Any]) -> dict[str, Any]:
     pair_ranking = _compact_stage4_pair_ranking(payload.get("pair_ranking"))
     return {
         "ranking_status": payload.get("ranking_status"),
+        "evaluation_failures": payload.get("evaluation_failures", []),
         "observation_version": payload.get("observation_version"),
         "stage3_regeneration": payload.get("stage3_regeneration"),
         "target_modalities": _stage4_target_modalities(reference, text_ranking, image_ranking),

@@ -782,6 +782,12 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
             "max_tokens": max(self.config.max_token, 4096),
             "temperature": 0.0,
         }
+        if "qwen" in self.config.model_name.lower():
+            request_body["repetition_penalty"] = 1.05
+            if "VALIDATION_FEEDBACK_JSON:" in prompt or "Previous parse error:" in prompt:
+                from mmkgc.adapters.json_contract import local_semantic_json_schema
+                request_body.update(guided_json=local_semantic_json_schema(prompt),
+                                    guided_decoding_backend="lm-format-enforcer")
         headers = {
             "Authorization": f"Bearer {self.config.api_key}",
             "Content-Type": "application/json",
@@ -792,24 +798,26 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
             headers=headers,
             method="POST",
         )
-        try:
-            with request.urlopen(req, timeout=self.timeout_seconds) as response:
-                response_json = json.loads(response.read().decode("utf-8"))
-        except error.HTTPError as exc:
+        for attempt in range(2):
             try:
-                body = exc.read().decode("utf-8", errors="replace").strip()
-            except Exception:
-                body = ""
-            if body:
-                detail = f"{exc.reason} | {body[:2000]}"
-                raise error.HTTPError(
-                    exc.url,
-                    exc.code,
-                    detail,
-                    exc.hdrs,
-                    exc.fp,
-                ) from exc
-            raise
+                with request.urlopen(req, timeout=self.timeout_seconds) as response:
+                    response_json = json.loads(response.read().decode("utf-8"))
+                break
+            except (TimeoutError, ConnectionError, error.URLError) as exc:
+                retryable = (exc.code in {408, 429, 500, 502, 503, 504}
+                             if isinstance(exc, error.HTTPError) else True)
+                if attempt == 0 and retryable:
+                    time.sleep(1)
+                    continue
+                if isinstance(exc, error.HTTPError):
+                    try:
+                        body = exc.read().decode("utf-8", errors="replace").strip()
+                    except Exception:
+                        body = ""
+                    if body:
+                        raise error.HTTPError(exc.url, exc.code, f"{exc.reason} | {body[:2000]}",
+                                              exc.hdrs, exc.fp) from exc
+                raise
         content = (
             response_json.get("choices", [{}])[0]
             .get("message", {})

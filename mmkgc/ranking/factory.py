@@ -154,7 +154,7 @@ class _OpenAICompatibleCompletionClient:
         self.timeout_seconds = timeout_seconds
         self.max_tokens = max(int(self.config.max_token), 1024)
 
-    def complete(self, prompt: str) -> str:
+    def complete(self, prompt: str, *, response_schema: dict[str, Any] | None = None) -> str:
         return self._chat_completion(
             [
                 {
@@ -165,10 +165,10 @@ class _OpenAICompatibleCompletionClient:
                     ),
                 },
                 {"role": "user", "content": prompt},
-            ]
+            ], response_schema=response_schema,
         )
 
-    def complete_multimodal(self, prompt: str, image_data_url: str) -> str:
+    def complete_multimodal(self, prompt: str, image_data_url: str, *, response_schema: dict[str, Any] | None = None) -> str:
         image_data_url = _compact_judge_image_url(image_data_url)
         return self._chat_completion(
             [
@@ -189,19 +189,28 @@ class _OpenAICompatibleCompletionClient:
                         },
                     ],
                 },
-            ]
+            ], response_schema=response_schema,
         )
 
-    def _chat_completion(self, messages: list[dict[str, Any]]) -> str:
+    def complete_structured(self, prompt: str, response_schema: dict[str, Any]) -> str:
+        return self.complete(prompt, response_schema=response_schema)
+
+    def complete_multimodal_structured(self, prompt: str, image_data_url: str, response_schema: dict[str, Any]) -> str:
+        return self.complete_multimodal(prompt, image_data_url, response_schema=response_schema)
+
+    def _chat_completion(self, messages: list[dict[str, Any]], *, response_schema: dict[str, Any] | None = None) -> str:
         endpoint = f"{str(self.config.base_url).rstrip('/')}/chat/completions"
-        body = json.dumps(
-            {
+        payload = {
                 "model": self.config.model_name,
                 "messages": messages,
                 "temperature": self.config.temperature,
                 "max_tokens": self.max_tokens,
-            }
-        ).encode("utf-8")
+        }
+        if response_schema is not None:
+            payload["response_format"] = {"type": "json_schema", "json_schema": {
+                "name": "stage4_judgment", "strict": True, "schema": response_schema,
+            }}
+        body = json.dumps(payload).encode("utf-8")
         headers = {"Content-Type": "application/json"}
         if self.config.api_key:
             headers["Authorization"] = f"Bearer {self.config.api_key}"
