@@ -8,7 +8,7 @@ from typing import Any
 
 from mmkgc.stages.relation_planning import RelationPlanValidationError
 
-REPAIR_VERSION = 'qwen_stage2_targeted_repair_v2'
+REPAIR_VERSION = 'qwen_stage2_targeted_repair_v3'
 TASK_MARKER = 'x-mmkgc-qwen-repair'
 FACT_FIELDS = {'role', 'evidence_refs', 'supporting_fact_ids', 'reason'}
 
@@ -118,6 +118,36 @@ def targeted_repair_tasks(source_prompt: str, response: Any, errors: list[dict[s
                         and e['path'] == '/plan/candidate_anchors') for e in errors)
         primary = [fid for fid, role in roles.items() if role == 'primary']
         eligible = [fid for fid, role in roles.items() if role in {'primary', 'secondary'}]
+        if slot_only and set(ids) == set(facts) and status == 'ready' and len(primary) > candidate_budget:
+            slots = [f'slot_{i:03d}' for i in range(1, candidate_budget + 1)]
+            task('roles_and_slots', primary, {
+                'status': status, 'candidate_budget': candidate_budget,
+                'unchanged_roles': {fid: role for fid, role in roles.items() if fid not in primary},
+                'facts_to_reclassify': primary, 'eligible_fact_ids': eligible,
+                'response_template': {'primary_fact_ids': [], 'secondary_fact_ids': [],
+                                      'reasons': {fid: '' for fid in primary},
+                                      'slots': {key: '' for key in slots}},
+            }, 'Repair ONLY the conflicting primary roles and candidate slots. '
+               'There are more primary facts than available images. Use the evidence to choose '
+               'which reviewed facts stay primary and which become secondary. Keep at least one '
+               'primary and no more primary facts than candidate_budget. Every retained primary '
+               'MUST appear in slots at least once. Partition ALL facts_to_reclassify explicitly '
+               'between primary_fact_ids and secondary_fact_ids, each ID exactly once overall. '
+               'Give every reclassified fact a short evidence-grounded reason in reasons. '
+               'Other roles, facts, evidence references and support links stay unchanged. '
+               'Fill every numbered slot with an eligible fact ID; repetition is allowed. '
+               'Return ONLY the four fields in response_template. Do not repeat a full plan or role table.',
+               object_schema({
+                   'primary_fact_ids': {'type': 'array', 'minItems': 1, 'maxItems': candidate_budget,
+                                        'items': {'type': 'string', 'enum': primary}},
+                   'secondary_fact_ids': {'type': 'array', 'minItems': len(primary) - candidate_budget,
+                                          'maxItems': len(primary) - 1,
+                                          'items': {'type': 'string', 'enum': primary}},
+                   'reasons': object_schema({fid: {'type': 'string', 'minLength': 1, 'maxLength': 160}
+                                             for fid in primary}),
+                   'slots': object_schema({key: {'type': 'string', 'enum': eligible} for key in slots}),
+               }))
+            return tasks
         if not slot_only or set(ids) != set(facts) or not primary or len(primary) > candidate_budget:
             return []
         keys = [f'slot_{i:03d}' for i in range(1, candidate_budget + 1)]
@@ -153,6 +183,33 @@ def merge_targeted_response(base: dict[str, Any], task: RepairTask, text: str) -
         parsed = json.loads(text, object_pairs_hook=unique_pairs)
     except json.JSONDecodeError as exc:
         fail('invalid_repair_json', str(exc))
+    if task.kind == 'roles_and_slots':
+        if not isinstance(parsed, dict) or set(parsed) != {'primary_fact_ids', 'secondary_fact_ids', 'reasons', 'slots'}:
+            fail('invalid_repair_shape', 'Return exactly primary_fact_ids, secondary_fact_ids, reasons and slots')
+        slots = list(task.schema['properties']['slots']['properties'])
+        primary, secondary = parsed['primary_fact_ids'], parsed['secondary_fact_ids']
+        if (not isinstance(primary, list) or not isinstance(secondary, list)
+                or any(not isinstance(fid, str) for fid in primary + secondary)
+                or not 1 <= len(primary) <= len(slots)
+                or len(primary) + len(secondary) != len(task.keys)
+                or len(set(primary + secondary)) != len(task.keys)
+                or set(primary + secondary) != set(task.keys)):
+            fail('invalid_role_partition', 'Partition every requested fact exactly once within the image budget')
+        for field, keys in (('reasons', task.keys), ('slots', slots)):
+            if not isinstance(parsed[field], dict) or set(parsed[field]) != set(keys):
+                fail('repair_key_mismatch', f'{field} must contain exactly {list(keys)}')
+        result = deepcopy(base)
+        for item in result['plan']['relation_plans']:
+            if item['fact_id'] not in task.keys:
+                continue
+            reason = parsed['reasons'][item['fact_id']]
+            if not isinstance(reason, str) or not reason.strip() or len(reason) > 160:
+                fail('invalid_role_repair', 'Return a nonblank short reason for every explicit role choice')
+            # Both sides of the partition are explicit model decisions. No
+            # unreturned fact is silently demoted or assigned an image.
+            item.update(role='primary' if item['fact_id'] in primary else 'secondary', reason=reason)
+        result['plan']['candidate_anchors'] = [deepcopy(parsed['slots'][key]) for key in slots]
+        return result
     field = {'missing_facts': 'facts', 'support_links': 'supports', 'candidate_slots': 'slots'}[task.kind]
     if not isinstance(parsed, dict) or set(parsed) != {field} or not isinstance(parsed[field], dict):
         fail('invalid_repair_shape', f'Return only an object with a {field} object')

@@ -13,7 +13,7 @@ from typing import Any
 from urllib import error, request
 from urllib.parse import urlsplit
 
-from mmkgc.stages.semantic import StrictJsonStagePlanner
+from mmkgc.stages.semantic import StrictJsonStagePlanner, KNOWLEDGE_REQUEST_CONTEXT
 from mmkgc.generation_prompts import (
     IMAGE_SYSTEM, PROMPT_PROFILES, PROMPT_VERSION, QWEN_PROMPT_VERSION, TEXT_SYSTEM,
     build_generation_prompt, generation_payload,
@@ -747,7 +747,8 @@ def _string_list(value: Any) -> list[str]:
 class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
     """OpenAI-compatible strict JSON planner for the merged semantic mainline."""
 
-    def __init__(self, config: QwenConfig, timeout_seconds: float = 60.0) -> None:
+    def __init__(self, config: QwenConfig, timeout_seconds: float = 60.0,
+                 knowledge_stage_timeout_seconds: float = 180.0) -> None:
         self.config = config
         self.timeout_seconds = timeout_seconds
         super().__init__(
@@ -758,6 +759,8 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
                 if config.model_name.startswith("gpt-4o-mini")
                 else "qwen-local-stage-semantic-planner"
             ),
+            targeted_knowledge_repairs="qwen" in config.model_name.lower(),
+            knowledge_stage_timeout_seconds=knowledge_stage_timeout_seconds,
         )
 
     def _endpoint(self) -> str:
@@ -783,9 +786,13 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
             "temperature": 0.0,
         }
         if "qwen" in self.config.model_name.lower():
+            from mmkgc.adapters.json_contract import local_semantic_json_schema, semantic_output_token_cap
             request_body["repetition_penalty"] = 1.05
-            if "VALIDATION_FEEDBACK_JSON:" in prompt or "Previous parse error:" in prompt:
-                from mmkgc.adapters.json_contract import local_semantic_json_schema
+            targeted_token_cap = semantic_output_token_cap(prompt)
+            if targeted_token_cap is not None:
+                request_body["max_tokens"] = min(request_body["max_tokens"], targeted_token_cap)
+            if ("VALIDATION_FEEDBACK_JSON:" in prompt or "Previous parse error:" in prompt
+                    or "stage1_targeted_repair_v1" in prompt):
                 request_body.update(guided_json=local_semantic_json_schema(prompt),
                                     guided_decoding_backend="lm-format-enforcer")
         headers = {
@@ -798,15 +805,32 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
             headers=headers,
             method="POST",
         )
+        context = KNOWLEDGE_REQUEST_CONTEXT.get()
+        deadline = context["deadline"] if context is not None else None
         for attempt in range(2):
+            remaining = deadline - time.perf_counter() if deadline is not None else self.timeout_seconds
+            if remaining <= 0:
+                raise TimeoutError("Stage 1 total time budget exhausted")
+            timeout = min(self.timeout_seconds, remaining)
+            event = {"contract_attempt": context["call"]["contract_repair_retries"],
+                     "network_attempt": attempt + 1, "timeout_seconds": timeout,
+                     "guided_json": "guided_json" in request_body} if context is not None else None
+            if event is not None:
+                context["call"]["network_attempts"].append(event)
+            started = time.perf_counter()
             try:
-                with request.urlopen(req, timeout=self.timeout_seconds) as response:
+                with request.urlopen(req, timeout=timeout) as response:
                     response_json = json.loads(response.read().decode("utf-8"))
+                if event is not None:
+                    event.update(status="received", usage=response_json.get("usage", {}),
+                                 finish_reason=response_json.get("choices", [{}])[0].get("finish_reason"))
                 break
             except (TimeoutError, ConnectionError, error.URLError) as exc:
+                if event is not None:
+                    event.update(status="failed", error_type=type(exc).__name__, error_message=str(exc))
                 retryable = (exc.code in {408, 429, 500, 502, 503, 504}
                              if isinstance(exc, error.HTTPError) else True)
-                if attempt == 0 and retryable:
+                if attempt == 0 and retryable and (deadline is None or deadline - time.perf_counter() > 1):
                     time.sleep(1)
                     continue
                 if isinstance(exc, error.HTTPError):
@@ -818,6 +842,9 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
                         raise error.HTTPError(exc.url, exc.code, f"{exc.reason} | {body[:2000]}",
                                               exc.hdrs, exc.fp) from exc
                 raise
+            finally:
+                if event is not None:
+                    event["latency_ms"] = int((time.perf_counter() - started) * 1000)
         content = (
             response_json.get("choices", [{}])[0]
             .get("message", {})

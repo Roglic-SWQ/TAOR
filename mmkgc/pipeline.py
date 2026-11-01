@@ -373,6 +373,13 @@ def _semantic_model_calls(
             "ground_truth_used": False,
         }
         for key in (
+            "knowledge_repair_version",
+            "validation_attempts",
+            "targeted_repairs",
+            "network_attempts",
+            "stage_timeout_seconds",
+            "latency_ms",
+            "contract_repair_stopped_reason",
             "contract_repair_retries",
             "contract_repair_error_type",
             "contract_repair_error",

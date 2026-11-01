@@ -183,13 +183,13 @@ def test_syntax_and_business_errors_share_the_same_repair_budget():
     assert planner.calls[-1]['validation_attempts'][0]['errors'][0]['code'] == 'invalid_json'
 
 
-def test_repeated_invalid_json_after_original_syntax_repair_gets_one_fresh_source_rebuild():
+def test_first_syntax_repair_rebuilds_from_source_without_repeating_invalid_text():
     record, coarse, _, valid = fixture()
     prompts = []
 
     def complete(prompt):
         prompts.append(prompt)
-        if len(prompts) < 3:
+        if len(prompts) == 1:
             return 'broken JSON'
         assert 'ORIGINAL_INPUT_JSON:' in prompt
         assert 'PREVIOUS_RESPONSE:' not in prompt
@@ -199,9 +199,9 @@ def test_repeated_invalid_json_after_original_syntax_repair_gets_one_fresh_sourc
     planner = StrictJsonStagePlanner(complete, prompt_profile=QWEN_PROMPT_VERSION)
     result = planner.build_knowledge(record, 'image', coarse)
     assert len(result['relation_facts']) == 4
-    assert len(prompts) == 3
-    assert 'PREVIOUS_RESPONSE:' in prompts[1]
-    assert planner.calls[-1]['contract_repair_retries'] == 2
+    assert len(prompts) == 2
+    assert 'PREVIOUS_RESPONSE:' not in prompts[1]
+    assert planner.calls[-1]['contract_repair_retries'] == 1
 
 
 @pytest.mark.parametrize('on_repair', [False, True])

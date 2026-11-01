@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import json
 import math
+import time
+from contextvars import ContextVar
+from copy import deepcopy
 from collections.abc import Callable
 from typing import Any, Protocol
 
@@ -73,6 +76,7 @@ STAGE1_TEXT_VISUAL_PATCH_FIELDS = {
 _SEMANTIC_TARGET_TEXT_LIMIT = 1600
 _SEMANTIC_NEIGHBOR_DESCRIPTION_LIMIT = 320
 _SEMANTIC_PROMPT_TRUNCATION_MARKER = "\n...[truncated for semantic prompt]..."
+KNOWLEDGE_REQUEST_CONTEXT = ContextVar("knowledge_request_context", default=None)
 
 
 class StrictJsonStagePlanner:
@@ -85,6 +89,8 @@ class StrictJsonStagePlanner:
         planner_name: str = "strict-json-stage-planner",
         prompt_profile: str = PROMPT_VERSION,
         max_knowledge_repairs: int = 2,
+        targeted_knowledge_repairs: bool = False,
+        knowledge_stage_timeout_seconds: float = 180.0,
     ) -> None:
         if not isinstance(prompt_profile, str) or prompt_profile not in PROMPT_PROFILES:
             raise ValueError(f"prompt_profile must be one of {PROMPT_PROFILES}")
@@ -94,6 +100,11 @@ class StrictJsonStagePlanner:
         self.planner_name = planner_name
         self.prompt_version = prompt_profile
         self.max_knowledge_repairs = max_knowledge_repairs
+        if (isinstance(knowledge_stage_timeout_seconds, bool)
+                or not math.isfinite(knowledge_stage_timeout_seconds) or knowledge_stage_timeout_seconds <= 0):
+            raise ValueError("knowledge_stage_timeout_seconds must be finite and positive")
+        self.targeted_knowledge_repairs = targeted_knowledge_repairs
+        self.knowledge_stage_timeout_seconds = knowledge_stage_timeout_seconds
         self.calls: list[dict[str, Any]] = []
 
     def refine_coarse(
@@ -310,18 +321,33 @@ class StrictJsonStagePlanner:
 
         call: dict[str, Any] = {
             "stage": "stage1_knowledge", "prompt_version": self.prompt_version,
-            "knowledge_repair_version": "stage1_complete_fact_repair_v3",
+            "knowledge_repair_version": "stage1_targeted_source_repair_v4",
             "prompt": prompt, "contract_repair_retries": 0, "validation_attempts": [],
+            "network_attempts": [], "stage_timeout_seconds": self.knowledge_stage_timeout_seconds,
         }
         seen: set[str] = set()
         request_prompt = prompt
+        repair_task = repair_base = None
+        started = time.perf_counter()
+        deadline = started + self.knowledge_stage_timeout_seconds
+        token = KNOWLEDGE_REQUEST_CONTEXT.set({"deadline": deadline, "call": call})
         try:
             for attempt in range(self.max_knowledge_repairs + 1):
+                if time.perf_counter() >= deadline:
+                    call["contract_repair_stopped_reason"] = "stage_time_budget_exhausted"
+                    raise TimeoutError("Stage 1 total time budget exhausted")
                 call["contract_repair_retries"] = attempt
                 response_text = self._complete(request_prompt)
+                if time.perf_counter() >= deadline:
+                    call["contract_repair_stopped_reason"] = "stage_time_budget_exhausted"
+                    raise TimeoutError("Stage 1 total time budget exhausted")
                 call["response_text"] = response_text
                 try:
-                    response = parse_strict_json_object(response_text)
+                    if repair_task is not None:
+                        from mmkgc.adapters.stage1_repair import merge_knowledge_repair
+                        response = merge_knowledge_repair(repair_base, repair_task, response_text)
+                    else:
+                        response = parse_strict_json_object(response_text)
                     refined = apply_response(response)
                 except (SemanticStageParseError, KnowledgeResponseValidationError) as exc:
                     if isinstance(exc, KnowledgeResponseValidationError):
@@ -339,34 +365,38 @@ class StrictJsonStagePlanner:
                         fingerprint = json.dumps(json.loads(response_text), sort_keys=True, ensure_ascii=False, separators=(",", ":"))
                     except json.JSONDecodeError:
                         fingerprint = response_text.strip()
-                    first_syntax_repair_failed = (
-                        isinstance(exc, SemanticStageParseError) and attempt == 1
-                        and attempt < self.max_knowledge_repairs
-                    )
-                    if fingerprint in seen and not first_syntax_repair_failed:
+                    if fingerprint in seen:
                         call["contract_repair_stopped_reason"] = "repeated_invalid_response"
                         raise
                     if attempt == self.max_knowledge_repairs:
                         call["contract_repair_stopped_reason"] = "repair_limit_reached"
                         raise
                     seen.add(fingerprint)
-                    if isinstance(exc, KnowledgeResponseValidationError) or attempt > 0:
-                        request_prompt = build_knowledge_contract_repair_prompt(
-                            inputs=inputs, errors=errors,
-                        )
-                    else:
-                        # Preserve the first syntax-repair request for each profile.
-                        repair = build_stage_repair_prompt(
-                            stage="stage1_knowledge", response_text=response_text, error=exc,
-                            prompt_profile=self.prompt_version,
-                        )
-                        request_prompt = prompt + "\nCorrect the response using the complete input above.\n" + repair
+                    # A malformed patch is retried against its unchanged base.
+                    if repair_task is not None and any(e["path"].startswith("/targeted_repair") for e in errors):
+                        continue
+                    repair_task = None
+                    if self.targeted_knowledge_repairs and isinstance(exc, KnowledgeResponseValidationError):
+                        from mmkgc.adapters.stage1_repair import targeted_knowledge_repair
+                        repair_task = targeted_knowledge_repair(
+                            _prompt_deterministic_output("stage1_knowledge", inputs), response, errors)
+                        if repair_task is not None:
+                            repair_base = deepcopy(response)
+                            request_prompt = repair_task.prompt
+                            call.setdefault("targeted_repairs", []).append({
+                                "attempt": attempt + 1, "fields": list(repair_task.fields),
+                                "fact_ids": list(repair_task.facts), "prompt": request_prompt})
+                    if repair_task is None:
+                        request_prompt = build_knowledge_contract_repair_prompt(inputs=inputs, errors=errors)
                     call["contract_repair_prompt"] = request_prompt
                     continue
                 call["validation_attempts"].append({"attempt": attempt, "response_text": response_text, "errors": []})
                 call.update(status="applied", validation_errors=[])
                 if attempt:
                     call["contract_repair_response_text"] = response_text
+                    if repair_task is not None:
+                        call["response_text"] = json.dumps(response, ensure_ascii=False)
+                        call["targeted_repairs"][-1]["response_text"] = response_text
                 refined["semantic_refinement"] = _refinement_status(
                     self.planner_name, "stage1_knowledge", "applied", None,
                     prompt_version=self.prompt_version,
@@ -375,9 +405,13 @@ class StrictJsonStagePlanner:
             raise RuntimeError("Stage 1 repair loop exhausted without a result")
         except Exception as exc:
             call.update(status="failed", error_type=type(exc).__name__, error_message=str(exc))
+            if isinstance(exc, TimeoutError) and time.perf_counter() >= deadline:
+                call["contract_repair_stopped_reason"] = "stage_time_budget_exhausted"
             setattr(exc, "model_call", call)
             raise
         finally:
+            call["latency_ms"] = int((time.perf_counter() - started) * 1000)
+            KNOWLEDGE_REQUEST_CONTEXT.reset(token)
             self.calls.append(call)
 
 
