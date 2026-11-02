@@ -5,6 +5,17 @@
 Stage 4 的 GPT 评分采用 GPT-4o-mini。文本和图片分别通过 `text` / `image`
 模式执行，均支持 Think → Act → Observe → Reflect 的一次有限反馈闭环。
 
+集群首次接手请先阅读 [任务说明](docs/cluster-task-2026-11-02.zh.md) 和
+[完整交接](docs/cluster-handoff-2026-11-02.zh.md)。集群尚未有源码时，可在新工作目录执行：
+
+```bash
+git clone --branch pipeline-refactor https://github.com/Roglic-SWQ/TAOR.git TAOR
+cd TAOR
+```
+
+两份交接文档随实现基点 `74bcea4` 之后的文档提交提供。模型、真实数据、凭据和完整运行产物
+需要另行准备；先核对现场资源与现有任务，再按任务书完成修复和单实体验证。
+
 | 阶段 | 职责 |
 | --- | --- |
 | Stage 0 | 程序保存完整一跳事实目录，去重并保留方向，不调用 LLM 硬删关系 |
