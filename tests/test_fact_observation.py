@@ -23,7 +23,7 @@ from mmkgc.ranking.scorers.gpt4omini_judge import (
     GPT4OMiniJudgeParseError, GPT4OMiniRankingJudge,
 )
 from mmkgc.stages.generation import build_stage3_feedback, safer_relation_alternation_generation
-from mmkgc.stages.modeling import apply_knowledge_response, build_knowledge_input
+from mmkgc.stages.modeling import apply_knowledge_response, build_legacy_knowledge_input as build_knowledge_input
 from mmkgc.stages.plan_context import compile_plan_context, ranking_knowledge
 from mmkgc.stages.relation_planning import apply_relation_plans
 

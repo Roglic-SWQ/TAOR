@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import time
 from typing import Any
+from mmkgc.plan_schema import FACT_GROUNDED_SCHEMAS as CANDIDATE_PLAN_SCHEMAS
 
 from mmkgc.ranking.context import (
     RankingContext,
@@ -14,6 +15,7 @@ from mmkgc.ranking.context import (
     build_structured_kg_triples,
     build_visual_constraint_text,
     candidate_generated_text,
+    candidate_ranking_context,
 )
 from mmkgc.ranking.contracts import (
     GateResult,
@@ -47,6 +49,10 @@ JUDGE_OUTPUT_SCORER_NAME = "gpt4omini_judge"
 
 class ModelFusionRankingEngine:
     """Coordinate Stage 4 ranker modules without owning model logic."""
+
+    # Exposed per instance so run metadata can record the value this engine
+    # actually stamps into every ranking payload.
+    score_version = SCORE_VERSION
 
     def __init__(
         self,
@@ -402,24 +408,40 @@ class ModelFusionRankingEngine:
         modality: str,
         survivors: list[tuple[int, dict[str, Any]]],
     ):
-        """Run independent remote calls concurrently; merge results in input order."""
-        if not survivors:
-            return
+        """Run independent remote judge calls concurrently; merge in input order."""
 
         def invoke(entry):
             _index, candidate = entry
             started = time.perf_counter()
             try:
+                scoped = (_ScorerSafeContext(candidate_ranking_context(
+                    context._context if isinstance(context, _ScorerSafeContext) else context, candidate))
+                          if candidate.get("plan_schema_version") in CANDIDATE_PLAN_SCHEMAS else context)
                 if modality == "text":
-                    result = judge.judge_text(context, _plain(candidate))
+                    result = judge.judge_text(scoped, _plain(candidate))
                 else:
                     result = judge.judge_image(
-                        context, _plain(candidate),
+                        scoped, _plain(candidate),
                         image_input=self._image_input_for(context, candidate),
                     )
                 return result, None, int((time.perf_counter() - started) * 1000)
             except Exception as exc:
                 return None, exc, int((time.perf_counter() - started) * 1000)
+
+        yield from self._remote_candidate_calls(
+            survivors, invoke, thread_name="mmkgc-gpt-judge",
+        )
+
+    def _remote_candidate_calls(
+        self,
+        survivors: list[tuple[int, dict[str, Any]]],
+        invoke: Any,
+        *,
+        thread_name: str,
+    ):
+        """Schedule independent remote calls; yield outcomes in input order."""
+        if not survivors:
+            return
 
         workers = self.profile.gpt4omini_judge.max_concurrency
         if self.judge_wait_callback is None and (workers == 1 or len(survivors) < 2):
@@ -427,7 +449,7 @@ class ModelFusionRankingEngine:
                 yield invoke(entry)
             return
         with ThreadPoolExecutor(
-            max_workers=min(workers, len(survivors)), thread_name_prefix="mmkgc-gpt-judge",
+            max_workers=min(workers, len(survivors)), thread_name_prefix=thread_name,
         ) as executor:
             # Workers never modify candidate scores, logs, or local GPU models.
             futures = [executor.submit(invoke, entry) for entry in survivors]
@@ -449,10 +471,9 @@ class ModelFusionRankingEngine:
         failed_optional_scorers: list[str],
     ) -> None:
         texts = [candidate_generated_text(candidate) for _index, candidate in survivors]
-        reference = build_kg_reference(context, "text")
         if "sentence_bert" in self.scorers and texts:
             try:
-                scores = self.scorers["sentence_bert"].score_candidates(reference, texts)
+                scores = _score_candidate_texts(self.scorers["sentence_bert"], context, survivors)
                 _validate_score_batch("sentence_bert", scores, len(texts))
             except Exception as exc:
                 if "sentence_bert" in optional_scorers:
@@ -484,7 +505,7 @@ class ModelFusionRankingEngine:
                     )
         if "bertscore" in self.scorers and texts:
             try:
-                scores = self.scorers["bertscore"].score_candidates(reference, texts)
+                scores = _score_candidate_texts(self.scorers["bertscore"], context, survivors)
                 _validate_score_batch("bertscore", scores, len(texts))
             except Exception as exc:
                 if "bertscore" in optional_scorers:
@@ -516,19 +537,30 @@ class ModelFusionRankingEngine:
                             result=score,
                         )
                     )
-        target_triples = build_structured_kg_triples(context, "text")
         extractor = self.scorers.get(_JUDGE_SCORER_KEY)
-        for index, candidate in survivors:
-            if extractor is None or not hasattr(extractor, "extract_text_graph"):
-                raise RequiredScorerError(
-                    "gpt4omini_judge must support extract_text_graph for structured KG alignment"
-                )
+        if survivors and (extractor is None or not hasattr(extractor, "extract_text_graph")):
+            raise RequiredScorerError(
+                "gpt4omini_judge must support extract_text_graph for structured KG alignment"
+            )
+
+        def extract(entry):
+            _index, candidate = entry
             try:
-                candidate_graph = extractor.extract_text_graph(_plain(candidate))
+                return extractor.extract_text_graph(_plain(candidate)), None
             except Exception as exc:
+                return None, exc
+
+        # Graph extraction is a remote judge call; run it under the same
+        # bounded concurrency as judging, keeping the audit loop in input order.
+        outcomes = self._remote_candidate_calls(
+            survivors, extract, thread_name="mmkgc-gpt-extract",
+        )
+        for (index, candidate), (candidate_graph, exc) in zip(survivors, outcomes, strict=True):
+            if exc is not None:
                 raise RequiredScorerError(
                     f"text graph extraction failed: {type(exc).__name__}"
                 ) from exc
+            target_triples = build_structured_kg_triples(candidate_ranking_context(context, candidate), "text")
             alignment = structured_kg_alignment(
                 target_triples,
                 candidate_graph.get("triples", []),
@@ -696,6 +728,22 @@ class ModelFusionRankingEngine:
         if failed_optional_scorers:
             return "degraded"
         return "completed"
+
+
+def _score_candidate_texts(scorer, context, survivors):
+    groups = {}
+    for index, (_slot, candidate) in enumerate(survivors):
+        scoped = candidate_ranking_context(context, candidate)
+        reference = build_kg_reference(scoped, "text")
+        groups.setdefault(reference, []).append((index, candidate_generated_text(candidate)))
+    scores = [None] * len(survivors)
+    for reference, entries in groups.items():
+        batch = scorer.score_candidates(reference, [text for _index, text in entries])
+        if len(batch) != len(entries):
+            raise ValueError("text scorer returned the wrong batch size")
+        for (index, _text), score in zip(entries, batch, strict=True):
+            scores[index] = score
+    return scores
 
 
 def _gate_payload(gate: GateResult) -> dict[str, Any]:

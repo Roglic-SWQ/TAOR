@@ -49,7 +49,10 @@ def build_parser() -> argparse.ArgumentParser:
             "are selected in manifest order before applying --limit."
         ),
     )
-    parser.add_argument("--candidate-budget", type=int, default=5)
+    parser.add_argument("--candidate-budget", type=int, default=None,
+                        help="Generation budget, independent of selected facts; defaults to text=1, image=3.")
+    parser.add_argument("--max-selected-facts", type=int, default=64,
+                        help="Maximum facts selected by Stage 2; the model may choose fewer.")
     parser.add_argument(
         "--continue-on-error", action="store_true",
         help="Record failed entities and test the remaining records; exit nonzero if any fail.",
@@ -57,13 +60,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--stage1-reranker-model-dir",
         default="Qwen3-Reranker-4B",
-        help="Local Qwen3-Reranker directory used for Stage 1 evidence matching.",
+        help="Local Qwen3-Reranker directory used for task-relevance coarse retrieval.",
     )
     parser.add_argument(
         "--stage1-reranker-device", default="cuda:0",
         help="Explicit device for the local Stage 1 reranker; no automatic device fallback.",
     )
     parser.add_argument("--stage1-reranker-max-length", type=int, default=8192)
+    parser.add_argument("--relevance-fact-budget", type=int, default=64,
+                        help="Facts shown to Stage 2 after relevance ranking; full catalogue is retained.")
     parser.add_argument("--stage1-model-config", default="configs/qwen7b-stage1.yaml")
     parser.add_argument("--stage2-model-config", default="configs/qwen7b-stage2.yaml")
     parser.add_argument("--output-root", default="outputs")
@@ -106,6 +111,9 @@ def validate_dataset_dir(dataset_dir: str | Path) -> Path:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    candidate_budget = args.candidate_budget
+    if candidate_budget is None:
+        candidate_budget = 1 if args.missing_mode == "text" else 3
     image_generator_mode = (
         "sdxl-local" if args.missing_mode == "image" else "not-required"
     )
@@ -134,7 +142,9 @@ def main(argv: list[str] | None = None) -> int:
 
     runtime = build_default_mainline_runtime(
         missing_mode=args.missing_mode,
-        candidate_budget=args.candidate_budget,
+        candidate_budget=candidate_budget,
+        max_selected_facts=args.max_selected_facts,
+        relevance_fact_budget=args.relevance_fact_budget,
         stage1_reranker_model_dir=args.stage1_reranker_model_dir,
         stage1_reranker_device=args.stage1_reranker_device,
         stage1_reranker_max_length=args.stage1_reranker_max_length,
@@ -159,7 +169,9 @@ def main(argv: list[str] | None = None) -> int:
     image_generator_mode = runtime.image_generator_mode
     profile = getattr(getattr(pipeline, "ranking_engine", None), "profile", None)
     stage4_profile_name = getattr(profile, "profile_name", None)
-    stage4_score_version = "stage4_structured_graph_v3"
+    stage4_score_version = getattr(
+        getattr(pipeline, "ranking_engine", None), "score_version", None,
+    )
     relation_planner = getattr(pipeline, "relation_planner", None)
     stage2_model_config = getattr(relation_planner, "config", None)
 
@@ -171,12 +183,15 @@ def main(argv: list[str] | None = None) -> int:
         "limit": args.limit,
         "entity_manifest": args.entity_manifest,
         "selected_entity_count": len(records),
-        "candidate_budget": args.candidate_budget,
+        "candidate_budget": candidate_budget,
+        "max_selected_facts": args.max_selected_facts,
         "continue_on_error": args.continue_on_error,
         "stage1_reranker": "qwen3-reranker-local",
         "stage1_reranker_model_dir": args.stage1_reranker_model_dir,
         "stage1_reranker_device": args.stage1_reranker_device,
         "stage1_reranker_max_length": args.stage1_reranker_max_length,
+        "relevance_fact_budget": args.relevance_fact_budget,
+        "reranker_role": "task_relevance_coarse_retrieval",
         "stage1_model_config": args.stage1_model_config,
         "stage2_model_config": args.stage2_model_config,
         "output_root": args.output_root,

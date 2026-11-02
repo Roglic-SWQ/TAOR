@@ -8,9 +8,10 @@ import pytest
 from mmkgc.data import EntityRecord
 from mmkgc.generation_prompts import PROMPT_VERSION, QWEN_PROMPT_VERSION
 from mmkgc.stages.modeling import (
-    KnowledgeResponseValidationError, apply_knowledge_response, build_knowledge_input, knowledge_response_errors,
+    KnowledgeResponseValidationError, apply_knowledge_response,
+    build_legacy_knowledge_input as build_knowledge_input, knowledge_response_errors,
 )
-from mmkgc.stages.semantic import StrictJsonStagePlanner
+from mmkgc.stages.semantic import LegacyKnowledgeStagePlanner as StrictJsonStagePlanner
 
 
 def fixture(mode='image'):

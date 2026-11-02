@@ -23,7 +23,7 @@ class EntityRecord:
     label: str
     description: str
     neighbors: List[Dict[str, Any]]
-    existing_modalities: Dict[str, Optional[str]]
+    existing_modalities: Dict[str, Any]
     ground_truth_modalities: Dict[str, Optional[str]]
     modality_completion_policy: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 

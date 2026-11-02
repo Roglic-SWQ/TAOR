@@ -10,6 +10,7 @@ import json
 from typing import Any
 
 from mmkgc.data import EntityRecord
+from mmkgc.stages.evidence_sampling import compact_stage0_evidence
 from mmkgc.stages.semantic import (
     _compact_knowledge, _compact_reasoning, _compact_selection, _head_list,
     _prompt_record_payload, _scrub_ground_truth_keys, _stage_contract, _truncate_text,
@@ -36,7 +37,7 @@ def build_stage_prompt(
 ) -> str:
     payload = {
         "stage": stage,
-        "record": _prompt_record_payload(stage, record),
+        "record": _prompt_record_payload(stage, record, deterministic),
         "missing_mode": missing_mode,
         "deterministic_output": _prompt_deterministic_output(stage, deterministic),
         "prior_stage_outputs": _prompt_prior_outputs(stage, prior),
@@ -53,7 +54,11 @@ def build_stage_prompt(
             "Do not introduce relations absent from deterministic_output or prior_stage_outputs.",
             "Prefer conservative supported facts over creative inferences.",
             "Use only keys shown in Response JSON shape.",
-            _stage_response_size_instruction(stage),
+            ("Select all useful shown relation/direction candidates; there is no fixed three-item limit. "
+             "Evidence and record neighbors are representative samples of a complete stored catalogue, "
+             "not an exhaustive neighborhood. Keep selection reasons concise."
+             if stage == "stage0_coarse" and deterministic.get("evidence_sampling")
+             else _stage_response_size_instruction(stage)),
             "Do not include evidence_triples, neighbor_entities, source, subject, predicate, object, modality_usage, risk, or policy fields unless they are explicitly shown in Response JSON shape.",
             "Response JSON shape:",
             json.dumps(response_shape, ensure_ascii=False, sort_keys=True),
@@ -153,6 +158,8 @@ def _prompt_prior_outputs(stage: str, prior: dict[str, Any]) -> Any:
 
 
 def _compact_coarse(coarse: dict[str, Any]) -> dict[str, Any]:
+    if coarse.get("evidence_sampling"):
+        return compact_stage0_evidence(coarse, include_selection_limit=False)
     relation_candidates = coarse.get("high_recall_relation_candidates")
     if not isinstance(relation_candidates, list):
         relation_candidates = coarse.get("cleaned_relation_groups")

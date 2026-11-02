@@ -58,6 +58,9 @@ def local_relation_json_schema() -> dict[str, Any]:
 def local_semantic_json_schema(prompt: str) -> dict[str, Any]:
     """Constrain syntax/types and preserve the targeted-repair evidence contract."""
     payload = _payload_from_prompt(prompt)
+    if isinstance(payload, dict) and payload.get("schema") in {"grounded_triples_v1", "grounded_triples_v2"}:
+        from mmkgc.stages.triples import triple_response_schema
+        return triple_response_schema(payload)
     if isinstance(payload, dict) and payload.get("repair_kind") == "stage1_targeted_repair_v1":
         return payload["response_schema"]
     if not all(f'"{key}"' in prompt for key in ('entity_profile', 'text_visual_profile', 'relation_facts')):

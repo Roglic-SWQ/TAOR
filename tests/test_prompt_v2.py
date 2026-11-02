@@ -7,12 +7,12 @@ import pytest
 
 from mmkgc.adapters.qwen import QwenConfig, QwenLocalImagePromptGenerator, QwenLocalTextGenerator
 from mmkgc.data import EntityRecord
-from mmkgc.generation_prompts import PROMPT_VERSION
+from mmkgc.generation_prompts import IMAGE_PROMPT_VERSION, PROMPT_VERSION, TEXT_PROMPT_VERSION
 from mmkgc.stages.generation import relation_alternation_generation, safer_relation_alternation_generation
-from mmkgc.stages.modeling import apply_knowledge_response, build_knowledge_input
+from mmkgc.stages.modeling import apply_knowledge_response, build_legacy_knowledge_input as build_knowledge_input
 from mmkgc.stages.plan_context import compile_plan_context
 from mmkgc.stages.relation_planning import apply_relation_plans
-from mmkgc.stages.semantic import SemanticStageParseError, StrictJsonStagePlanner
+from mmkgc.stages.semantic import SemanticStageParseError, LegacyKnowledgeStagePlanner as StrictJsonStagePlanner
 
 
 def _record(mode="image"):
@@ -193,4 +193,4 @@ def test_stage3_requests_separate_evidence_requirements_and_rendering(monkeypatc
         assert "Paris" not in candidate["positive_prompt"]
     else:
         assert "non_visual_facts" not in payload["identity_context"]
-    assert result["model_calls"][0]["prompt_version"] == PROMPT_VERSION
+    assert result["model_calls"][0]["prompt_version"] == (TEXT_PROMPT_VERSION if mode == "text" else IMAGE_PROMPT_VERSION)

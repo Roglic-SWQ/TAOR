@@ -26,7 +26,10 @@ class KnowledgeRepairTask:
 
 
 def targeted_knowledge_repair(inputs, response, errors) -> KnowledgeRepairTask | None:
-    """Request only unambiguous invalid fields and missing/empty claims."""
+    """Request only unambiguous invalid fields and missing/empty v1 claims."""
+    from mmkgc.stages.triples import TRIPLE_SCHEMAS
+    if inputs.get("schema") in TRIPLE_SCHEMAS:
+        return None
     if not isinstance(response, dict) or not errors:
         return None
     expected = {f["fact_id"]: f for f in inputs["fact_candidates"]}

@@ -11,6 +11,8 @@ from typing import Any
 
 from mmkgc.utils import tokenize
 from mmkgc.utils import write_json
+from mmkgc.plan_schema import (FACT_GROUNDED_SCHEMAS as CANDIDATE_PLAN_SCHEMAS,
+                              LEGACY_CANDIDATE_PLAN_SCHEMA, FACT_SELECTION_SCHEMA)
 
 
 STAGE_FILES = [
@@ -289,6 +291,18 @@ def _compact_stage0_coarse(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _compact_stage1_modeling(payload: dict[str, Any]) -> dict[str, Any]:
+    if payload.get("schema_version") in {"grounded_triples_v1", "grounded_triples_v2"}:
+        v3 = payload["stage1_v3"]
+        return {
+            "schema_version": payload["schema_version"], "entity": payload["entity"],
+            "entity_profile": v3["entity_profile"], "triples": payload["relation_facts"],
+            "uncertain_aspects": v3.get("uncertain_aspects", []),
+            "evidence_catalog": payload["evidence_catalog"],
+            "modality_state": v3["modality_state"],
+            **({"relevance_selection": payload["relevance_selection"]} if "relevance_selection" in payload else {}),
+            **{key: payload[key] for key in ("image_modeling", "media_modeling", "source_inputs") if key in payload},
+            **({"evidence_selection": v3["evidence_selection"]} if "evidence_selection" in v3 else {}),
+        }
     explicit_v3 = payload.get("stage1_v3")
     if isinstance(explicit_v3, dict):
         compact = dict(explicit_v3)
@@ -427,6 +441,21 @@ def _relation_refs(items: Any) -> list[str]:
 
 
 def _compact_stage2_selection(payload: dict[str, Any]) -> dict[str, Any]:
+    if payload.get("schema_version") == FACT_SELECTION_SCHEMA:
+        return {"schema_version": payload["schema_version"], "status": payload["status"],
+                "target_modalities": list(payload["target_modality"]),
+                "max_selected_facts": payload["max_selected_facts"],
+                "selected_fact_ids": list(payload["selected_fact_ids"])}
+    if payload.get("schema_version") in CANDIDATE_PLAN_SCHEMAS:
+        return {
+            "schema_version": payload["schema_version"], "status": payload["status"],
+            "target_modalities": list(payload["target_modality"]),
+            "candidate_budget": payload["candidate_budget"],
+            "candidates": [{key: item[key] for key in (
+                ("plan_id", "fact_ids", "focus") if payload["schema_version"] == LEGACY_CANDIDATE_PLAN_SCHEMA
+                else ("plan_id", "fact_ids"))}
+                           for item in payload["candidates"]],
+        }
     relation_plans, global_constraint_refs = _compact_stage2_relation_plans(payload)
     compact: dict[str, Any] = {
         "target_modalities": list(payload.get("target_modality") or payload.get("target_modalities") or []),
@@ -722,6 +751,11 @@ def _compact_stage3_candidate(item: Any) -> tuple[Any, list[str]]:
         compact["source_candidate_id"] = item.get("source_candidate_id")
     if item.get("verification_targets") is not None:
         compact["verification_targets"] = item["verification_targets"]
+    if item.get("plan_schema_version") in CANDIDATE_PLAN_SCHEMAS:
+        compact.update(plan_schema_version=item["plan_schema_version"],
+                       source_fact_refs=list(item["source_fact_refs"]))
+        if item["plan_schema_version"] == LEGACY_CANDIDATE_PLAN_SCHEMA:
+            compact["focus"] = item["focus"]
     content = _stage3_compact_generated_content(item.get("generated_content"))
     if content:
         if content.get("type") == "text":
@@ -1164,13 +1198,13 @@ def _stage_summary(stage: str, data: Any) -> dict[str, Any]:
             "high_recall_relation_count": len(decisions.get("high_recall_relation_ids", [])),
         }
     if stage == "knowledge_modeling":
-        if data.get("schema_version") == "qwen_grounded_knowledge_v1":
-            facts = data.get("relation_facts", [])
+        if data.get("schema_version") in {"qwen_grounded_knowledge_v1", "grounded_triples_v1", "grounded_triples_v2"}:
+            facts = data.get("triples", data.get("relation_facts", []))
             return {
                 "primary_type": data.get("entity_profile", {}).get("primary_type"),
                 "relation_fact_count": len(facts),
-                "scored_fact_count": sum(fact.get("scoring_status") == "scored" for fact in facts),
-                "unscored_fact_count": sum(fact.get("evidence_match_score") is None for fact in facts),
+                "scored_fact_count": sum(fact.get("relevance_status", fact.get("scoring_status")) == "scored" for fact in facts),
+                "unscored_fact_count": sum(fact.get("relevance_score", fact.get("evidence_match_score")) is None for fact in facts),
                 "evidence_count": len(data.get("evidence_catalog", [])),
                 "target_modalities": data.get("modality_state", {}).get("targets", []),
             }
@@ -1231,6 +1265,15 @@ def _stage_summary(stage: str, data: Any) -> dict[str, Any]:
             )
         return summary
     if stage == "fine_grained_relation_selection":
+        if data.get("schema_version") == FACT_SELECTION_SCHEMA:
+            return {"max_selected_facts": data["max_selected_facts"],
+                    "selected_fact_count": len(data["selected_fact_ids"]),
+                    "target_modalities": data["target_modalities"], "status": data["status"]}
+        if data.get("schema_version") in CANDIDATE_PLAN_SCHEMAS:
+            candidates = data["candidates"]
+            return {"candidate_budget": data["candidate_budget"], "planned_candidate_count": len(candidates),
+                    "selected_fact_count": len({ref for item in candidates for ref in item["fact_ids"]}),
+                    "target_modalities": data["target_modalities"], "status": data["status"]}
         relation_plans = data.get("relation_plans", [])
         if isinstance(relation_plans, list):
             roles = Counter(

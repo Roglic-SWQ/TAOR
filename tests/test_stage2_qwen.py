@@ -8,7 +8,8 @@ import pytest
 
 from mmkgc.adapters.qwen import QwenConfig
 from mmkgc.adapters.relation_planner import (
-    GPT4oMiniRelationPlanner, OpenAICompatibleRelationPlanner, _qwen_planning_messages, QWEN_STAGE2_SYSTEM,
+    LegacyRelationPlanner as GPT4oMiniRelationPlanner,
+    LegacyRelationPlanner as OpenAICompatibleRelationPlanner, _qwen_planning_messages, QWEN_STAGE2_SYSTEM,
 )
 from mmkgc.stages.relation_planning import candidate_slot_response_schema
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import csv
+from itertools import islice
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -214,24 +215,35 @@ class MKGWDataStore:
         max_neighbors: int,
     ) -> List[Dict[str, Any]]:
         items = []
+        if max_neighbors <= 0:
+            return items
+        # Round-robin relation/direction groups so one frequent relation cannot
+        # consume the entire bounded second-hop context by file position.
+        groups: Dict[tuple[int, str], list[Dict[str, Any]]] = {}
         for neighbor in self._adjacency.get(entity_id, []):
-            if neighbor["entity_id"] == source_entity_id:
-                continue
+            if neighbor["entity_id"] != source_entity_id:
+                groups.setdefault((neighbor["relation_id"], neighbor["direction"]), []).append(neighbor)
+        buckets = [sorted(groups[key], key=lambda item: item["entity_id"]) for key in sorted(groups)]
+        ordered = (bucket[index] for index in range(min(max_neighbors, max(map(len, buckets), default=0)))
+                   for bucket in buckets if index < len(bucket))
+        for neighbor in islice(ordered, max_neighbors):
             items.append(self._neighbor_payload(neighbor))
-            if len(items) >= max_neighbors:
-                break
         return items
 
     def neighbors(
         self,
         entity_id: int,
-        max_neighbors: int = 32,
+        max_neighbors: int | None = None,
         max_second_hop_neighbors: int = 8,
     ) -> List[Dict[str, Any]]:
+        """Keep every first-hop edge by default; only model views are compressed."""
+        if max_neighbors is not None and (type(max_neighbors) is not int or max_neighbors < 0):
+            raise ValueError("max_neighbors must be a nonnegative integer or None")
         items = []
         for neighbor in self._adjacency.get(entity_id, [])[:max_neighbors]:
             neighbor_id = neighbor["entity_id"]
             item = self._neighbor_payload(neighbor)
+            item["graph_degree"] = len(self._adjacency.get(neighbor_id, []))
             item["neighbors"] = self._second_hop_neighbors(
                 neighbor_id,
                 source_entity_id=entity_id,

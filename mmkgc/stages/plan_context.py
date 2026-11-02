@@ -6,6 +6,9 @@ from copy import deepcopy
 from typing import Any
 
 from mmkgc.observation import compile_verification_targets
+from mmkgc.stages.candidate_planning import PLAN_SCHEMAS, SELECTION_SOURCE as CANDIDATE_SOURCE
+from mmkgc.stages.triples import fact_text
+from mmkgc.plan_schema import FACT_SELECTION_SCHEMA
 
 SELECTION_SOURCE = "stage2_fact_plan"
 
@@ -14,6 +17,15 @@ def compile_plan_context(
     knowledge: dict[str, Any], selection: dict[str, Any], missing_mode: str
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Translate decisions without re-evaluating credibility or changing any quota."""
+    schema = selection["fine_grained_relation_selection"].get("schema_version")
+    if schema == FACT_SELECTION_SCHEMA:
+        selection = deepcopy(selection)
+        payload = selection["fine_grained_relation_selection"]
+        payload["candidates"] = ([{"plan_id": "fs:shared", "fact_ids": list(payload["selected_fact_ids"])}]
+                                 if payload["status"] == "ready" else [])
+        return _compile_candidate_context(knowledge, selection, missing_mode)
+    if schema in PLAN_SCHEMAS:
+        return _compile_candidate_context(knowledge, selection, missing_mode)
     result = deepcopy(selection)
     payload = result["fine_grained_relation_selection"]
     plans = {
@@ -38,7 +50,7 @@ def compile_plan_context(
         role = item["relation_role"]
         return {
             "constraint_id": f"constraint:{missing_mode}:{fact['fact_id']}",
-            "constraint": fact["claim"],
+            "constraint": fact_text(fact),
             "constraint_type": "context" if role == "context" else "grounded_fact",
             "source": "relation_plan", "source_relations": [fact["relation"]],
             "source_fact_refs": [fact["fact_id"]],
@@ -83,6 +95,62 @@ def compile_plan_context(
                                for item in payload[f"{role}_relations"]],
             "context_only": context,
         }},
+        "constraint_policy": {"ground_truth_used": False},
+    }
+
+
+def _compile_candidate_context(knowledge, selection, modality):
+    result = deepcopy(selection)
+    payload = result["fine_grained_relation_selection"]
+    facts = {fact["fact_id"]: fact for fact in knowledge["relation_facts"]}
+    profile = knowledge["stage1_v3"]["entity_profile"]
+    identity = []
+    if profile.get("evidence_refs"):
+        identity = [{
+            "constraint_id": f"constraint:{modality}:identity", "constraint": profile["core_identity"],
+            "constraint_type": "identity", "evidence_refs": list(profile["evidence_refs"]),
+            "source_fact_refs": [], "source_relations": [], "evidence_triples": [],
+            "selection_source": CANDIDATE_SOURCE,
+        }]
+    selected = {}
+
+    def requirement(fact):
+        return {
+            "constraint_id": f"constraint:{modality}:{fact['fact_id']}",
+            "constraint": fact_text(fact), "constraint_type": "grounded_fact",
+            "source_fact_refs": [fact["fact_id"]], "source_relations": [fact["relation"]],
+            "evidence_refs": list(fact["evidence_refs"]),
+            "evidence_triples": list(fact.get("evidence_triples", [])),
+            "selection_source": CANDIDATE_SOURCE,
+        }
+
+    for candidate in payload["candidates"]:
+        candidate["plan_schema_version"] = payload["schema_version"]
+        sources = [deepcopy(facts[ref]) for ref in candidate["fact_ids"]]
+        for fact in sources:
+            selected[fact["fact_id"]] = {
+                **fact, "fact": fact_text(fact),
+                "source_fact_refs": [fact["fact_id"]], "source_relations": [fact["relation"]],
+                "usable_for": [modality], "selection_source": CANDIDATE_SOURCE,
+            }
+        candidate["source_facts"] = sources
+        candidate["relation"] = "; ".join(dict.fromkeys(fact["relation"] for fact in sources))
+        candidate["source_fact_refs"] = list(candidate["fact_ids"])
+        candidate["evidence_triples"] = list(dict.fromkeys(
+            triple for fact in sources for triple in fact.get("evidence_triples", [])))
+        image_views = payload["schema_version"] == FACT_SELECTION_SCHEMA and modality == "image"
+        requirements = [requirement(fact) for fact in sources]
+        candidate["generation_context"] = {
+            "must_include": [*deepcopy(identity), *([] if image_views else requirements)],
+            "should_include": requirements if image_views else [], "context_only": [],
+        }
+        candidate["verification_targets"] = compile_verification_targets(
+            candidate["generation_context"], knowledge, modality)
+    return result, {
+        "schema_version": payload["schema_version"], "supported_facts": list(selected.values()), "safe_inferences": [],
+        "uncertain_facts": deepcopy(knowledge.get("uncertainties", [])),
+        "modality_constraints": {modality: {"must_include": identity,
+            "should_include": [requirement(fact) for fact in selected.values()], "context_only": []}},
         "constraint_policy": {"ground_truth_used": False},
     }
 

@@ -6,6 +6,8 @@ from copy import deepcopy
 import json
 import re
 
+from mmkgc.generation_prompts import IMAGE_PROMPT_VERSION, build_generation_prompt, generation_payload
+
 REPAIR_VERSION = 'qwen_image_prompt_source_rebuild_v1'
 REPAIR_SCHEMA = {
     'type': 'object', 'additionalProperties': False,
@@ -27,9 +29,21 @@ def validate_positive_prompt(text: str) -> None:
         raise ValueError('positive_prompt repeats the same four-word phrase three or more times')
 
 
-def compact_repair_prompt(label, entity_type, relation, angle, facts, context, error):
+def compact_repair_prompt(label, entity_type, relation, angle, facts, context, error, *, prompt_version=None):
     # The same evidence and constraints are retained; no invalid response text
     # or target modality/ground-truth fields are introduced into this request.
+    if (prompt_version == IMAGE_PROMPT_VERSION
+            or context.get('fact_format') in {'grounded_triples_v1', 'grounded_triples_v2'}
+            or context.get('task', {}).get('presentation_policy') == 'stage3'):
+        payload = generation_payload(label, entity_type, relation, angle, facts, context)
+        payload['validation_error'] = str(error)[:250]
+        return (
+            'The previous output was invalid. Create one fresh prompt JSON from the original '
+            'selected facts, retaining the same evidence and depiction rules. For this repair, '
+            'positive_prompt must fit within 400 characters and both audit lists within '
+            '3 short strings each. Do not reproduce the invalid output.\n'
+            + build_generation_prompt('image', payload)
+        )
     source = {'entity_label': label, 'entity_type': entity_type, 'relation': relation,
               'generation_angle': angle, 'grounded_facts': list(dict.fromkeys(facts))[:8]}
     for key in ('entity_text_excerpt', 'text_visual_cues', 'text_context_cues', 'relation_plan',

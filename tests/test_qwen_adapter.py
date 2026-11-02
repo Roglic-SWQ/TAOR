@@ -574,7 +574,9 @@ def test_image_prompt_generator_uses_fresh_repair_prompt_for_length_truncation(m
     repair_prompt = requests[1]["messages"][1]["content"]
     assert result["positive_prompt"] == "a concise medieval stone town landscape"
     assert initial_content not in repair_prompt
-    assert "Discard it completely" in repair_prompt
+    assert "Do not reproduce the invalid output" in repair_prompt
+    assert "Example Place is a place" in repair_prompt
+    assert "INPUT_JSON:" in repair_prompt
     assert call["initial_finish_reason"] == "length"
     assert call["repaired_finish_reason"] == "stop"
     assert call["max_tokens"] == 384

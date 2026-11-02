@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import math
 from pathlib import Path
 from typing import Any
@@ -11,6 +11,7 @@ from typing import Any
 from mmkgc.ranking.contracts import freeze_value
 from mmkgc.ranking.image_input import ImageInput
 from mmkgc.observation import validate_verification_targets
+from mmkgc.plan_schema import FACT_GROUNDED_SCHEMAS as CANDIDATE_PLAN_SCHEMAS, FACT_SELECTION_SCHEMA
 
 
 CONTEXT_SCHEMA_VERSION = "ranking_context_v1"
@@ -38,7 +39,7 @@ _PROFILE_FIELDS = (
 )
 _KEY_ATTRIBUTE_FIELDS = frozenset({"attribute", "attribute_type", "source", "evidence"})
 _RELATION_FACT_FIELDS = (
-    "fact_id", "source_fact_refs", "evidence_refs", "evidence_match_score",
+    "fact_id", "source_fact_refs", "evidence_refs", "evidence_match_score", "source_modalities",
     "selection_source", "selected_role", "source_plan_id",
     "relation",
     "source_relations",
@@ -80,7 +81,7 @@ _RELATION_FACT_FIELDS = (
     "uncertain",
 )
 _SUPPORTED_FACT_FIELDS = (
-    "fact_id", "source_fact_refs", "evidence_refs", "evidence_match_score",
+    "fact_id", "source_fact_refs", "evidence_refs", "evidence_match_score", "source_modalities",
     "selection_source", "selected_role", "source_plan_id",
     "fact",
     "visual_clue",
@@ -126,6 +127,7 @@ _SAFE_INFERENCE_FIELDS = (
     "reason",
 )
 _FACT_SEQUENCE_FIELDS = {
+    "source_modalities",
     "source_fact_refs", "evidence_refs",
     "source_relations",
     "evidence",
@@ -150,6 +152,7 @@ _FACT_ROLE_FIELDS = (
     "priority",
 )
 _CONSTRAINT_FIELDS = (
+    "constraint_id",
     "selection_source", "source_fact_refs", "evidence_refs",
     "constraint",
     "constraint_type",
@@ -173,6 +176,7 @@ _CONSTRAINT_FIELDS = (
 )
 _CONSTRAINT_BUCKETS = ("must_include", "should_include", "context_only", "avoid")
 _CANDIDATE_FIELDS = (
+    "plan_schema_version", "source_plan_id", "source_fact_refs", "focus",
     "candidate_id",
     "source_candidate_id",
     "verification_targets",
@@ -191,6 +195,7 @@ _CANDIDATE_FIELDS = (
     "metadata",
 )
 _CANDIDATE_STRING_FIELDS = {
+    "plan_schema_version", "source_plan_id", "focus",
     "candidate_id",
     "source_candidate_id",
     "target_modality",
@@ -200,6 +205,7 @@ _CANDIDATE_STRING_FIELDS = {
     "status",
 }
 _CANDIDATE_SEQUENCE_FIELDS = {
+    "source_fact_refs",
     "supporting_relations",
     "used_evidence_triples",
     "expected_relation_coverage",
@@ -562,8 +568,10 @@ def _sanitize_constraint(value: Any, bucket: str) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key in _CONSTRAINT_FIELDS:
         item = value.get(key)
-        if key in {"source_relations", "evidence_triples"}:
-            sequence = _strict_provenance_sequence(item)
+        if key in {"source_relations", "evidence_triples", "source_fact_refs", "evidence_refs"}:
+            allow_empty = (key == "source_fact_refs" or
+                           value.get("selection_source") == "stage2_candidate_plan")
+            sequence = _strict_provenance_sequence(item, allow_empty=allow_empty)
             if sequence is not None:
                 result[key] = sequence
             elif item is not None:
@@ -721,7 +729,7 @@ def _sanitize_candidate(value: Any, modality: str) -> dict[str, Any]:
             if (text := _clean_string(item)) is not None:
                 result[key] = text
         elif key in _CANDIDATE_SEQUENCE_FIELDS:
-            sequence = _strict_provenance_sequence(item, allow_empty=key == "supporting_relations")
+            sequence = _strict_provenance_sequence(item, allow_empty=key in {"supporting_relations", "source_fact_refs"})
             if sequence is not None:
                 result[key] = sequence
             elif item is not None:
@@ -787,6 +795,8 @@ def _enrich_fact_provenance(
         if item.get("selection_source") == "stage2_fact_plan"
         and item.get("selected_role") in {"primary", "secondary"} and item.get("fact_id")
     }
+    candidate_facts = {item["fact_id"]: item for item in relation_facts
+                       if item.get("selection_source") == "stage2_candidate_plan" and item.get("fact_id")}
     invalid_relations: set[str] = set()
     enriched_relations = []
     for fact in relation_facts:
@@ -815,6 +825,12 @@ def _enrich_fact_provenance(
         )
         for field_name in _FACT_ROLE_FIELDS:
             item.pop(field_name, None)
+        if item.get("selection_source") == "stage2_candidate_plan":
+            refs = item.get("source_fact_refs", ())
+            if item_invalid or not refs or any(ref not in candidate_facts for ref in refs):
+                item["_invalid_semantics"] = True
+            enriched_supported.append(item)
+            continue
         if item.get("selection_source") == "stage2_fact_plan":
             refs = item.get("source_fact_refs", ())
             matched_plans = [planned_facts[ref] for ref in refs if ref in planned_facts]
@@ -1224,6 +1240,8 @@ def _fact_is_supported(item: Mapping[str, Any]) -> bool:
     for key in ("excluded", "context_only", "uncertain"):
         if key in item and item[key] is not False:
             return False
+    if item.get("selection_source") == "stage2_candidate_plan":
+        return bool(item.get("evidence_refs"))
     if item.get("selection_source") == "stage2_fact_plan":
         return _fact_role(item) in {"primary", "secondary"}
 
@@ -1280,6 +1298,9 @@ def _fact_text(item: Mapping[str, Any]) -> str:
     for key in ("fact", "visual_clue", "clue"):
         if (value := _clean_string(item.get(key))) is not None:
             return value
+    if item.get("subject") and (item.get("relation") or item.get("predicate")) and item.get("object"):
+        from mmkgc.stages.triples import fact_text
+        return fact_text(item)
     return ""
 
 
@@ -1324,7 +1345,7 @@ def _constraint_is_positive(item: Mapping[str, Any]) -> bool:
     for key in ("excluded", "context_only", "uncertain"):
         if key in item and item[key] is not False:
             return False
-    if item.get("selection_source") == "stage2_fact_plan":
+    if item.get("selection_source") in {"stage2_fact_plan", "stage2_candidate_plan"}:
         return item.get("constraint_type") != "context"
     confidence = item.get("confidence")
     if not _positive_labeled_value(
@@ -1383,7 +1404,7 @@ def _supported_reference_facts(context: RankingContext, modality: str) -> list[s
     result = []
     for item in source:
         role = _fact_role(item)
-        if role not in {"primary", "secondary"}:
+        if role not in {"primary", "secondary"} and item.get("selection_source") != "stage2_candidate_plan":
             continue
         if not _fact_is_supported(item):
             continue
@@ -1451,7 +1472,7 @@ def build_structured_kg_triples(
     seen: set[tuple[str, str, str, str]] = set()
     for supported in context.supported_facts:
         role = _fact_role(supported)
-        if role not in {"primary", "secondary"}:
+        if role not in {"primary", "secondary"} and supported.get("selection_source") != "stage2_candidate_plan":
             continue
         if not _fact_is_supported(supported):
             continue
@@ -1871,6 +1892,7 @@ def build_visual_constraint_text(
     clip_safe: bool = False,
 ) -> str:
     """Build positive visual constraints without reading generation instructions."""
+    context = candidate_ranking_context(context, candidate)
     if not isinstance(candidate, Mapping):
         raise TypeError("candidate must be an image candidate mapping")
     target_modality = candidate.get("target_modality")
@@ -1905,3 +1927,32 @@ def build_visual_constraint_text(
     _append_stable(parts, _constraint_texts(context, "image", "should_include"))
     _append_stable(parts, _safe_visual_profile_values(context))
     return _compact_clip_constraint_text(parts) if clip_safe else " ".join(parts)
+
+
+def candidate_ranking_context(context: RankingContext, candidate: Mapping[str, Any]) -> RankingContext:
+    """Scope all new-protocol scoring to the same facts chosen for this candidate."""
+    if candidate.get("plan_schema_version") not in CANDIDATE_PLAN_SCHEMAS:
+        return context
+    refs = set(candidate.get("source_fact_refs", ()))
+    if candidate.get("plan_schema_version") == FACT_SELECTION_SCHEMA:
+        common = {fact.get("fact_id") for fact in context.supported_facts}
+        if refs != common:
+            raise ValueError("shared-fact candidates must use the full common fact reference")
+    target_refs = {target["fact_id"] for target in candidate.get("verification_targets", ()) if target["fact_id"]}
+    if target_refs != refs:
+        raise ValueError("candidate checks do not match its planned facts")
+    supported = tuple(fact for fact in context.supported_facts if fact.get("fact_id") in refs)
+    if not refs or {fact.get("fact_id") for fact in supported} != refs:
+        raise ValueError("candidate fact references do not match the Stage 2 plan")
+    constraints = {item.get("constraint_id"): item
+                   for bucket in context.modality_constraints.get(context.missing_mode, {}).values()
+                   for item in bucket if isinstance(item, Mapping)}
+    buckets = {"must_include": [], "should_include": [], "context_only": []}
+    for target in candidate.get("verification_targets", ()):
+        constraint = constraints.get(target["check_id"])
+        if constraint is None:
+            raise ValueError("candidate check is not in its Stage 2 constraints")
+        buckets[target["requirement"]].append(constraint)
+    return replace(context,
+        relation_facts=tuple(fact for fact in context.relation_facts if fact.get("fact_id") in refs),
+        supported_facts=supported, modality_constraints={context.missing_mode: buckets})

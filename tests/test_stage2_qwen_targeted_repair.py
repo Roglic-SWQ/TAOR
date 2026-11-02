@@ -10,7 +10,7 @@ from mmkgc.adapters.qwen import QwenConfig
 from mmkgc.adapters.qwen_stage2_repair import (
     TASK_MARKER, RepairTask, merge_targeted_response, targeted_repair_tasks,
 )
-from mmkgc.adapters.relation_planner import OpenAICompatibleRelationPlanner
+from mmkgc.adapters.relation_planner import LegacyRelationPlanner as OpenAICompatibleRelationPlanner
 from mmkgc.stages.relation_planning import RelationPlanValidationError, selection_prompt
 
 

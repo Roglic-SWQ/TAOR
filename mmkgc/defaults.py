@@ -54,7 +54,9 @@ def build_default_mainline_pipeline(**kwargs) -> MMKGCPipeline:
 def build_default_mainline_runtime(
     *,
     missing_mode: MissingMode = "text",
-    candidate_budget: int = 5,
+    candidate_budget: int | None = None,
+    max_selected_facts: int = 64,
+    relevance_fact_budget: int = 64,
     stage1_reranker_model_dir: str | Path = "Qwen3-Reranker-4B",
     stage1_reranker_device: str = "cuda:0",
     stage1_reranker_max_length: int = 8192,
@@ -104,9 +106,11 @@ def build_default_mainline_runtime(
     knowledge_planner = QwenLocalSemanticStagePlanner(
         load_qwen_config(stage1_config_path),
         timeout_seconds=model_call_timeout_seconds,
+        dataset_root=resolve_dataset_root(dataset_root),
     )
     relation_planner = OpenAICompatibleRelationPlanner(
-        load_qwen_config(stage2_config_path), timeout_seconds=model_call_timeout_seconds
+        load_qwen_config(stage2_config_path), timeout_seconds=model_call_timeout_seconds,
+        max_selected_facts=max_selected_facts,
     )
     reranker_path = Path(stage1_reranker_model_dir)
     if not reranker_path.is_absolute():
@@ -131,7 +135,8 @@ def build_default_mainline_runtime(
         )
 
     pipeline = MMKGCPipeline(
-        candidate_budget=candidate_budget,
+        candidate_budget=(candidate_budget if candidate_budget is not None else 1 if missing_mode == "text" else 3),
+        relevance_fact_budget=relevance_fact_budget,
         text_generator=text_generator,
         image_prompt_generator=image_prompt_generator,
         image_generator=image_generator,

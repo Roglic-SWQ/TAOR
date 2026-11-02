@@ -17,7 +17,8 @@ from mmkgc.adapters.qwen import (
 from mmkgc.data import EntityRecord
 from mmkgc.generation_prompts import PROMPT_VERSION, QWEN_PROMPT_VERSION
 from mmkgc.stages.generation import relation_alternation_generation, safer_relation_alternation_generation
-from mmkgc.stages.modeling import apply_knowledge_response, build_knowledge_input
+from mmkgc.stages.modeling import apply_knowledge_response, build_legacy_knowledge_input as build_knowledge_input
+from mmkgc.stages.semantic import LegacyKnowledgeStagePlanner
 from mmkgc.stages.plan_context import compile_plan_context
 from mmkgc.stages.relation_planning import apply_candidate_slot_plans, apply_relation_plans
 
@@ -69,7 +70,7 @@ def test_semantic_requests_match_original_backup_including_repair(monkeypatch, c
     if case['stage'] == 'stage0_coarse':
         result = planner.refine_coarse(target, case['mode'], coarse)
     else:
-        result = planner.build_knowledge(target, case['mode'], coarse)
+        result = LegacyKnowledgeStagePlanner.build_knowledge(planner, target, case['mode'], coarse)
     assert [_hash_request(body) for body in requests] == case['expected_request_sha256']
     assert result['semantic_refinement']['prompt_version'] == QWEN_PROMPT_VERSION
     assert planner.calls[-1]['prompt_version'] == QWEN_PROMPT_VERSION

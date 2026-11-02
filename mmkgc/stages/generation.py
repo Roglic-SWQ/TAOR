@@ -11,6 +11,9 @@ from typing import Any
 from mmkgc.adapters import GeneratedImageArtifact, ImageGenerator, ImagePromptGenerator, TextGenerator
 from mmkgc.generation_prompts import PROMPT_VERSION, QWEN_PROMPT_VERSION
 from mmkgc.observation import REPAIR_CONFIDENCE, observation_priority, repair_operations
+from mmkgc.stages.candidate_planning import PLAN_SCHEMA, PLAN_SCHEMAS, LEGACY_PLAN_SCHEMA
+from mmkgc.plan_schema import FACT_SELECTION_SCHEMA
+from mmkgc.stages.triples import TRIPLE_SCHEMAS
 
 
 STAGE_OWNED_METADATA_KEYS = {
@@ -178,6 +181,19 @@ def _relation_sequence(
     candidate_budget: int,
 ) -> list[dict[str, Any]]:
     payload = _selection_payload(selection)
+    if payload.get("schema_version") == FACT_SELECTION_SCHEMA:
+        if payload["status"] == "insufficient_evidence":
+            return []
+        if payload.get("target_modality") != [modality] or len(payload["candidates"]) != 1:
+            raise ValueError("shared fact selection must bind one context for the target modality")
+        return [deepcopy(payload["candidates"][0]) for _ in range(candidate_budget)]
+    if payload.get("schema_version") in PLAN_SCHEMAS:
+        candidates = payload["candidates"]
+        if payload["status"] == "insufficient_evidence":
+            return []
+        if payload.get("target_modality") != [modality] or len(candidates) != candidate_budget:
+            raise ValueError("Stage 2 candidate plan must match modality and candidate_budget")
+        return list(candidates)
     if payload.get("schema_version") == "model_relation_plan_v1" and payload.get("status") == "insufficient_evidence":
         return []
     relations = list(payload.get("primary_relations", [])) + list(payload.get("secondary_relations", []))
@@ -398,7 +414,12 @@ def _model_generation_context(
     context = _generation_context_for_item(item, reasoning, modality)
     by_id = {fact.get("fact_id"): fact for fact in knowledge.get("relation_facts", []) if fact.get("fact_id")}
     source_facts = []
-    if item.get("fact_id"):
+    if item.get("fact_ids"):
+        selected_facts = item["source_facts"]
+        source_facts = [{key: deepcopy(fact[key]) for key in (
+            "fact_id", "claim", "subject", "relation", "object", "direction", "evidence_refs") if key in fact}
+            for fact in selected_facts]
+    elif item.get("fact_id"):
         for fact_id in dict.fromkeys([item["fact_id"], *item.get("supporting_fact_ids", [])]):
             fact = item.get("source_fact") if fact_id == item["fact_id"] else by_id.get(fact_id)
             if not isinstance(fact, Mapping):
@@ -426,7 +447,8 @@ def _model_generation_context(
     for ref, value in catalog.items():
         if ref in selected_refs | identity_refs | context_refs:
             evidence.append({
-                **{key: deepcopy(value[key]) for key in ("evidence_id", "source", "content") if key in value},
+                **{key: deepcopy(value[key]) for key in ("evidence_id", "source", "content", "modality",
+                                                        "locator", "derived_from_modalities") if key in value},
                 "usage": "candidate_fact" if ref in selected_refs else "identity_only" if ref in identity_refs else "context_only",
             })
     visual = knowledge.get("stage1_v3", {}).get("text_visual_profile", knowledge.get("text_visual_profile", {}))
@@ -441,7 +463,10 @@ def _model_generation_context(
     ]
     feedback = regeneration_feedback or {}
     return {
-        "task": {"target_modality": modality, "generation_angle": angle, "diversity_axis": diversity_axis},
+        "task": ({"target_modality": modality, "presentation_policy": "stage3"}
+                 if item.get("plan_schema_version") in {PLAN_SCHEMA, FACT_SELECTION_SCHEMA} else
+                 {"target_modality": modality, "generation_angle": angle, "diversity_axis": diversity_axis}),
+        **({"fact_format": knowledge["schema_version"]} if knowledge.get("schema_version") in TRIPLE_SCHEMAS else {}),
         "source_facts": source_facts, "source_evidence": evidence,
         "must_include": requirements("must_include"), "should_include": requirements("should_include"),
         "context_only": requirements("context_only"), "identity_context": identity,
@@ -546,6 +571,27 @@ def _candidate_base(
     knowledge: dict[str, Any],
     reasoning: dict[str, Any],
 ) -> dict[str, Any]:
+    if item.get("fact_ids"):
+        sources = item["source_facts"]
+        relations = list(dict.fromkeys(fact["relation"] for fact in sources))
+        constraints = _constraints_used(item, reasoning, modality)
+        return {
+            "candidate_id": candidate_id, "target_modality": modality,
+            "plan_schema_version": item["plan_schema_version"], "source_plan_id": item["plan_id"],
+            "source_fact_refs": list(item["fact_ids"]),
+            **({"focus": item["focus"]} if item["plan_schema_version"] == LEGACY_PLAN_SCHEMA else {}),
+            "generation_angle": angle, "primary_relation": relations[0],
+            "supporting_relations": relations[1:],
+            "used_evidence_triples": list(item["evidence_triples"]),
+            "evidence_refs": list(dict.fromkeys(ref for fact in sources for ref in fact["evidence_refs"])),
+            "used_constraints": constraints, "constraint_refs": _constraint_refs(constraints),
+            "verification_targets": deepcopy(item["verification_targets"]),
+            "expected_relation_coverage": relations,
+            "expected_relation_coverage_detail": {"primary": relations[0], "supporting": relations[1:]},
+            "prompt_or_instruction": "", "positive_prompt": "", "generated_content": {},
+            "metadata": {"fallback": False, "plan_schema_version": item["plan_schema_version"],
+                         "entity_type": knowledge.get("entity_profile", {}).get("entity_type", "entity")},
+        }
     used_constraints = _constraints_used(item, reasoning, modality)
     relation = item.get("relation", "global_profile")
     coverage = [] if relation == "global_profile" else [str(relation)]
@@ -655,6 +701,8 @@ def _generate_modality_candidates(
         item["candidate_id"]: item for item in (regeneration_feedback or {}).get("candidate_feedback", [])
     }
     generator = text_generator if modality == "text" else image_prompt_generator
+    shared = _selection_payload(selection).get("schema_version") == FACT_SELECTION_SCHEMA
+    previous_presentations = []
     original_qwen_prompts = getattr(generator, "prompt_version", None) == QWEN_PROMPT_VERSION
     workers = getattr(generator, "max_concurrency", 1)
     if type(workers) is not int or workers < 1:
@@ -665,11 +713,15 @@ def _generate_modality_candidates(
         source_candidate_id = f"{modality}_{index + 1:03d}"
         feedback = repair_by_id.get(source_candidate_id, regeneration_feedback)
         candidate_calls = []
-        angle_specs = _generation_angle_specs(modality, relation_item, knowledge)
-        angle_spec = angle_specs[index % len(angle_specs)]
-        base_angle = angle_spec["angle"]
+        if relation_item.get("plan_schema_version") in {PLAN_SCHEMA, FACT_SELECTION_SCHEMA}:
+            base_angle = "Choose an appropriate presentation of this candidate's selected facts."
+            diversity_axis = "Stage 3 chooses composition and wording from the selected facts."
+        else:
+            angle_specs = _generation_angle_specs(modality, relation_item, knowledge)
+            angle_spec = angle_specs[index % len(angle_specs)]
+            base_angle = relation_item.get("focus") or angle_spec["angle"]
+            diversity_axis = relation_item.get("focus") or angle_spec["diversity_axis"]
         angle = f"safe retry {base_angle}" if safe_variant else base_angle
-        diversity_axis = angle_spec["diversity_axis"]
         if safe_variant:
             diversity_axis = f"safer regeneration of {diversity_axis}"
         facts = _facts_for_relation(relation_item, knowledge, reasoning, modality)
@@ -683,7 +735,7 @@ def _generate_modality_candidates(
             reasoning,
             diversity_axis=diversity_axis,
         )
-        if original_qwen_prompts:
+        if original_qwen_prompts and not relation_item.get("fact_ids"):
             for key in ("must_include", "should_include", "context_only", "evidence_facts"):
                 brief[key] = brief[key][:4]
         base = _candidate_base(
@@ -712,13 +764,23 @@ def _generate_modality_candidates(
             base["metadata"].update(_regeneration_candidate_metadata(regeneration_feedback))
         relation = str(relation_item.get("relation", "global_profile"))
         structured_generate = getattr(generator, "generate_with_context", None)
-        if not getattr(generator, "uses_structured_prompts", True) and not (feedback or {}).get("operations"):
+        if (knowledge.get("schema_version") not in TRIPLE_SCHEMAS
+                and relation_item.get("plan_schema_version") not in {PLAN_SCHEMA, FACT_SELECTION_SCHEMA}
+                and not getattr(generator, "uses_structured_prompts", True)
+                and not (feedback or {}).get("operations")):
             structured_generate = None
+        if shared and not callable(structured_generate):
+            raise ValueError("shared-fact generation requires a structured generation adapter")
         if getattr(generator, "prompt_version", None):
             base["metadata"]["prompt_version"] = generator.prompt_version
         model_context = _model_generation_context(
             knowledge, relation_item, reasoning, modality, angle, diversity_axis, feedback,
         ) if callable(structured_generate) else {}
+        if shared and not safe_variant:
+            model_context["presentation_context"] = {
+                "candidate_index": index + 1, "candidate_budget": candidate_budget,
+                "previous_candidates": list(previous_presentations),
+            }
         legacy_facts = (
             _feedback_facts(feedback) + facts
             if feedback and not original_qwen_prompts else facts
@@ -740,6 +802,7 @@ def _generate_modality_candidates(
             base["metadata"].update(_provider_candidate_metadata(text_generator))
             call = _provider_model_call(text_generator, entity_key, base["candidate_id"])
             if call:
+                base["metadata"].update({key: call[key] for key in ("prompt_version", "fact_format") if key in call})
                 candidate_calls.append(call)
         else:
             if callable(structured_generate):
@@ -767,6 +830,7 @@ def _generate_modality_candidates(
                 base["candidate_id"],
             )
             if prompt_call:
+                base["metadata"].update({key: prompt_call[key] for key in ("prompt_version", "fact_format") if key in prompt_call})
                 candidate_calls.append(prompt_call)
             base["metadata"]["status"] = "planned"
         return base, candidate_calls
@@ -787,7 +851,22 @@ def _generate_modality_candidates(
     entries = list(enumerate(sequence))
     if regeneration_feedback and regeneration_feedback.get("schema_version") == "candidate_fact_repair_v1":
         entries = [(index, item) for index, item in entries if f"{modality}_{index + 1:03d}" in repair_by_id]
-    if workers > 1 and len(entries) > 1:
+    if shared and not safe_variant:
+        prepared = []
+        seen_presentations = {}
+        for entry in entries:
+            base, calls = prepare_with_audit(entry)
+            presentation = base["positive_prompt"] if modality == "image" else base["generated_content"]["value"]
+            key = " ".join(presentation.casefold().split())
+            if key in seen_presentations:
+                for call in calls:
+                    call.update(presentation_disposition="duplicate_skipped", duplicate_of=seen_presentations[key])
+                prepared.append((None, calls))
+                continue
+            seen_presentations[key] = base["candidate_id"]
+            previous_presentations.append(presentation)
+            prepared.append((base, calls))
+    elif workers > 1 and len(entries) > 1:
         with ThreadPoolExecutor(
             max_workers=min(workers, len(sequence)), thread_name_prefix="mmkgc-stage3",
         ) as executor:
@@ -798,6 +877,8 @@ def _generate_modality_candidates(
     # Merge in candidate order and keep the shared local GPU pipeline on the caller thread.
     for base, candidate_calls in prepared:
         model_calls.extend(candidate_calls)
+        if base is None:
+            continue
         if modality == "image":
             if image_generator is not None:
                 artifact = image_generator.generate(

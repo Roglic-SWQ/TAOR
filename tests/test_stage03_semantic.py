@@ -12,7 +12,7 @@ from mmkgc.stages import (
 )
 from mmkgc.stages.semantic import (
     SemanticStageParseError,
-    StrictJsonStagePlanner,
+    LegacyKnowledgeStagePlanner as StrictJsonStagePlanner,
     _apply_stage1_response,
     build_stage_prompt,
     parse_strict_json_object,
@@ -99,7 +99,7 @@ def test_stage0_prompt_bounds_verbose_modalities_and_neighbors() -> None:
 
 
 def test_stage1_rejects_unknown_fact_ids_without_rule_credibility_fallback() -> None:
-    from mmkgc.stages.modeling import build_knowledge_input
+    from mmkgc.stages.modeling import build_legacy_knowledge_input as build_knowledge_input
 
     record = semantic_record()
     inputs = build_knowledge_input(record, "image", coarse_relation_filtering(record, "image"))

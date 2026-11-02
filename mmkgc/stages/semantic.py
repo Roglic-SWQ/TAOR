@@ -19,6 +19,8 @@ from typing import Any, Protocol
 from mmkgc.data import EntityRecord
 from mmkgc.generation_prompts import PROMPT_PROFILES, PROMPT_VERSION, QWEN_PROMPT_VERSION
 from mmkgc.stages.selection import _assign_candidate_quotas
+from mmkgc.stages.coarse import sync_stage0_decisions
+from mmkgc.stages.evidence_sampling import compact_stage0_evidence
 
 
 class SemanticStageParseError(ValueError):
@@ -81,6 +83,8 @@ KNOWLEDGE_REQUEST_CONTEXT = ContextVar("knowledge_request_context", default=None
 
 class StrictJsonStagePlanner:
     """Strict-JSON semantic planner for the fixed MMKGC mainline."""
+
+    knowledge_schema = "grounded_triples_v2"
 
     def __init__(
         self,
@@ -318,10 +322,13 @@ class StrictJsonStagePlanner:
         apply_response: Callable[[dict[str, Any]], dict[str, Any]],
     ) -> dict[str, Any]:
         from mmkgc.stages.modeling import KnowledgeResponseValidationError
+        from mmkgc.stages.triples import TRIPLE_SCHEMA, TRIPLE_SCHEMAS
+        triples = inputs.get("schema") in TRIPLE_SCHEMAS
 
         call: dict[str, Any] = {
-            "stage": "stage1_knowledge", "prompt_version": self.prompt_version,
-            "knowledge_repair_version": "stage1_targeted_source_repair_v4",
+            "stage": "stage1_knowledge", "prompt_version": inputs["schema"] if triples else self.prompt_version,
+            "response_schema_version": inputs.get("schema"),
+            "knowledge_repair_version": "stage1_triple_source_repair_v1" if triples else "stage1_targeted_source_repair_v4",
             "prompt": prompt, "contract_repair_retries": 0, "validation_attempts": [],
             "network_attempts": [], "stage_timeout_seconds": self.knowledge_stage_timeout_seconds,
         }
@@ -330,7 +337,15 @@ class StrictJsonStagePlanner:
         repair_task = repair_base = None
         started = time.perf_counter()
         deadline = started + self.knowledge_stage_timeout_seconds
-        token = KNOWLEDGE_REQUEST_CONTEXT.set({"deadline": deadline, "call": call})
+        parent = KNOWLEDGE_REQUEST_CONTEXT.get() or {}
+        if "deadline" in parent:
+            deadline = min(deadline, parent["deadline"])
+        context = {key: parent[key] for key in ("image_input", "image_input_metadata", "image_description_model_call_ref",
+                   "media_inputs", "media_input_metadata", "media_description_model_call_refs") if key in parent}
+        for key in ("image_input_metadata", "image_description_model_call_ref", "media_input_metadata", "media_description_model_call_refs"):
+            if key in context:
+                call[key] = context[key]
+        token = KNOWLEDGE_REQUEST_CONTEXT.set({**context, "deadline": deadline, "call": call})
         try:
             for attempt in range(self.max_knowledge_repairs + 1):
                 if time.perf_counter() >= deadline:
@@ -399,7 +414,7 @@ class StrictJsonStagePlanner:
                         call["targeted_repairs"][-1]["response_text"] = response_text
                 refined["semantic_refinement"] = _refinement_status(
                     self.planner_name, "stage1_knowledge", "applied", None,
-                    prompt_version=self.prompt_version,
+                    prompt_version=call["prompt_version"],
                 )
                 return refined
             raise RuntimeError("Stage 1 repair loop exhausted without a result")
@@ -426,6 +441,18 @@ def parse_strict_json_object(response_text: str) -> dict[str, Any]:
     return parsed
 
 
+class LegacyKnowledgeStagePlanner(StrictJsonStagePlanner):
+    """Explicit v1 contract adapter; new jobs use StrictJsonStagePlanner."""
+
+    knowledge_schema = "qwen_grounded_knowledge_v1"
+
+    def build_knowledge(self, record, missing_mode, coarse):
+        from mmkgc.stages.modeling import build_legacy_knowledge_input, apply_knowledge_response
+        inputs = build_legacy_knowledge_input(record, missing_mode, coarse)
+        return self._refine("stage1_knowledge", record, missing_mode, inputs,
+                            lambda response: apply_knowledge_response(inputs, response))
+
+
 def build_stage_prompt(
     *,
     stage: str,
@@ -435,6 +462,9 @@ def build_stage_prompt(
     prior: dict[str, Any],
     prompt_profile: str = PROMPT_VERSION,
 ) -> str:
+    from mmkgc.stages.triples import TRIPLE_SCHEMAS, build_triple_prompt
+    if stage == "stage1_knowledge" and deterministic.get("schema") in TRIPLE_SCHEMAS:
+        return build_triple_prompt(deterministic)
     if prompt_profile == QWEN_PROMPT_VERSION:
         from mmkgc.qwen7b_prompts import build_stage_prompt as build_qwen_stage_prompt
 
@@ -445,7 +475,7 @@ def build_stage_prompt(
     payload = {
         "prompt_version": PROMPT_VERSION,
         "stage": stage,
-        "record": _prompt_record_payload(stage, record),
+        "record": _prompt_record_payload(stage, record, deterministic),
         "missing_mode": missing_mode,
         "deterministic_output": _prompt_deterministic_output(stage, deterministic),
         "prior_stage_outputs": _prompt_prior_outputs(stage, prior),
@@ -577,6 +607,9 @@ def build_stage_repair_prompt(
 def build_knowledge_contract_repair_prompt(
     *, inputs: dict[str, Any], errors: list[dict[str, Any]],
 ) -> str:
+    from mmkgc.stages.triples import TRIPLE_SCHEMAS, build_triple_prompt
+    if inputs.get("schema") in TRIPLE_SCHEMAS:
+        return build_triple_prompt(inputs, errors)
     expected = [fact["fact_id"] for fact in inputs["fact_candidates"]]
     required = [{key: fact[key] for key in ("fact_id", "subject", "relation", "object", "direction")}
                 for fact in inputs["fact_candidates"]]
@@ -665,12 +698,19 @@ def _stage_contract(stage: str) -> dict[str, Any]:
     return {}
 
 
-def _prompt_record_payload(stage: str, record: EntityRecord) -> dict[str, Any]:
+def _prompt_record_payload(stage: str, record: EntityRecord, coarse: dict[str, Any] | None = None) -> dict[str, Any]:
     if stage == "stage1_knowledge":
         return {"entity_key": record.entity_key, "label": record.label}
     if stage == "stage2_selection":
         return _compact_stage2_record_payload(record)
-    return _public_record_payload(record)
+    neighbors = coarse["prompt_neighbors"] if coarse and coarse.get("evidence_sampling") else None
+    result = _public_record_payload(record, neighbors=neighbors)
+    if coarse and coarse.get("evidence_sampling"):
+        if coarse["evidence_sampling"]["target_modality"] == "text":
+            result["existing_modalities"]["text"] = None
+        else:
+            result["existing_modalities"].update(image_summary=None, has_image=False)
+    return result
 
 
 def _compact_stage2_record_payload(record: EntityRecord) -> dict[str, Any]:
@@ -693,7 +733,7 @@ def _compact_stage2_record_payload(record: EntityRecord) -> dict[str, Any]:
     }
 
 
-def _public_record_payload(record: EntityRecord) -> dict[str, Any]:
+def _public_record_payload(record: EntityRecord, *, neighbors: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     existing = {
         "text": _truncate_prompt_input(
             record.existing_modalities.get("text"),
@@ -722,7 +762,7 @@ def _public_record_payload(record: EntityRecord) -> dict[str, Any]:
                     )
                 ),
             }
-            for neighbor in record.neighbors
+            for neighbor in (record.neighbors if neighbors is None else neighbors)
         ],
     }
 
@@ -780,6 +820,8 @@ def _prompt_prior_outputs(stage: str, prior: dict[str, Any]) -> Any:
 
 
 def _compact_coarse(coarse: dict[str, Any]) -> dict[str, Any]:
+    if coarse.get("evidence_sampling"):
+        return compact_stage0_evidence(coarse, include_selection_limit=True)
     relation_candidates = coarse.get("high_recall_relation_candidates")
     if not isinstance(relation_candidates, list):
         relation_candidates = coarse.get("cleaned_relation_groups")
@@ -1245,7 +1287,8 @@ def _apply_stage0_response(
     discarded.extend(
         {
             **dict(item),
-            "discard_reason": "not_selected_by_semantic_stage0",
+            "discard_reason": ("not_selected_by_semantic_stage0" if _relation_key(item) in allowed
+                               else "outside_stage0_prompt_budget"),
         }
         for item in selected
         if _relation_key(item) not in selected_keys
@@ -1258,6 +1301,8 @@ def _apply_stage0_response(
         for item in reordered
         for triple in list(item.get("evidence_triples", []))
     ]
+    if isinstance(coarse.get("stage0_v3"), dict):
+        refined["stage0_v3"] = sync_stage0_decisions(refined)
     return refined
 
 

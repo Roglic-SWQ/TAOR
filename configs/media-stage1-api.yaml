@@ -1,0 +1,11 @@
+# Audio-capable Stage 1 endpoint. Set credentials in the process environment / project .env.
+# For providers using audio_url (e.g. SiliconFlow/vLLM-Omni), change audio_input_type.
+lmm:
+  model_name_env: TAOR_STAGE1_MODEL
+  base_url_env: OPENAI_BASE_URL
+  api_key_env: OPENAI_API_KEY
+  audio_input_type: input_audio
+inference:
+  prompt_profile: qwen7b_original_v1
+  max_token: 4096
+  temperature: 0.0

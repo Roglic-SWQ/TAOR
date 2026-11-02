@@ -6,8 +6,11 @@ from copy import deepcopy
 from typing import Any
 
 from mmkgc.data import EntityRecord
+from mmkgc.stages.evidence_sampling import KNOWLEDGE_FACT_BUDGET, FACTS_PER_RELATION
+from mmkgc.stages.triples import TRIPLE_SCHEMA, TRIPLE_SCHEMAS
 
-KNOWLEDGE_SCHEMA = "qwen_grounded_knowledge_v1"
+LEGACY_KNOWLEDGE_SCHEMA = "qwen_grounded_knowledge_v1"
+KNOWLEDGE_SCHEMA = TRIPLE_SCHEMA
 
 
 class KnowledgeResponseValidationError(ValueError):
@@ -20,6 +23,9 @@ class KnowledgeResponseValidationError(ValueError):
 
 def knowledge_response_errors(inputs: dict[str, Any], response: Any) -> list[dict[str, Any]]:
     """Collect independent response errors without changing facts or model output."""
+    if inputs.get("schema") in TRIPLE_SCHEMAS:
+        from mmkgc.stages.triples import triple_response_errors
+        return triple_response_errors(inputs, response)
     errors: list[dict[str, Any]] = []
     expected = [item["fact_id"] for item in inputs["fact_candidates"]]
     allowed_ids = set(expected)
@@ -106,6 +112,11 @@ def entity_context(knowledge: dict[str, Any]) -> dict[str, Any]:
 
 
 def public_modality_context(record: EntityRecord, missing_mode: str) -> dict[str, Any]:
+    from mmkgc.stages.sources import public_sources
+    return public_sources(record, missing_mode)[0]
+
+
+def _legacy_modality_context(record: EntityRecord, missing_mode: str) -> dict[str, Any]:
     if missing_mode not in {"text", "image"}:
         raise ValueError("missing_mode must be one of: text, image")
     # Exclude the target modality even for manually constructed records.
@@ -120,6 +131,19 @@ def public_modality_context(record: EntityRecord, missing_mode: str) -> dict[str
 def build_knowledge_input(
     record: EntityRecord, missing_mode: str, coarse: dict[str, Any]
 ) -> dict[str, Any]:
+    return _build_knowledge_input(record, missing_mode, coarse, legacy=False)
+
+
+def build_legacy_knowledge_input(
+    record: EntityRecord, missing_mode: str, coarse: dict[str, Any]
+) -> dict[str, Any]:
+    """Explicit v1 input adapter for historical artifacts and contract regression tests."""
+    return _build_knowledge_input(record, missing_mode, coarse, legacy=True)
+
+
+def _build_knowledge_input(
+    record: EntityRecord, missing_mode: str, coarse: dict[str, Any], *, legacy: bool
+) -> dict[str, Any]:
     """Serialize selected evidence without type inference or credibility scoring."""
     stage0 = coarse.get("stage0_v3", {})
     relations = {
@@ -130,15 +154,39 @@ def build_knowledge_input(
     paths = {item["path_id"]: item for item in stage0.get("paths", [])}
     catalog: dict[str, dict[str, Any]] = {}
     candidates = []
-    for group_index, group in enumerate(coarse.get("selected_relations", []), 1):
+    selected_groups = list(stage0.get("relations", []) if not legacy and stage0.get("relations")
+                           else coarse.get("selected_relations", []))
+    sampled_ids: dict[tuple[str, str], list[str]] = {}
+    if legacy and coarse.get("evidence_sampling"):
+        # Give every selected relation one fact before spending additional slots.
+        # This retains the old 32-fact upper bound without taking a file prefix.
+        sample_count = 0
+        for index in range(FACTS_PER_RELATION):
+            for group in selected_groups:
+                key = (group["relation"], group.get("direction") or (group.get("directions") or ["out"])[0])
+                source_group = relations.get(key)
+                if source_group is None or not source_group.get("prompt_fact_ids"):
+                    raise ValueError("selected Stage 0 relation has no sampled source facts")
+                refs = source_group["prompt_fact_ids"]
+                if any(ref not in source_facts or ref not in source_group["fact_ids"] for ref in refs):
+                    raise ValueError("sampled Stage 0 fact reference is not in its source relation")
+                if index < len(refs) and sample_count < KNOWLEDGE_FACT_BUDGET:
+                    sampled_ids.setdefault(key, []).append(refs[index])
+                    sample_count += 1
+    for group_index, group in enumerate(selected_groups, 1):
         relation = group["relation"]
         direction = group.get("direction") or (group.get("directions") or ["out"])[0]
         source_group = relations.get((relation, direction), {})
         group_id = source_group.get("relation_id") or f"relation:{group_index:04d}"
         neighbors = list(group.get("neighbor_entities", []))
         triples = list(group.get("evidence_triples", []))
-        fact_ids = list(source_group.get("fact_ids", []))
+        fact_ids = list(sampled_ids.get((relation, direction), []) if legacy and coarse.get("evidence_sampling")
+                        else source_group.get("fact_ids", []))
         atomic_sources = [source_facts[ref] for ref in fact_ids if ref in source_facts]
+        if not atomic_sources and legacy and coarse.get("evidence_sampling"):
+            continue
+        if not legacy and any(ref not in source_facts for ref in fact_ids):
+            raise ValueError("graph catalogue contains an unknown source fact")
         if not atomic_sources:
             atomic_sources = [
                 {
@@ -153,7 +201,8 @@ def build_knowledge_input(
             triple = source.get("triple") or (triples[index] if index < len(triples) else None)
             if triple:
                 ref = source_id or f"evidence:kg:{len(candidates) + 1:04d}"
-                catalog[ref] = {"evidence_id": ref, "source": "stage0_kg", "content": triple}
+                catalog[ref] = {"evidence_id": ref, "source": "stage0_kg", "content": triple,
+                                **({"modality": "graph"} if not legacy else {})}
                 refs.append(ref)
             for path_id in source_group.get("path_ids", []):
                 if path_id in paths:
@@ -170,23 +219,37 @@ def build_knowledge_input(
                 "evidence_refs": refs,
                 "stage0_fact_ids": [source_id] if source_id else [],
             })
-    existing = public_modality_context(record, missing_mode)
+    existing = _legacy_modality_context(record, missing_mode) if legacy else public_modality_context(record, missing_mode)
     context_refs = []
-    for key in ("text", "image_summary"):
+    for key in (("text", "image_summary") if legacy else ()):
         if existing.get(key):
             ref = f"existing:{key}"
             catalog[ref] = {"evidence_id": ref, "source": "existing_modality", "content": existing[key]}
             context_refs.append(ref)
-    for candidate in candidates:
-        candidate["evidence_refs"].extend(context_refs)
-    return {
-        "schema": KNOWLEDGE_SCHEMA,
+    if legacy:
+        for candidate in candidates:
+            candidate["evidence_refs"].extend(context_refs)
+    else:
+        from mmkgc.stages.sources import public_sources
+        for item in public_sources(record, missing_mode)[1]:
+            catalog[item["evidence_id"]] = item
+    result = {
+        "schema": LEGACY_KNOWLEDGE_SCHEMA if legacy else TRIPLE_SCHEMA,
         "entity": {"entity_key": record.entity_key, "label": record.label},
         "target_modality": missing_mode,
         "existing_modalities": existing,
         "fact_candidates": candidates,
         "evidence_catalog": list(catalog.values()),
     }
+    if coarse.get("evidence_sampling"):
+        result["evidence_selection"] = {
+            "policy_version": coarse["evidence_sampling"]["policy_version"] if legacy else "full_graph_catalogue_v2",
+            "fact_budget": KNOWLEDGE_FACT_BUDGET if legacy else None,
+            "catalog_fact_count": len(source_facts),
+            "modeled_fact_count": len(candidates),
+            "modeled_stage0_fact_ids": [ref for fact in candidates for ref in fact["stage0_fact_ids"]],
+        }
+    return result
 
 
 def _text_list(value: Any, name: str) -> list[str]:
@@ -196,7 +259,10 @@ def _text_list(value: Any, name: str) -> list[str]:
 
 
 def apply_knowledge_response(inputs: dict[str, Any], response: dict[str, Any]) -> dict[str, Any]:
-    """Bind model-authored claims to source facts without model-authored evidence."""
+    """Bind graph and extracted triples to sources; also accept explicit v1 inputs."""
+    if inputs.get("schema") in TRIPLE_SCHEMAS:
+        from mmkgc.stages.triples import apply_triple_response
+        return apply_triple_response(inputs, response)
     errors = knowledge_response_errors(inputs, response)
     if errors:
         raise KnowledgeResponseValidationError(errors)
@@ -230,13 +296,15 @@ def apply_knowledge_response(inputs: dict[str, Any], response: dict[str, Any]) -
     uncertainties = response.get("uncertain_aspects", [])
     facts = [modeled[ref] for ref in by_id]
     v3 = {
-        "schema_version": KNOWLEDGE_SCHEMA, "entity_profile": profile,
+        "schema_version": LEGACY_KNOWLEDGE_SCHEMA, "entity_profile": profile,
         "text_visual_profile": visual, "key_attributes": deepcopy(attributes),
         "uncertain_aspects": deepcopy(uncertainties),
         "modality_state": {"targets": [inputs["target_modality"]], "existing": inputs["existing_modalities"]},
     }
+    if "evidence_selection" in inputs:
+        v3["evidence_selection"] = deepcopy(inputs["evidence_selection"])
     return {
-        "schema_version": KNOWLEDGE_SCHEMA, "stage1_v3": v3,
+        "schema_version": LEGACY_KNOWLEDGE_SCHEMA, "stage1_v3": v3,
         "entity_profile": {
             "entity_type": profile["primary_type"], "type": profile["primary_type"],
             "secondary_types": profile["secondary_types"], "semantic_domain": profile["semantic_domains"],

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
+import threading
 from typing import Any
 
 import pytest
@@ -1107,3 +1109,78 @@ def _engine(
         profile=profile or _profile(),
         scorers=scorers,
     )
+
+
+class BarrierExtractionJudge:
+    """Judge whose graph extraction blocks until workers overlap."""
+
+    model_name = "barrier-extraction-judge"
+
+    def __init__(self, workers: int) -> None:
+        self.barrier = threading.Barrier(workers)
+        self.lock = threading.Lock()
+        self.active = 0
+        self.max_active = 0
+        self.finished: list[str] = []
+
+    def judge_text(self, context: Any, candidate: dict[str, Any]) -> Any:
+        del context
+        return _judge_result(
+            0.8, rejected=False, hard_code="unsupported_claim", reason="text judge",
+        )
+
+    def extract_text_graph(self, candidate: dict[str, Any]) -> dict[str, Any]:
+        with self.lock:
+            self.active += 1
+            self.max_active = max(self.active, self.max_active)
+        try:
+            # Sequential extraction deadlocks here until the barrier times out,
+            # so passing this wait proves extraction runs on worker threads.
+            self.barrier.wait(timeout=2)
+            return {"triples": []}
+        finally:
+            with self.lock:
+                self.active -= 1
+                self.finished.append(candidate["candidate_id"])
+
+
+def test_text_graph_extraction_runs_under_judge_concurrency():
+    judge = BarrierExtractionJudge(2)
+    profile = replace(
+        _profile(), gpt4omini_judge=replace(_profile().gpt4omini_judge, max_concurrency=2),
+    )
+    engine = ModelFusionRankingEngine(
+        profile=profile,
+        scorers={
+            "sentence_bert": FakeSentenceBERTScorer(
+                {f"Grounded text {index}.": 0.8 for index in range(1, 5)},
+            ),
+            "gpt4omini_judge": judge,
+        },
+    )
+    text_candidates = [
+        _text_candidate(f"text_{index:03d}", f"Grounded text {index}.")
+        for index in range(1, 5)
+    ]
+    context = build_ranking_context(
+        "Q1",
+        "Example Entity",
+        "text",
+        {"text": None, "image": None},
+        {"entity_profile": {"entity_type": "film"}},
+        {},
+        {"relation_alternation_generation": {"text_candidates": text_candidates}},
+        {},
+    )
+
+    result = engine.rank(context)
+
+    assert judge.max_active == 2
+    extraction_calls = [
+        call
+        for call in result["ranking_model_calls"]
+        if call["scorer"] == "structured_kg_alignment"
+    ]
+    assert [call["candidate_id"] for call in extraction_calls] == [
+        f"text_{index:03d}" for index in range(1, 5)
+    ]

@@ -1,22 +1,23 @@
 # 千问 7B、GPT-4o-mini 与 Reranker 运行环境
 
 2026-10-28 按用户要求，Stage 2 也切换为本地千问。CLI、Python API 和
-4 / 10 / 50 实体启动脚本的 Stage 0 / 1 / 2 / 3 默认模型均为
+4 / 10 / 50 实体启动脚本的 Stage 1 / 2 / 3 默认模型均为
 `Qwen/Qwen2-VL-7B-Instruct`；Stage 4 的 GPT 评分使用 `gpt-4o-mini`。
-Stage 0 / 1 / 3 的千问提示词已恢复为修改前的版本，
-使用 `inference.prompt_profile: qwen7b_original_v1` 标记。实际模型看调用日志的
-`model_name`；原始模板说明见 `docs/qwen7b-original-prompts.zh.md`。
+配置中的 `inference.prompt_profile: qwen7b_original_v1` 保留历史模板选择。
+新任务的 Stage 1 使用下述三元组协议，Stage 3 对新协议使用结构化事实输入；
+历史知识协议仍可使用原始模板。实际模型看调用日志的 `model_name`；
+历史模板说明见 `docs/qwen7b-original-prompts.zh.md`。
 显式 GPT 对照配置仍采用 `gpt4omini_stage03_v2`，说明见 `docs/gpt4omini-prompts-v2.zh.md`。
 
 | 阶段 | 当前模型与职责 |
 | --- | --- |
-| Stage 0 | Qwen2-VL-7B-Instruct 做关系语义粗筛 |
-| Stage 1 | Qwen2-VL-7B-Instruct 构建知识模型；本地 Qwen3-Reranker-4B 做证据评分 |
-| Stage 2 | Qwen2-VL-7B-Instruct 选择关系角色并分配候选数量 |
+| Stage 0 | 程序保留完整一跳目录，新任务不调用 LLM 筛掉关系 |
+| Stage 1 | 图谱、文本及媒体观察统一成三元组；本地 Qwen3-Reranker-4B 按生成和身份相关性粗筛 |
+| Stage 2 | Qwen2-VL-7B-Instruct 选择有上限的共享事实集合 |
 | Stage 3 | Qwen2-VL-7B-Instruct 生成文本或图像提示词；SDXL 生成图像 |
 | Stage 4 | GPT-4o-mini 与 CLIP、BLIP 等评分器参与候选排序 |
 
-Stage 0 / Stage 3 使用 `configs/qwen7b-mainline.yaml`，Stage 1 知识建模使用
+Stage 3 使用 `configs/qwen7b-mainline.yaml`，Stage 1 知识建模使用
 `configs/qwen7b-stage1.yaml`，Stage 2 使用 `configs/qwen7b-stage2.yaml`；
 三者默认连接 `http://127.0.0.1:12345/v1`。
 主配置保留 4096 token 的语言模型输出预算及 384 token 的图像提示词预算。
@@ -24,29 +25,128 @@ Stage 4 GPT 评分器使用 `configs/openai-gpt4o-mini-judge.yaml`。
 Stage 2 可通过 `--stage2-model-config` 或脚本的 `STAGE2_MODEL_CONFIG` 显式切回 GPT 对照。
 
 `qwen7b-mainline.yaml`、`qwen7b-stage1.yaml` 和环境变量版 `qwen-local.yaml`
-均显式启用原始千问提示词。Stage 0 / 1 恢复原始 system、任务说明、输入组织和
-格式修正提示；Stage 3 恢复原来的简短文本模板、图像 JSON 输入、generation brief
-及正向提示词补充片段。角色、事实引用、输出结构和 SDXL 参数继续沿用当前管线。
+均显式配置历史千问 profile。Stage 1 的新默认协议为 `grounded_triples_v2`：
+程序保留完整图谱目录，模型从已有文本、图片观察、视频帧／片段、音频转写或声音观察抽取三元组，
+并返回简要 `entity_profile` 和 `uncertain_aspects`。不再要求逐条生成 claim，
+也不单独输出 `key_attributes` 或 `text_visual_profile`。
 
-Stage 1 的初次模板保留原样。漏写、重复或未知 `fact_id` 等业务校验错误现在会
-反馈完整 ID 集合、缺失项和对应三元组，要求模型重新生成完整结果；默认最多两次
-额外修正，与 JSON 格式修正共享预算。业务修正不引用错误响应原文；重复无效业务响应
-提前停止。首次格式修正仍无效时，剩余预算改用完整源数据重建，不进行程序补写。
-日志通过 `stage1_complete_fact_repair_v3` 及 `validation_attempts` 标记这一机制。
-旧版关系组建模与当前原子事实契约的差异见
-`docs/evaluation/2026-10-27-stage1-fact-id-repair.zh.md`。
+每条事实统一表示为 `subject / relation / object / evidence_refs`，`relation` 即谓词。
+例如 `(Museum, architect, Jane)` 与 `(Jane, designed, Museum)` 各自保留主谓宾方向；
+不会为了让目标实体位于主语而交换两端。只有主谓宾完全相同的记录才合并来源，
+不把不同谓词自动视为同义。图谱沿用 `rf:` ID，新增模态事实由程序分配 `mf:` ID。
+没有可用观察内容时，模型返回空 `extracted_triples`，图谱事实仍然保留。
+
+已有纯文本可用 `text`，图片可用 `image_summary`，视频可用 `video_summary`／`video_transcript`，
+音频可用 `audio_transcript`／`audio_summary`。分段观察使用 `existing_modalities.observations`：
+
+```json
+{
+  "evidence_id": "existing:video:segment:1",
+  "modality": "video",
+  "content": "Museum entrance doors open inward.",
+  "locator": {"asset": "clip.mp4", "start_seconds": 2.0, "end_seconds": 3.0}
+}
+```
+
+已有原图由 `QwenLocalSemanticStagePlanner` 自动执行两步视觉建模，均使用 Stage 1 模型配置：
+
+1. 看原图生成自然语言描述。此步不传入 KG、目标描述或 ground truth，单独记录为 `stage1_image_description`。
+2. 模型同时读取这份描述和原图，修正描述错误、补充遗漏的可见细节，再返回通常的三元组提取结果。
+
+部件属性和空间关系以目标的组成／布局事实表达，例如 `(Scene, has layout, blue circle left of red square)`，
+避免直接输出与目标标签无连接的部件三元组，也避免为了满足目标锚定而丢掉这些细节。
+
+两次调用及格式修正都附带同一份冻结的原始 PNG／JPEG 字节，不能退化成第二步只读摘要。
+视觉事实必须引用 `existing:image:original`；描述支持该事实时也引用 `existing:image_summary`，
+纠正描述中的错误时只引用原图。引用检查不等于程序验证了视觉判断正确。
+自然语言描述、图片 SHA-256、源文件位置和调用引用保存为 `image_modeling`；
+原始观察输入另存为 `source_inputs`，生成描述不会反写数据集或伪装成数据集原有摘要。
+模型调用日志只保存图片元数据，不写入 base64。描述生成、提取、网络重试和业务修正共享 Stage 1 的 180 秒预算；
+描述为空、截断、读取失败或视觉调用失败时停止，不悄悄改用无图抽取。
+
+有原图时会重新生成本次描述；只有现成摘要而没有原图时，仍可按已有观察文本接入，
+但不会标记为完成了两步看图。
+仅有尚未处理的媒体路径时记录 `unprocessed_modalities`，不把路径当作事实。
+图片属于待补目标时，两步视觉调用均跳过。目标模态及显式标明由它派生的观察仍被屏蔽。
+CLI 生成目标仍为 `text`／`image`。
+
+视频／音频也自动执行“原媒体生成描述 → 描述加原媒体证据提取三元组”：
+
+- 视频 `video` 接受本地 MP4／MOV／WebM。ffprobe 检查时长和流，ffmpeg 从完整时间轴约每秒取一帧，
+  画面最大宽度 768，并提取完整第一音轨为单声道 16 kHz WAV。两步使用完全相同的冻结画面和音轨。
+  每帧附带实际时间位置。采样间隙的短暂事件、其他音轨及空间声学信息可能遗漏，不能视作全帧读取。
+- 音频 `audio` 接受本地 WAV／MP3，两步都发送同一份冻结的原文件。第一步同时要求忠实转写和
+  非语音声音描述；第二步重新听原音频，区分听到的声音、推测的声源与引述的说话内容。
+- 每个已有媒体各生成一份描述，最后一次联合提取事实；同时有图、视频、音频时共 4 次正常调用。
+  不同来源仍使用同一套 `subject / relation / object / evidence_refs`，需要时在宾语中保留近似时间段。
+- 视频／音频事实分别必须引用 `existing:video:original`／`existing:audio:original`。
+  来源文件、SHA-256、实际帧位置、音轨指纹和描述调用保存为 `media_modeling`；原始观察另存 `source_inputs`。
+  保存恢复时检查原始媒体文件名与字节指纹，防止同路径换内容后复用旧结果。
+- 当前单文件上限为 7 MiB、时长上限为 120 秒，解码后的帧和音轨合计也不得超过 7 MiB。
+  超限、缺少解码工具或调用失败时停止，不静默截取前段或降级为只读摘要。尚未实现长媒体分段批处理。
+  所有媒体加载、描述、联合提取和修正共享原有 Stage 1 总预算。
+
+模型必须支持实际发送的图片和音频。默认 Qwen2-VL 可看图片／视频采样帧，不能听音轨；
+有音频时必须配置支持音频的 Stage 1 模型。示例 `configs/media-stage1-api.yaml` 读取
+`TAOR_STAGE1_MODEL`、`OPENAI_BASE_URL` 和 `OPENAI_API_KEY`，通过已有 `--stage1-model-config` 接入。
+`lmm.audio_input_type` 默认 `input_audio`，其 `data` 字段传入纯 base64 音频；
+`audio_url` 分支使用带 MIME 前缀的 data URL。编码格式依据
+[OpenAI 官方音频输入示例](https://developers.openai.com/api/docs/guides/audio-chat-completions)。
+SiliconFlow／vLLM-Omni 一类接口可按其协议改为 `audio_url`，
+协议参考 [SiliconFlow 多模态输入](https://docs.siliconflow.cn/docs/userguide/capabilities/multimodal-vision)
+和 [Qwen-Omni 输入示例](https://www.alibabacloud.com/help/en/model-studio/qwen-omni)。
+不能只凭 `/models` 列表或 HTTP 200 判断媒体通道可用：本次探测遇到原生 `video_url` 被忽略的情况，
+因此使用明确的时间标记画面和音轨输入。
+
+2026-11-02 的真实视频／音频两步小例、失败记录和音频感知错误，见
+[媒体两步验证](evaluation/2026-11-02-media-two-step.zh.md)。链路与契约通过不代表事实准确。
+
+两步视觉 API 小例保存在 `outputs/explanations/image_two_step_case/trace.json`，原图为同目录的 `source.png`。
+本次实际响应模型为 `gpt-5.6-luna-2026-07-09`：2 次调用使用同一图片指纹，先生成描述，
+再提取 7 条事实，保留对象、左右位置、间隔、相对大小和背景。该例是合成图形的接口验证，
+未运行本地 Qwen 权重，也不是真实图片数据集的视觉质量或召回率测量。
+
+文本抽取必须引用真实存在的已有模态证据，不能借图谱引用伪装为文本抽取，
+也不会把整段文本自动挂到每条图谱事实上。来源检查验证引用边界，不能保证模型抽取语义正确。
+新阶段产物的事实列表保存为 `data.triples`；内部兼容接口仍使用 `relation_facts`，
+Stage 2、生成和评分消费同一份主谓宾及来源。历史 `qwen_grounded_knowledge_v1`、`grounded_triples_v1` 产物仍可恢复。
+
+新任务的 reranker query 只包含动态实体标签与目标模态；共享指令要求保留实体语义身份、定义性属性
+和重要关系，同时考虑目标模态表达，兼具两者价值的事实优先。Query 不再加入模型归纳的实体类型。
+document 保留候选三元组与方向，不包含来源模态或原证据包，也不把候选断言重复写入 query。
+来源模态仍保存在事实中用于追溯。指令版本为 `entity_semantics_modality_relevance_v2`。
+所有事实都先评分，再选本轮 Stage 2 输入；
+每次最多 8 对本地推理，默认本轮视图 64 条，可用 `--relevance-fact-budget` 调整。
+关系的相关性由其最高分事实汇总，仅作为概览，不增加一次独立关系事实性检查。
+分数与名次记录为 `relevance_score`／`relevance_rank`，完整事实和 `relevance_selection` 一起保存。
+不使用真假阈值，粗筛未展示的事实仍留在目录。旧 `score_knowledge_evidence` 仅用于显式历史协议兼容。
+
+格式、空字段或错误来源引用会触发最多两轮完整回答修正，修正输入只有原始源数据和错误列表；
+初次调用与修正共享默认 180 秒预算。日志记录 `grounded_triples_v2`、
+`stage1_triple_source_repair_v1` 和每轮 `validation_attempts`。
+
+2026-11-01 早期 `grounded_triples_v1` Museum 案例：通过用户提供的 API 配置，实际响应模型为
+`gpt-5.6-luna-2026-07-09`。3 条图谱事实保留，已有文本抽出 3 条事实，Stage 2 选择其 ID，
+Stage 3 生成 3 个图像提示词。补充候选事实范围说明后，复查未发现提示词混用未选的立面／入口细节。
+此例未运行 Stage 0、reranker、SDXL 或 Stage 4，也不能代表本地 Qwen 权重的运行结果。
+原始请求与响应保存在本地 `outputs/explanations/unified_triples_case/trace.json`，
+初次运行记录另存为 `trace-initial.json`；来源引用检查和提示约束均不构成抽取语义正确性的保证。
+
+随后 `grounded_triples_v2` 的 API 小例保存在 `outputs/explanations/task_relevance_case/trace.json`。
+实际 LLM 为 `gpt-5.6-luna-2026-07-09`，reranker 为 API 版 `Qwen/Qwen3-Reranker-4B`；
+自定义相关性说明拼接进 API query，本地模板等价性未验证。合成图谱和预设的文本、视频／音频观察
+合并为 14 条三元组，全部参与图像／文本两个任务的相关性排序，并完成图像任务的 3 个候选提示词。
+图像任务的红砖立面约 0.962、文件名约 0.0014；文本任务的类型和收藏主题排在前面，
+网站仍排第 3，说明排序尚需样本评估，不能把单例当成高召回证明。此例没有运行原始媒体感知、SDXL 或 Stage 4。
 
 Stage 2 默认对网络超时、断连及临时 HTTP 故障额外重试 1 次，与模型契约修正分别计数，
-阶段总预算为 300 秒。仅支持关系错误时，根据已确定角色收紧合法支持 ID；修正请求不再
-追加错误模型响应。本地千问 Stage 3 的重复／截断修正使用独立短请求、lm-format-enforcer
-JSON 约束和 1.1 重复惩罚，最多额外请求 2 次。原始初次模板和 SDXL 参数保持原样。
+阶段总预算为 300 秒。修正使用原始输入与结构化错误，不追加错误模型响应。
+本地千问 Stage 3 的重复／截断修正使用独立短请求、lm-format-enforcer
+JSON 约束和 1.1 重复惩罚，最多额外请求 2 次。新三元组任务使用结构化生成模板，SDXL 参数保持原样。
 实现与验证见 `docs/evaluation/2026-10-28-failed8-recovery.zh.md`。
 
-千问 Stage 2 另使用 `qwen_stage2_targeted_repair_v1`：仅漏写事实时分批请求遗漏项，
-每批最多 4 条；仅槽位错误时请求明确编号的全部槽位；仅支持引用错误时请求对应支持列表。
-这些小响应使用直接按键展开的 JSON Schema，其他合法决策不重写，所有显式模型补答合并后
-仍须通过完整业务校验。其余混合错误继续完整规划修正，不增加两轮修正或 300 秒总预算。
-详见 `docs/evaluation/2026-10-28-stage2-qwen-targeted-repair.zh.md`。
+Stage 2 新任务使用共享事实选择协议，旧候选组合、角色／槽位定向修正保留用于历史协议兼容。
+当前字段、来源绑定与新旧任务恢复方式见 [Stage 2 精简计划](stage2-candidate-plan.zh.md)。
 
 Stage 3 的文本生成和图像提示词请求支持并发。在主模型配置中设置：
 
@@ -55,7 +155,8 @@ inference:
   stage3_max_concurrency: 3
 ```
 
-`qwen7b-mainline.yaml` 默认设为 3，千问同时准备最多 3 个候选提示词。
+`qwen7b-mainline.yaml` 并发上限默认为 3，适用于历史独立候选及定向修复。
+新共享事实流程的首轮提示词按顺序生成，使后续请求能读取已生成提示词并协调表达重点。
 保留的 `gpt4omini-mainline.yaml` 为 5；未指定该字段的配置默认串行（1）。
 每个实体按候选预算准备文本或图像提示词，再按原候选顺序汇总，
 SDXL 在调用线程逐张生成，避免多个线程同时操作同一 GPU 模型。
@@ -65,46 +166,17 @@ SDXL 在调用线程逐张生成，避免多个线程同时操作同一 GPU 模�
 记录实际 `stage3_max_concurrency`。这项配置只作用于 Stage 3，实体和其他阶段
 仍按原来的依赖顺序执行；SDXL 的图像尺寸、步数、种子和候选预算不变。
 
-Stage 2 千问调用记录 `qwen7b_stage2_candidate_slots_v3`，显式 GPT 对照记录
-`gpt4omini_stage2_candidate_slots_v4`；两者共用已有槽位规划任务和业务契约。
-GPT 请求发送逐事实的严格 JSON Schema；千问使用普通生成接口及 1.05 重复惩罚，
-在提示词中列出完整模板、全部事实 ID、合法角色和槽位数量，输出预算为 3072 token。
-本地不启用当前 vLLM 中较慢的约束解码器；JSON 语法、逐事实证据归属、非空白 reason 等
-规则继续由本地解析器和校验器严格检查；详见
-`docs/evaluation/2026-10-28-stage2-qwen7b.zh.md`。
-每个 `fact_id` 对应独立分支，其 `evidence_refs` 只能从该事实自己的证据 ID 中选择；
-没有证据时只能返回空列表。所有角色（含 `context`、`excluded`）的 `reason`
-都必须包含非空白字符。辅助事实通过 `supporting_fact_ids` 连接，不把辅助事实的
-证据 ID 混入主事实的 `evidence_refs`。
+Stage 2 千问与 GPT 的新任务均记录 `shared_fact_selection_v1`。模型只返回 `status` 和
+`selected_fact_ids`，选择一个最多 `--max-selected-facts` 条事实的集合，允许少于上限。
+生成预算与事实数量解耦；文本默认一条完整描述，图片运行预算默认 3，与正式批处理入口一致，可单独配置。
+Stage 3 依据共享事实组织构图和叙述，不要求 Stage 2 focus，也不套用旧视角模板。
+保存恢复兼容旧 `candidate_fact_plan_v1` / `v2` 及角色／槽位协议，保留原图片字节。
+程序检查事实 ID、重复、数量上限和来源证据，并绑定共同事实供生成与评分使用。
+新图片流程允许少于预算的候选，完全相同的提示词跳过 SDXL；尚无语义去重或效果驱动早停。
 
-模型返回 `plan` 对象，其中 `relation_plans` 保留所有事实及角色，但不再填写
-`candidate_quota`。另用 `candidate_anchors` 指定每个候选锚定的事实 ID；正常
-计划恰好包含 `candidate_budget` 个 ID，允许重复。程序仅统计这些 ID 的出现
-次数得到配额。例如 `[A,A,A,B,B]` 得到 A 为 3、B 为 2，其余事实为 0。
-辅助事实可以保留并支撑其他候选，配额为 0 不表示删除该事实。
-
-Schema 通过 `plan` 下的两个分支区分状态：`ready` 要求槽位数恰好等于预算；
-`insufficient_evidence` 要求空槽位、所有角色仅为 `context` / `excluded` 且没有
-支持链接。本地继续检查每个事实恰好出现一次、每个主事实至少锚定一个候选，
-以及槽位和支持链接的角色合法性。
-
-内部输出仍为 `model_relation_plan_v1`，保留由模型槽位计数得到的 `candidate_quota`，
-并增加 `allocation_method: model_candidate_slots_v2` 及原始 `candidate_anchors`。
-Stage 3 按模型给出的槽位顺序生成，Stage 2 产物保存槽位和派生配额供审计。
-
-本地校验一次收集能够独立判断的全部错误，包含 JSON Pointer 路径、实际值、
-合法证据的完整列表、错误引用所属事实、支持目标的当前角色，以及槽位实际数量
-与目标值。`supporting_fact_ids` 只能指向同一响应中角色为 `secondary` 的其他事实；
-`ready` 计划必须有主事实并恰好填满预算，`insufficient_evidence` 计划保持零配额。
-这些跨字段业务规则仍执行程序校验，不以 Schema 校验替代。
-
-若 JSON 或业务契约不合法，修正对话保留最初的 system/user 输入，
-再用独立 user 消息提交全部结构化错误与完整模板，要求返回完整计划；不追加错误响应原文。
-默认最多修正两轮（首次请求之外）；无效结果在 JSON 解析后与之前结果相同，
-即使只改了空白或对象键顺序，也会提前停止。`OpenAICompatibleRelationPlanner` 的
-`max_contract_repairs` 可配置该上限。网络错误不进入业务契约修正循环。
-程序不自动改写角色、引用或配额。模型调用日志的 `validation_attempts` 保存每轮
-响应和完整错误列表，`contract_repair_stopped_reason` 记录重复响应或次数耗尽。
+GPT 使用简单 JSON Schema；本地千问首次请求保持普通生成，修正时使用小型 JSON 约束。
+仍最多修正两轮，重复无效响应提前停止，网络重试和业务修正共享阶段总预算。
+日志的 `validation_attempts` 保留每轮响应与错误，`contract_repair_stopped_reason` 记录停止原因。
 
 视觉评分向 GPT 发送大于 512 KiB 的 RGB PNG 时，使用质量 90 的 JPEG 传输，
 保持原始像素分辨率，以减小请求体；小图、已有 JPEG 和含透明度的图片保持原格式。
@@ -126,7 +198,7 @@ gpt4omini_judge:
 数值型 `Retry-After` 最多等待 60 秒。并发所需 `httpx` 已列入运行环境依赖文件。
 
 Stage 0 → Stage 1 → Stage 2 的数据依赖保持顺序。并发提高独立请求的吞吐，
-Stage 2 的事实引用、角色和配额仍执行同样的业务校验。上游中转接口的实际并发
+Stage 2 的候选事实引用和数量仍执行完整校验。上游中转接口的实际并发
 能力需要通过小批运行验证；本次修改没有恢复已由用户停止的 50 实体任务。
 
 主流程在 `kb` 环境使用 Transformers 4.51.3 加载 Qwen3-Reranker-4B。

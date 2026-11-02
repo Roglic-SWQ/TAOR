@@ -15,6 +15,11 @@ from uuid import uuid4
 from urllib.parse import urlsplit
 
 from mmkgc.adapters.qwen import QwenConfig
+from mmkgc.stages.candidate_planning import (
+    PLAN_SCHEMA as CANDIDATE_PLAN_SCHEMA, candidate_plan_prompt, candidate_plan_schema,
+    apply_candidate_plans, parse_candidate_response,
+    FACT_SELECTION_SCHEMA, fact_selection_prompt, fact_selection_schema, apply_fact_selection,
+)
 from mmkgc.adapters.qwen_stage2_repair import (
     REPAIR_VERSION as QWEN_REPAIR_VERSION, TASK_MARKER, merge_targeted_response, targeted_repair_tasks,
 )
@@ -110,7 +115,14 @@ class OpenAICompatibleRelationPlanner:
         self, config: QwenConfig, timeout_seconds: float = 60.0, *, max_contract_repairs: int = 2,
         max_transport_retries: int = 1, retry_backoff_seconds: float = 1.0,
         stage_timeout_seconds: float = 300.0,
+        max_selected_facts: int = 64, selection_schema: str = FACT_SELECTION_SCHEMA,
     ) -> None:
+        if type(max_selected_facts) is not int or max_selected_facts <= 0:
+            raise ValueError("max_selected_facts must be a positive integer")
+        if selection_schema not in {FACT_SELECTION_SCHEMA, CANDIDATE_PLAN_SCHEMA}:
+            raise ValueError("unknown Stage 2 selection schema")
+        self.max_selected_facts = max_selected_facts
+        self.selection_schema = selection_schema
         if type(max_contract_repairs) is not int or max_contract_repairs < 0:
             raise ValueError("max_contract_repairs must be a nonnegative integer")
         if type(max_transport_retries) is not int or max_transport_retries < 0:
@@ -143,15 +155,16 @@ class OpenAICompatibleRelationPlanner:
 
     @property
     def prompt_version(self) -> str:
-        return QWEN_PROMPT_VERSION if self.uses_local_qwen else PROMPT_VERSION
+        return self.selection_schema
 
     def _complete(self, messages: list[dict[str, str]], schema: dict[str, Any]) -> str:
         context = self._request_context.get() or {}
         event = context.get('event', {})
+        candidate_format = bool({'candidates', 'selected_fact_ids'} & schema.get('properties', {}).keys())
         payload = {
             "model": self.config.model_name,
             "messages": (_qwen_planning_messages(messages, schema)
-                         if self.uses_local_qwen and TASK_MARKER not in schema else messages),
+                         if self.uses_local_qwen and not candidate_format and TASK_MARKER not in schema else messages),
             "temperature": 0.0,
             "max_tokens": self.config.max_token if self.uses_local_qwen else max(4096, self.config.max_token),
             "response_format": {"type": "json_schema", "json_schema": {
@@ -167,7 +180,7 @@ class OpenAICompatibleRelationPlanner:
             # fast initial generation path; never compile the large global schema.
             if event.get('contract_attempt', 0) > 0:
                 from mmkgc.adapters.json_contract import local_relation_json_schema
-                payload['guided_json'] = local_relation_json_schema()
+                payload['guided_json'] = deepcopy(schema) if candidate_format else local_relation_json_schema()
                 payload['guided_decoding_backend'] = 'lm-format-enforcer'
             if TASK_MARKER in schema and 'properties' in schema:
                 # Constrain only the tiny focused reply, never the global Stage 2 anyOf schema.
@@ -282,6 +295,72 @@ class OpenAICompatibleRelationPlanner:
                 self._request_context.reset(token)
 
     def plan(self, record: Any, missing_mode: str, knowledge: dict[str, Any], candidate_budget: int) -> dict[str, Any]:
+        if missing_mode not in {"text", "image"}:
+            raise ValueError("missing_mode must be one of: text, image")
+        shared = self.selection_schema == FACT_SELECTION_SCHEMA
+        system, prompt = (fact_selection_prompt(record.label, missing_mode, knowledge, self.max_selected_facts)
+                          if shared else candidate_plan_prompt(record.label, missing_mode, knowledge, candidate_budget))
+        schema = (fact_selection_schema(knowledge, self.max_selected_facts)
+                  if shared else candidate_plan_schema(knowledge, candidate_budget))
+        messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
+        call = {
+            "stage": "stage2_selection", "provider": self.planner_name,
+            "model_name": self.config.model_name, "prompt": prompt, "system_prompt": system,
+            "prompt_version": self.prompt_version, "response_schema_version": self.selection_schema,
+            **({"max_selected_facts": self.max_selected_facts} if shared else {}),
+            "ground_truth_used": False, "network_attempts": [], "transport_retries": 0,
+            "stage_timeout_seconds": self.stage_timeout_seconds, "validation_attempts": [],
+        }
+        started = time.perf_counter()
+        seen = set()
+        request_messages = messages
+        try:
+            for attempt in range(self.max_contract_repairs + 1):
+                call["contract_repair_retries"] = attempt
+                response = self._complete_with_retries(
+                    request_messages, schema, call, attempt, started + self.stage_timeout_seconds)
+                call["response_text"] = response
+                try:
+                    parsed = parse_candidate_response(response)
+                except (ValueError, TypeError) as exc:
+                    errors = [{"code": "invalid_json", "path": "", "message": str(exc)}]
+                    fingerprint = response.strip()
+                else:
+                    fingerprint = json.dumps(parsed, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+                    try:
+                        result = (apply_fact_selection(knowledge, parsed, missing_mode, self.max_selected_facts)
+                                  if shared else apply_candidate_plans(knowledge, parsed, missing_mode, candidate_budget))
+                    except RelationPlanValidationError as exc:
+                        errors = exc.errors
+                    else:
+                        call["validation_attempts"].append({"attempt": attempt, "response_text": response, "errors": []})
+                        call.update(status="applied", validation_errors=[])
+                        return result
+                call["validation_attempts"].append({"attempt": attempt, "response_text": response, "errors": errors})
+                call["validation_errors"] = errors
+                if fingerprint in seen or attempt == self.max_contract_repairs:
+                    call["contract_repair_stopped_reason"] = (
+                        "repeated_invalid_response" if fingerprint in seen else "repair_limit_reached")
+                    raise RelationPlanValidationError(errors)
+                seen.add(fingerprint)
+                request_messages = [*messages, {"role": "user", "content":
+                    "Correct these validation errors using the original source input. Return the complete "
+                    + ("status/selected_fact_ids" if shared else "status/candidates") +
+                    " object only. Do not add facts or change evidence.\n" +
+                    json.dumps(errors, ensure_ascii=False)}]
+        except Exception as exc:
+            call.update(status="failed", error_type=type(exc).__name__, error_message=str(exc))
+            setattr(exc, "model_call", call)
+            raise
+        finally:
+            call["latency_ms"] = int((time.perf_counter() - started) * 1000)
+            if self.config.api_key:
+                sanitized = json.loads(json.dumps(call, ensure_ascii=False).replace(self.config.api_key, "[REDACTED]"))
+                call.clear()
+                call.update(sanitized)
+            self.calls.append(call)
+
+    def _plan_legacy(self, record: Any, missing_mode: str, knowledge: dict[str, Any], candidate_budget: int) -> dict[str, Any]:
         system, prompt = selection_prompt(record.label, missing_mode, knowledge, candidate_budget)
         call = {
             "stage": "stage2_selection", "provider": self.planner_name,
@@ -397,5 +476,15 @@ class OpenAICompatibleRelationPlanner:
             self.calls.append(call)
 
 
-# Preserve existing imports and external Python API callers.
+class LegacyRelationPlanner(OpenAICompatibleRelationPlanner):
+    """Explicit old-protocol replay; new mainline tasks never use this path."""
+
+    @property
+    def prompt_version(self) -> str:
+        return QWEN_PROMPT_VERSION if self.uses_local_qwen else PROMPT_VERSION
+
+    plan = OpenAICompatibleRelationPlanner._plan_legacy
+
+
+# Preserve the public alias; both names now default to the simple protocol.
 GPT4oMiniRelationPlanner = OpenAICompatibleRelationPlanner

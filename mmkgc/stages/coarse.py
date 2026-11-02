@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from copy import deepcopy
 from typing import Any
 
 from mmkgc.data import EntityRecord
 from mmkgc.utils import token_cosine, tokenize
+from mmkgc.stages.evidence_sampling import (
+    SAMPLING_VERSION, RELATION_BUDGET, FACTS_PER_RELATION, RECORD_NEIGHBOR_BUDGET,
+    KNOWLEDGE_FACT_BUDGET,
+    available_context, neighbor_key, public_neighbor, representative_neighbors,
+    representative_relations,
+)
 
 LOW_VALUE_TERMS = {
     "id",
@@ -121,14 +128,7 @@ def _score_group(record: EntityRecord, missing_mode: str, relation: str, neighbo
     if missing_mode == "text" and relation_tokens & TEXT_RELATION_TERMS:
         score += 0.7
 
-    existing_text = " ".join(
-        value
-        for value in (
-            record.existing_modalities.get("text"),
-            record.existing_modalities.get("image_summary"),
-        )
-        if isinstance(value, str) and value.strip()
-    )
+    existing_text = available_context(record, missing_mode)
     if existing_text:
         score += token_cosine(existing_text, f"{relation} {neighbor_text}")
 
@@ -163,14 +163,7 @@ def _target_modality_priority(
         text_score += 1
     if neighbor_tokens & VISUAL_RELATION_TERMS:
         image_score += 1
-    existing_text = " ".join(
-        value
-        for value in (
-            record.existing_modalities.get("text"),
-            record.existing_modalities.get("image_summary"),
-        )
-        if isinstance(value, str) and value.strip()
-    )
+    existing_text = available_context(record, missing_mode)
     relation_context = " ".join([relation, *[str(neighbor.get("label") or "") for neighbor in neighbors]])
     if existing_text and token_cosine(existing_text, relation_context) > 0:
         text_score += 2
@@ -376,12 +369,18 @@ def _build_stage0_v3(
     cleaned: list[dict[str, Any]],
     kept: list[dict[str, Any]],
     discarded: list[dict[str, Any]],
+    *, exact_relation_ids: bool = False,
 ) -> dict[str, Any]:
-    selected_ids = set(_v3_relation_ids(kept))
+    from urllib.parse import quote
+    def relation_id_for(item):
+        if exact_relation_ids:
+            return "rel:" + quote(item["relation"], safe="") + ":" + quote(item["direction"], safe="")
+        return _v3_relation_id(item)
+    selected_ids = {relation_id_for(item) for item in kept}
     relation_items = []
     seen_relations = set()
     for item in [*cleaned, *discarded]:
-        relation_id = _v3_relation_id(item)
+        relation_id = relation_id_for(item)
         if relation_id in seen_relations:
             continue
         seen_relations.add(relation_id)
@@ -393,8 +392,8 @@ def _build_stage0_v3(
     relations: list[dict[str, Any]] = []
     fact_index = 1
     seen_paths = set()
-    for item in relation_items:
-        relation_id = _v3_relation_id(item)
+    for item in sorted(relation_items, key=lambda item: (item["relation"], item.get("direction", "out"))):
+        relation_id = relation_id_for(item)
         fact_ids = []
         neighbors = list(item.get("neighbor_entities", []))
         evidence = list(item.get("evidence_triples", []))
@@ -440,6 +439,7 @@ def _build_stage0_v3(
                 "frequency": item.get("frequency"),
                 "neighbor_entities": neighbors,
                 "fact_ids": fact_ids,
+                "prompt_fact_ids": [fact_ids[index] for index in item.get("prompt_fact_indices", range(len(fact_ids)))],
                 "path_ids": path_ids_by_relation.get(relation_id, []),
                 "decision": decision,
                 "decision_reason": (
@@ -462,7 +462,43 @@ def _build_stage0_v3(
     }
 
 
-def coarse_relation_filtering(record: EntityRecord, missing_mode: str) -> dict[str, Any]:
+def sync_stage0_decisions(coarse: dict[str, Any]) -> dict[str, Any]:
+    """Update the decision view without renumbering immutable facts or paths."""
+    stage0 = deepcopy(coarse["stage0_v3"])
+    selected = {_v3_relation_id(item): item for item in coarse["selected_relations"]}
+    discarded = {_v3_relation_id(item): item for item in coarse["discarded_relations"]}
+    for relation in stage0["relations"]:
+        ref = relation["relation_id"]
+        relation["decision"] = "selected" if ref in selected else "discarded"
+        if ref in selected:
+            relation["decision_reason"] = selected[ref].get("semantic_reason") or "selected_by_semantic_stage0"
+        else:
+            relation["decision_reason"] = discarded.get(ref, {}).get("discard_reason", "not_selected_by_semantic_stage0")
+    stage0["decisions"].update(
+        selected_relation_ids=_v3_relation_ids(coarse["selected_relations"]),
+        discarded_relation_ids=_v3_relation_ids(coarse["discarded_relations"]),
+        high_recall_relation_ids=_v3_relation_ids(coarse["high_recall_relation_candidates"]),
+        selection_method="semantic_stage0",
+    )
+    return stage0
+
+
+def as_catalogue_only(coarse: dict[str, Any]) -> dict[str, Any]:
+    """New mainline: catalogue first; relevance retrieval handles coarse selection later."""
+    stage0 = deepcopy(coarse["stage0_v3"])
+    for item in stage0["relations"]:
+        item.update(decision="available", decision_reason="retained_for_task_relevance_retrieval")
+    stage0["decisions"].update(selection_method="catalogue_only", selected_relation_ids=[],
+        discarded_relation_ids=[], high_recall_relation_ids=[item["relation_id"] for item in stage0["relations"]])
+    stage0["decisions"].pop("rule_baseline_selected_relation_ids", None)
+    sampling = {"policy_version": "full_graph_catalogue_v2", "catalog_fact_count": len(stage0["facts"]),
+                "eligible_relation_count": len(stage0["relations"]), "fact_budget": None}
+    stage0["decisions"]["evidence_sampling"] = sampling
+    return {"stage0_v3": stage0, "selected_relations": [], "discarded_relations": [],
+            "filtered_triples": [item["triple"] for item in stage0["facts"]], "evidence_sampling": sampling}
+
+
+def coarse_relation_filtering(record: EntityRecord, missing_mode: str, *, catalogue_only: bool = False) -> dict[str, Any]:
     """Clean and compress graph neighbors into relation-level evidence.
 
     The rule stage keeps a deterministic ``selected_relations`` baseline for
@@ -470,15 +506,38 @@ def coarse_relation_filtering(record: EntityRecord, missing_mode: str) -> dict[s
     intended for the LMM semantic coarse-filtering mainline.
     """
     grouped: OrderedDict[tuple[str, str], list[dict[str, Any]]] = OrderedDict()
-    for neighbor in record.neighbors:
+    if missing_mode not in {"text", "image"}:
+        raise ValueError("missing_mode must be one of: text, image")
+    context = available_context(record, missing_mode)
+    seen_neighbors = set()
+    for raw_neighbor in sorted(record.neighbors, key=neighbor_key):
+        neighbor = public_neighbor(record, raw_neighbor)
         relation = str(neighbor.get("relation") or "related to")
         direction = str(neighbor.get("direction") or "out")
+        neighbor.update(relation=relation, direction=direction)
+        source_id = neighbor.get("entity_key")
+        if source_id is None:
+            source_id = neighbor.get("entity_id")
+        identity = (relation, direction, str(source_id if source_id is not None else _neighbor_label(neighbor)))
+        if identity in seen_neighbors:
+            continue
+        seen_neighbors.add(identity)
         grouped.setdefault((relation, direction), []).append(neighbor)
+
+    if catalogue_only:
+        groups = [{"relation": relation, "direction": direction, "frequency": len(neighbors),
+                   "neighbor_entities": [_neighbor_label(neighbor) for neighbor in neighbors],
+                   "evidence_triples": [_triple(record, neighbor) for neighbor in neighbors],
+                   "path_context": _two_hop_path_context({"relation": relation, "direction": direction}, neighbors)}
+                  for (relation, direction), neighbors in grouped.items()]
+        stage0 = _build_stage0_v3(record, groups, [], [], exact_relation_ids=True)
+        return as_catalogue_only({"stage0_v3": stage0})
 
     cleaned = []
     discarded = []
     for (relation, direction), neighbors in grouped.items():
-        evidence = [_triple(record, neighbor) for neighbor in neighbors[:3]]
+        representatives = representative_neighbors(neighbors, missing_mode, context)
+        evidence = [_triple(record, neighbor) for neighbor in neighbors]
         item = {
             "relation": relation,
             "direction": direction,
@@ -489,12 +548,18 @@ def coarse_relation_filtering(record: EntityRecord, missing_mode: str) -> dict[s
                 neighbor.get("label") or neighbor.get("entity_key") or "unknown" for neighbor in neighbors
             ],
             "evidence_triples": evidence,
+            "prompt_evidence_triples": [_triple(record, neighbor) for neighbor in representatives],
+            "prompt_neighbor_entities": [_neighbor_label(neighbor) for neighbor in representatives],
+            "prompt_fact_indices": [neighbors.index(neighbor) for neighbor in representatives],
+            "context_relevance": max((token_cosine(context, str(neighbor.get("label") or "") + " " +
+                                                   str(neighbor.get("description") or ""))
+                                      for neighbor in neighbors), default=0.0),
         }
         if _is_low_value_relation(relation):
             item["discard_reason"] = "low_value_metadata"
             discarded.append(item)
         else:
-            cleaned.append(_semantic_candidate(record, item, neighbors, missing_mode))
+            cleaned.append(_semantic_candidate(record, item, representatives, missing_mode))
 
     cleaned.sort(key=lambda item: (-item["coarse_score"], item["relation"].lower(), item["direction"]))
     kept = cleaned[:8]
@@ -506,17 +571,41 @@ def coarse_relation_filtering(record: EntityRecord, missing_mode: str) -> dict[s
             item["discard_reason"] = "below_stage_0_threshold"
             discarded.append(item)
 
-    compressed_evidence = [
-        triple for item in cleaned for triple in item["evidence_triples"]
-    ]
-    return {
+    prompt_groups = representative_relations(cleaned, missing_mode)
+    prompt_neighbors = []
+    for index in range(FACTS_PER_RELATION):
+        for item in prompt_groups:
+            indices = item["prompt_fact_indices"]
+            if index < len(indices) and len(prompt_neighbors) < RECORD_NEIGHBOR_BUDGET:
+                neighbor = grouped[(item["relation"], item["direction"])][indices[index]]
+                prompt_neighbors.append({key: neighbor[key] for key in
+                                         ("entity_key", "label", "relation", "direction", "description") if key in neighbor})
+    result = {
         "cleaned_relation_groups": cleaned,
-        "high_recall_relation_candidates": cleaned[:24],
-        "compressed_evidence": compressed_evidence,
+        "high_recall_relation_candidates": prompt_groups,
+        "compressed_evidence": [triple for item in prompt_groups for triple in item["prompt_evidence_triples"]],
+        "prompt_neighbors": prompt_neighbors,
         "selected_relations": kept,
+        "rule_baseline_selected_relations": deepcopy(kept),
         "discarded_relations": discarded,
         "filtered_triples": [
             triple for item in kept for triple in item["evidence_triples"]
         ],
         "stage0_v3": _build_stage0_v3(record, cleaned, kept, discarded),
     }
+    result["stage0_v3"]["decisions"]["high_recall_relation_ids"] = _v3_relation_ids(prompt_groups)
+    result["stage0_v3"]["decisions"]["rule_baseline_selected_relation_ids"] = _v3_relation_ids(kept)
+    result["stage0_v3"]["decisions"]["evidence_sampling"] = {
+        "policy_version": SAMPLING_VERSION,
+        "target_modality": missing_mode,
+        "relation_budget": RELATION_BUDGET, "facts_per_relation": FACTS_PER_RELATION,
+        "record_neighbor_budget": RECORD_NEIGHBOR_BUDGET,
+        "stage1_fact_budget": KNOWLEDGE_FACT_BUDGET,
+        "input_edge_count": len(record.neighbors),
+        "catalog_fact_count": len(result["stage0_v3"]["facts"]),
+        "eligible_relation_count": len(cleaned), "prompt_relation_count": len(prompt_groups),
+        "prompt_fact_count": sum(len(item["prompt_fact_indices"]) for item in prompt_groups),
+        "coverage_is_recall_estimate": False,
+    }
+    result["evidence_sampling"] = deepcopy(result["stage0_v3"]["decisions"]["evidence_sampling"])
+    return result

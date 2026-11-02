@@ -11,7 +11,7 @@ from mmkgc.adapters.qwen import QwenConfig, QwenLocalSemanticStagePlanner
 from mmkgc.adapters.stage1_repair import targeted_knowledge_repair, merge_knowledge_repair
 from mmkgc.adapters.qwen_stage2_repair import TASK_MARKER, targeted_repair_tasks, merge_targeted_response
 from mmkgc.stages.modeling import KnowledgeResponseValidationError, knowledge_response_errors
-from mmkgc.stages.semantic import StrictJsonStagePlanner, KNOWLEDGE_REQUEST_CONTEXT
+from mmkgc.stages.semantic import LegacyKnowledgeStagePlanner as StrictJsonStagePlanner, KNOWLEDGE_REQUEST_CONTEXT
 from mmkgc.stages.relation_planning import RelationPlanValidationError, selection_prompt
 from test_stage1_contract_repair import fixture, invalid
 from test_stage2_qwen_targeted_repair import example, planner

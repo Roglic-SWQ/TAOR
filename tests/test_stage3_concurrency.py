@@ -11,7 +11,7 @@ from mmkgc.adapters.base import GeneratedImageArtifact
 from mmkgc.adapters.qwen import QwenConfig, QwenLocalImagePromptGenerator, QwenLocalTextGenerator, load_qwen_config
 from mmkgc.data import EntityRecord
 from mmkgc.stages.generation import relation_alternation_generation, safer_relation_alternation_generation
-from mmkgc.stages.modeling import apply_knowledge_response, build_knowledge_input
+from mmkgc.stages.modeling import apply_knowledge_response, build_legacy_knowledge_input as build_knowledge_input
 from mmkgc.stages.plan_context import compile_plan_context
 from mmkgc.stages.relation_planning import apply_relation_plans
 

@@ -8,7 +8,7 @@ from urllib.error import HTTPError
 import pytest
 
 from mmkgc.adapters.qwen import QwenConfig
-from mmkgc.adapters.relation_planner import GPT4oMiniRelationPlanner
+from mmkgc.adapters.relation_planner import LegacyRelationPlanner as GPT4oMiniRelationPlanner
 from mmkgc.stages.relation_planning import (
     RelationPlanValidationError,
     apply_relation_plans,

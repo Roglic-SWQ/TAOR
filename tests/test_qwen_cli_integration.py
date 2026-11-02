@@ -259,6 +259,7 @@ def _jsonl_rows(path: Path) -> list[dict]:
 def test_python_api_default_mainline_text_mode_sets_dataset_root(monkeypatch):
     import mmkgc.defaults as defaults_module
     import mmkgc.ranking.factory as ranking_factory
+    monkeypatch.setattr(defaults_module, "Qwen3EvidenceReranker", lambda *_args, **_kwargs: object())
 
     qwen_config = SimpleNamespace(
         model_name="Qwen/Qwen2-VL-7B-Instruct",
@@ -302,6 +303,8 @@ def test_python_api_default_mainline_text_mode_sets_dataset_root(monkeypatch):
     pipeline = defaults_module.build_default_mainline_pipeline(missing_mode="text")
 
     assert pipeline.dataset_root == (defaults_module.MMKGC_ROOT / "datasets/MKG-W").resolve()
+    assert pipeline.candidate_budget == 1
+    assert pipeline.relation_planner.max_selected_facts == 64
 
 
 

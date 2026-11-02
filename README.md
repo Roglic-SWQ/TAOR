@@ -1,54 +1,72 @@
 # TAOR / MMKGC
 
-当前 MMKGC 五阶段多模态知识图谱补全代码。Stage 0、Stage 1 知识建模、Stage 2
-关系精选及 Stage 3 文本／图像提示词生成默认采用本地 Qwen2-VL-7B-Instruct，
+当前 MMKGC 五阶段多模态知识图谱补全代码。Stage 0 保存事实目录，Stage 1 知识建模、Stage 2
+事实精选及 Stage 3 文本／图像提示词生成默认采用本地 Qwen2-VL-7B-Instruct，
 Stage 4 的 GPT 评分采用 GPT-4o-mini。文本和图片分别通过 `text` / `image`
 模式执行，均支持 Think → Act → Observe → Reflect 的一次有限反馈闭环。
 
 | 阶段 | 职责 |
 | --- | --- |
-| Stage 0 | Qwen2-VL-7B-Instruct 进行关系语义粗筛 |
-| Stage 1 | Qwen2-VL-7B-Instruct 构建知识模型，Qwen3-Reranker-4B 匹配证据 |
-| Stage 2 | Qwen2-VL-7B-Instruct 选择事实角色、证据引用和候选配额，程序编译候选专属事实检查清单 |
-| Stage 3 | Qwen2-VL-7B-Instruct 生成文本或图像提示词，SDXL 生成候选图像；接收定向修复反馈 |
+| Stage 0 | 程序保存完整一跳事实目录，去重并保留方向，不调用 LLM 硬删关系 |
+| Stage 1 | 图谱及各模态观察统一成三元组，Qwen3-Reranker-4B 按生成任务与语义身份相关性粗筛 |
+| Stage 2 | LLM 选择一份有数量上限的共享事实集合，程序绑定证据和共同检查清单 |
+| Stage 3 | 基于共享事实生成文本或协调图片的表达视角，SDXL 生成候选图像；接收定向修复反馈 |
 | Stage 4 | GPT-4o-mini 逐事实观察，结合 CLIP、BLIP 等评分器排序；修复后再次评估 |
 
-Stage 2 按事实约束证据引用，保留每个事实的角色记录，并由模型单独选择固定数量
-的候选锚点。程序统计锚点出现次数得到配额，辅助事实允许零配额。
-一次反馈全部可检测的契约错误，最多请求模型修正两轮，对重复的无效响应提前停止。
-千问遇到孤立的漏写事实、候选槽位或支持引用错误时，只请求模型补答对应字段，
-小响应按实际事实或槽位键约束；保留其他合法决策，合并后再次执行完整校验。
-当 primary 数超过图片预算时，千问显式将冲突事实划分为 primary / secondary，
-同时重新选择槽位；程序验证划分完整且互斥，再合并角色和理由，其他事实与证据保持原样。
+Stage 0 的完整一跳目录全部进入 Stage 1，取消新任务的 24 类关系／32 条图谱事实截断。
+模型最多查看 32 条图谱身份示例，这只限制提示词，不限制程序保存的事实。统一建模后，
+reranker 对全部事实分批计算任务相关性，默认选前 64 条送给 Stage 2；完整目录仍然保存。
+可用 `--relevance-fact-budget` 或 Python API 的 `relevance_fact_budget` 调整本轮规划视图。
+数据范围、来源与验证边界见
+[Stage 0 证据选择](docs/stage0-evidence-selection.zh.md)。
 
-Stage 1 对漏写、重复或未知事实 ID 等契约错误同样提供具体修正反馈：列出完整
-ID 集合及其原始三元组，最多额外修正两次。程序保留完整性校验，不补写模型 claim。
-本地千问遇到可独立修正的错误时，只补答对应字段或以事实 ID 为键的 claim，
-保留已合法的其他字段。损坏的 JSON 从原始输入重新构造修正请求，不回喂错误原文。
+Stage 2 默认使用 `shared_fact_selection_v1`：模型只返回状态和 `selected_fact_ids`，
+一次选择一份事实集合，数量可以少于 `--max-selected-facts`（默认上限 64，不要求填满）。
+未选事实仍保留在 Stage 1。事实选择与生成数量分开：文本默认生成一条完整描述，图片默认
+使用 3 个生成尝试的运行预算，与正式图片批处理入口一致，可通过 `--candidate-budget` 调整。
+Stage 3 读取相同事实和本轮先前提示词，协调表达重点，不分配 Stage 2 focus 或固定视角模板。
+完全重复的提示词跳过图片生成，因此实际候选可以少于预算；未实现语义级去重或效果驱动早停。
+所有候选使用共同事实参照；图片可选细节未展示与事实矛盾分别记录。旧计划仍可读取恢复。
+格式或引用错误最多修正两轮，重复无效响应提前停止。协议与兼容边界见
+[Stage 2 精简计划](docs/stage2-candidate-plan.zh.md)。
+
+Stage 1 默认采用 `grounded_triples_v2`，统一保存 `subject / relation / object` 与来源引用。
+图谱事实由程序原样带入，模型只返回实体简要身份、`extracted_triples` 和不确定项，
+不再逐条改写图谱 claim，也不单独生成 attribute 或视觉档案。主谓宾完全相同的事实合并来源，
+入边保留原始主语和宾语。文本、图片观察、视频帧／片段和音频转写／声音观察通过各自来源接入，
+可保留文件、帧号、时间段等定位。已有原图使用两步建模：先看图生成自然语言描述，
+再让模型同时读取描述和同一张原图，核对、补充并抽取三元组。视频／音频也采用两步建模：
+先根据原始画面与音轨／原音频生成描述，再结合描述与同一份媒体输入抽取三元组。
+视频约每秒采一帧并保留完整主音轨，记录实际时间位置；短暂事件可能遗漏。
+两步记录描述、媒体指纹和来源引用；生成描述不作为独立佐证，也不覆盖原始输入记录。
+原始视频／音频需要 `ffmpeg`／`ffprobe` 和支持音频输入的 Stage 1 模型；默认 Qwen2-VL 不能听音频。
+可用 `--stage1-model-config configs/media-stage1-api.yaml` 指定媒体模型，配置与限制见运行文档。
+新流程不再运行事实与原证据的 rerank 对照；`relevance_score` 只表示任务用途相关性，不表示事实真假。
+格式或引用错误最多额外修正两次，从原始输入重建完整回答，不回喂错误原文。
 Stage 1 默认总时限 180 秒，初次请求、网络重试和业务修正共享；
 Python API 可通过 `knowledge_stage_timeout_seconds` 调整。
 
 Stage 2 每轮模型调用对超时、断连等瞬时故障默认重试一次，与业务修正分别计数，阶段总时限为 300 秒。
-仅支持引用出错时，修正 Schema 按已确定角色限制合法支持 ID，修正请求不携带错误响应原文。
+修正请求只携带原始输入与结构化错误，不回喂错误响应原文。
 本地千问 Stage 3 遇到重复或截断时使用短请求、JSON 约束及有界重生成。
 
 Stage 4 的 GPT 请求支持候选间并发，配置为 `max_concurrency: 10`。每实体
-5 张候选图时实际最多并发 5 个评分请求。4／10／50 实体测试仍逐实体执行；
+3 张候选图时实际最多并发 3 个评分请求。4／10／50 实体测试仍逐实体执行；
 4580 实体补全脚本默认在 GPT 评分等待期间准备下一实体的 Stage 0–2，最多两个实体在途。
 本地模型调用均在主线程顺序执行，避免同时占用 GPU。
 
-Stage 3 支持通过 `inference.stage3_max_concurrency` 设置提示词请求并发。
-千问主配置默认 3；保留的 GPT 对照配置为 5。SDXL 按候选顺序逐张生成图片。
-千问配置通过 `inference.prompt_profile: qwen7b_original_v1` 恢复原来的 Stage 0 / 1 / 3
-提示词，包括 system 指令、文本描述和 SDXL 提示词模板。GPT 对照配置继续使用
-`gpt4omini_stage03_v2`。调用日志分别记录提示词版本和实际 `model_name`。
-初次生成保留上述模板；Reflect 请求额外携带原内容和结构化修复上下文。
+Stage 3 的共享事实首轮提示词按顺序协调，后续请求读取此前已接受的表达。
+独立候选的历史协议与修复请求支持 `inference.stage3_max_concurrency`；
+千问主配置默认 3，保留的 GPT 对照配置为 5。SDXL 按候选顺序逐张生成图片。
+千问配置中的 `inference.prompt_profile: qwen7b_original_v1` 用于兼容历史提示词。
+新任务的统一三元组、共享事实选择及 Stage 3 文本／图片生成使用对应的新结构化提示词，
+调用日志记录实际提示词版本与 `model_name`。Reflect 请求额外携带原内容和结构化修复上下文。
 
 ## Think → Act → Observe → Reflect
 
 | 环节 | 当前实现 |
 |---|---|
-| Think | Stage 0–2：关系粗筛、知识建模、证据 rerank、事实角色和候选计划 |
+| Think | Stage 0–2：事实目录、知识建模、相关性 rerank 和共享事实选择 |
 | Act | Stage 3：生成文本，或先生成图像 prompt 再由 SDXL 出图 |
 | Observe | Stage 4：对照当前候选应表达的事实逐项检查，并进行质量排序 |
 | Reflect | 根据具体观察条目修改原文本或 prompt，反馈到 Stage 3，最多一轮 |
@@ -63,6 +81,7 @@ flowchart LR
 ```
 
 每个候选的 `verification_targets` 来自自己的 `must_include` 和 `should_include`，
+新共享事实流程中这些检查项由同一个事实集派生；图片可选细节未展示不会单独触发强制修复。
 通过 `check_id`、`fact_id` 和 `evidence_refs` 关联到原计划和证据。Observe 在同一次
 GPT 评分请求中返回逐项 `fact_checks`：
 
@@ -117,7 +136,7 @@ cp .env.example .env
 ```text
 datasets/MKG-W/                         # entity2id.txt、relation2id.txt、train.txt 等
 Qwen/Qwen2-VL-7B-Instruct/              # Stage 0 / 1 / 2 / 3 本地语言模型服务
-Qwen3-Reranker-4B/                      # Stage 1 证据匹配
+Qwen3-Reranker-4B/                      # Stage 1 任务相关性粗筛
 SDXL/stable-diffusion-xl-base-1.0/       # 图像生成
 CLIP/                                  # 本地 CLIP 权重
 blip-itm-large-coco/                    # 本地 BLIP 图文匹配模型
@@ -135,7 +154,7 @@ models/bertscore/roberta-large/         # 可选 BERTScore
 需要对照时可传 `--stage2-model-config configs/openai-gpt4o-mini-judge.yaml`；
 4 / 10 / 50 实体脚本也支持 `STAGE2_MODEL_CONFIG` 覆盖。
 Stage 2 千问通过普通生成接口输出 JSON，提示词列出完整输出模板；
-本地继续执行同样的事实完整性、证据、角色、候选槽位校验及有界修正。
+本地执行候选数量、事实引用、来源证据校验及有界修正。
 
 ## 运行
 
@@ -216,8 +235,8 @@ PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider \
 及并发/流水线接口。测试使用模拟模型响应，未运行真实 GPT、千问或 SDXL 生成。
 仓库还保留较早接口的测试，部分旧测试尚未适配当前主流程；该记录不代表全部测试通过。
 
-Stage 2 千问加入定向修正后，7 个实体重新规划全部通过；先前版本为 4/7。
-该验证未运行其余四阶段，也未重跑全部 50 个实体。
+旧角色／槽位协议的 Stage 2 千问加入定向修正后，7 个实体重新规划全部通过；先前版本为 4/7。
+该历史验证未运行其余四阶段，也未重跑全部 50 个实体，不代表新候选协议的实测效果。
 结果和限制见 [Stage 2 定向修正验证](docs/evaluation/2026-10-28-stage2-qwen-targeted-repair.zh.md)。
 
 ## 文档

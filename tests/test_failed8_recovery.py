@@ -8,7 +8,7 @@ from urllib.error import HTTPError
 import pytest
 
 from mmkgc.adapters.qwen import QwenConfig, QwenLocalImagePromptGenerator
-from mmkgc.adapters.relation_planner import GPT4oMiniRelationPlanner
+from mmkgc.adapters.relation_planner import LegacyRelationPlanner as GPT4oMiniRelationPlanner
 from mmkgc.stages.relation_planning import RelationPlanValidationError
 
 
@@ -213,7 +213,8 @@ def test_local_qwen_repair_uses_bounded_json_and_no_invalid_response(monkeypatch
             return reply(bad, finish), 1
         assert bad not in prompt
         assert kwargs['structured_repair']
-        assert 'SOURCE_JSON:' in prompt
+        source = json.loads(prompt.split('INPUT_JSON:\n', 1)[1])
+        assert source['source_facts'] == [{'claim': 'A supported fact'}]
         return reply(good), 1
 
     monkeypatch.setattr(g, '_request_json', complete)

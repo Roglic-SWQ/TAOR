@@ -10,16 +10,16 @@ import pytest
 
 from mmkgc.adapters.evidence_reranker import Qwen3EvidenceReranker, score_knowledge_evidence
 from mmkgc.adapters.qwen import QwenConfig
-from mmkgc.adapters.relation_planner import GPT4oMiniRelationPlanner
+from mmkgc.adapters.relation_planner import LegacyRelationPlanner as GPT4oMiniRelationPlanner
 from mmkgc.data import EntityRecord
 from mmkgc.io.writer import _stage_artifact
 from mmkgc.pipeline import MMKGCPipeline
 from mmkgc.ranking.context import build_kg_reference, build_ranking_context
 from mmkgc.stages.generation import _relation_sequence, relation_alternation_generation
-from mmkgc.stages.modeling import apply_knowledge_response, build_knowledge_input
+from mmkgc.stages.modeling import apply_knowledge_response, build_legacy_knowledge_input as build_knowledge_input
 from mmkgc.stages.plan_context import compile_plan_context, ranking_knowledge
 from mmkgc.stages.relation_planning import apply_relation_plans, selection_prompt, selection_response_schema
-from mmkgc.stages.semantic import StrictJsonStagePlanner
+from mmkgc.stages.semantic import LegacyKnowledgeStagePlanner as StrictJsonStagePlanner
 
 
 def record() -> EntityRecord:
@@ -65,6 +65,25 @@ class Scorer:
     def score(self, **kwargs):
         self.calls.append(kwargs)
         return self.value
+
+
+class BatchScorer:
+    def __init__(self, value=0.01, scores=None):
+        self.value = value
+        self.scores = scores
+        self.calls = []
+
+    def score_batch(self, *, queries, documents, instruction):
+        for query, document in zip(queries, documents):
+            self.calls.append({"query": query, "document": document, "instruction": instruction})
+        if self.scores is not None:
+            return list(self.scores)
+        return [self.value for _ in queries]
+
+
+def unscored_knowledge() -> dict:
+    inputs = build_knowledge_input(record(), "text", coarse())
+    return apply_knowledge_response(inputs, model_response(inputs))
 
 
 def knowledge() -> dict:
@@ -172,6 +191,43 @@ def test_reranker_failure_propagates():
 
     with pytest.raises(RuntimeError, match="model unavailable"):
         score_knowledge_evidence(knowledge(), Failing())
+
+
+def test_batched_reranker_keeps_per_fact_records_and_refs():
+    per_item = score_knowledge_evidence(deepcopy(unscored_knowledge()), Scorer())
+    batched_scorer = BatchScorer()
+    batched = score_knowledge_evidence(deepcopy(unscored_knowledge()), batched_scorer)
+
+    assert len(batched_scorer.calls) == len(per_item["relation_facts"])
+    for item_fact, batch_fact in zip(per_item["relation_facts"], batched["relation_facts"]):
+        assert batch_fact["scoring_status"] == "scored"
+        assert batch_fact["evidence_match_score"] == item_fact["evidence_match_score"]
+        assert batch_fact["model_call_ref"] == item_fact["model_call_ref"]
+    refs = [fact["model_call_ref"] for fact in batched["relation_facts"]]
+    assert refs == [f"stage1_reranker:{index:04d}" for index in range(1, len(refs) + 1)]
+    assert [call.get("fact_id") for call in batched_scorer.calls] == [
+        fact["fact_id"] for fact in batched["relation_facts"]
+    ]
+
+
+def test_batched_reranker_length_mismatch_fails():
+    with pytest.raises(ValueError, match="one finite score per fact"):
+        score_knowledge_evidence(unscored_knowledge(), BatchScorer(scores=[0.5]))
+
+
+def test_batched_invalid_reranker_scores_fail():
+    scores = [0.5] * (len(unscored_knowledge()["relation_facts"]) - 1) + [float("nan")]
+    with pytest.raises(ValueError, match="finite score"):
+        score_knowledge_evidence(unscored_knowledge(), BatchScorer(scores=scores))
+
+
+def test_batched_reranker_failure_propagates():
+    class Failing:
+        def score_batch(self, **kwargs):
+            raise RuntimeError("model unavailable")
+
+    with pytest.raises(RuntimeError, match="model unavailable"):
+        score_knowledge_evidence(unscored_knowledge(), Failing())
 
 
 @pytest.mark.parametrize("problem", ["missing", "duplicate", "unknown", "quota_total", "bool_quota", "negative_quota", "context_quota", "foreign_ref", "bad_support", "wrong_status"])
@@ -294,7 +350,7 @@ def test_pipeline_builds_scores_plans_and_generates_without_rule_modeling():
             assert "Example Architect" not in build_kg_reference(context, "text")
             return {"ranking_status": "valid", "text_ranking": {"ranked_candidates": list(context.text_candidates)}}
 
-    pipeline = MMKGCPipeline(semantic_planner=Builder(), evidence_reranker=Scorer(), relation_planner=Planner(), text_generator=Generator(), ranking_engine=Ranking())
+    pipeline = MMKGCPipeline(candidate_budget=5, semantic_planner=Builder(), evidence_reranker=Scorer(), relation_planner=Planner(), text_generator=Generator(), ranking_engine=Ranking())
     result = pipeline.run(record(), "text")
     assert len(result["knowledge_modeling"]["relation_facts"]) == 3
     assert "constraint_compilation" not in result["knowledge_modeling"]

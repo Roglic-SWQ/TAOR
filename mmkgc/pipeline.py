@@ -22,7 +22,8 @@ from mmkgc.stages import (
     safer_relation_alternation_generation,
 )
 from mmkgc.stages.semantic import StageSemanticPlanner
-from mmkgc.adapters.evidence_reranker import score_knowledge_evidence
+from mmkgc.adapters.evidence_reranker import score_knowledge_evidence, rerank_knowledge_relevance
+from mmkgc.stages.triples import TRIPLE_SCHEMAS
 from mmkgc.stages.plan_context import compile_plan_context, ranking_knowledge
 from mmkgc.observation import observation_priority, repair_is_eligible
 
@@ -51,7 +52,7 @@ class MMKGCPipeline:
 
     def __init__(
         self,
-        candidate_budget: int = 5,
+        candidate_budget: int | None = None,
         text_generator: TextGenerator | None = None,
         image_prompt_generator: ImagePromptGenerator | None = None,
         image_generator: ImageGenerator | None = None,
@@ -61,6 +62,7 @@ class MMKGCPipeline:
         knowledge_planner: StageSemanticPlanner | None = None,
         evidence_reranker: Any | None = None,
         relation_planner: Any | None = None,
+        relevance_fact_budget: int = 64,
         stage4_config: str | Path | None = None,
         dataset_root: str | Path | None = None,
     ):
@@ -72,6 +74,9 @@ class MMKGCPipeline:
         self.knowledge_planner = knowledge_planner if knowledge_planner is not None else semantic_planner
         self.evidence_reranker = evidence_reranker
         self.relation_planner = relation_planner
+        if type(relevance_fact_budget) is not int or relevance_fact_budget <= 0:
+            raise ValueError("relevance_fact_budget must be a positive integer")
+        self.relevance_fact_budget = relevance_fact_budget
         self.stage4_config = Path(stage4_config or "configs/stage4-model-fusion.yaml")
         self.dataset_root = Path(dataset_root).resolve() if dataset_root is not None else None
         self.project_root = Path(__file__).resolve().parents[1]
@@ -87,22 +92,35 @@ class MMKGCPipeline:
     def run(self, record: EntityRecord, missing_mode: str) -> dict[str, Any]:
         return self.finish(self.prepare(record, missing_mode))
 
+    def generation_budget(self, missing_mode: str) -> int:
+        budget = self.candidate_budget
+        if budget is None:
+            return 1 if missing_mode == "text" else 3
+        if type(budget) is not int or budget <= 0:
+            raise ValueError("candidate_budget must be a positive integer")
+        return budget
+
     def prepare(self, record: EntityRecord, missing_mode: str) -> PreparedEntity:
         """Run dependent Stage 0-2 work on the caller thread."""
         if missing_mode not in {"text", "image"}:
             raise ValueError("missing_mode must be one of: text, image")
         self._validate_mainline_components(missing_mode)
-        if type(self.candidate_budget) is not int or self.candidate_budget <= 0:
-            raise ValueError("candidate_budget must be a positive integer")
+        candidate_budget = self.generation_budget(missing_mode)
         semantic_call_start = _semantic_call_count(self.semantic_planner)
         knowledge_call_start = _semantic_call_count(self.knowledge_planner)
         evidence_call_start = len(getattr(self.evidence_reranker, "calls", []))
         relation_call_start = len(getattr(self.relation_planner, "calls", []))
-        coarse = coarse_relation_filtering(record, missing_mode)
-        coarse = self.semantic_planner.refine_coarse(record, missing_mode, coarse)
+        unified = getattr(self.knowledge_planner, "knowledge_schema", None) in TRIPLE_SCHEMAS
+        coarse = coarse_relation_filtering(record, missing_mode, catalogue_only=True) if unified else coarse_relation_filtering(record, missing_mode)
+        if not unified:
+            coarse = self.semantic_planner.refine_coarse(record, missing_mode, coarse)
         knowledge = knowledge_modeling(record, missing_mode, coarse, planner=self.knowledge_planner)
-        knowledge = score_knowledge_evidence(knowledge, self.evidence_reranker)
-        selection = self.relation_planner.plan(record, missing_mode, knowledge, self.candidate_budget)
+        if knowledge.get("schema_version") in TRIPLE_SCHEMAS:
+            knowledge = rerank_knowledge_relevance(knowledge, self.evidence_reranker, missing_mode,
+                                                  fact_budget=self.relevance_fact_budget)
+        else:
+            knowledge = score_knowledge_evidence(knowledge, self.evidence_reranker)
+        selection = self.relation_planner.plan(record, missing_mode, knowledge, candidate_budget)
         selection, reasoning = compile_plan_context(knowledge, selection, missing_mode)
         model_calls = _semantic_model_calls(self.semantic_planner, start_index=semantic_call_start)
         if self.knowledge_planner is not self.semantic_planner:
@@ -126,7 +144,7 @@ class MMKGCPipeline:
             self.text_generator,
             self.image_prompt_generator,
             self.image_generator,
-            candidate_budget=self.candidate_budget,
+            candidate_budget=self.generation_budget(missing_mode),
         )
         generation_model_calls, image_model_calls = _split_generation_model_calls(
             generation.get("model_calls", [])
@@ -164,7 +182,7 @@ class MMKGCPipeline:
                     self.text_generator,
                     self.image_prompt_generator,
                     self.image_generator,
-                    candidate_budget=self.candidate_budget,
+                    candidate_budget=self.generation_budget(missing_mode),
                     failed_ranking=original_ranking,
                     attempt=1,
                     stage3_feedback=stage3_feedback,
@@ -267,8 +285,10 @@ class MMKGCPipeline:
 
     def _validate_mainline_components(self, missing_mode: str) -> None:
         missing = []
-        if self.semantic_planner is None:
+        if self.semantic_planner is None and getattr(self.knowledge_planner, "knowledge_schema", None) not in TRIPLE_SCHEMAS:
             missing.append("semantic_planner")
+        if self.knowledge_planner is None:
+            missing.append("knowledge_planner")
         if self.evidence_reranker is None:
             missing.append("evidence_reranker")
         if self.relation_planner is None:
@@ -373,6 +393,14 @@ def _semantic_model_calls(
             "ground_truth_used": False,
         }
         for key in (
+            "prompt_version",
+            "model_name",
+            "response_schema_version",
+            "image_input_metadata",
+            "media_input_metadata",
+            "media_description_model_call_refs",
+            "image_description_model_call_ref",
+            "model_call_ref",
             "knowledge_repair_version",
             "validation_attempts",
             "targeted_repairs",
