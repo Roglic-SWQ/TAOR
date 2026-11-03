@@ -6,6 +6,7 @@ lmm:
   api_key_env: OPENAI_API_KEY
   audio_input_type: input_audio
 inference:
+  stage1_image_batch_size: 4
   prompt_profile: qwen7b_original_v1
   max_token: 4096
   temperature: 0.0

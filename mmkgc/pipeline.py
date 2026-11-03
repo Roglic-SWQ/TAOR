@@ -400,6 +400,8 @@ def _semantic_model_calls(
             "media_input_metadata",
             "media_description_model_call_refs",
             "image_description_model_call_ref",
+            "image_description_model_call_refs",
+            "image_extraction_batch",
             "model_call_ref",
             "knowledge_repair_version",
             "validation_attempts",

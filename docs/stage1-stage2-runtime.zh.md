@@ -70,6 +70,36 @@ Stage 2 可通过 `--stage2-model-config` 或脚本的 `STAGE2_MODEL_CONFIG` 显
 图片属于待补目标时，两步视觉调用均跳过。目标模态及显式标明由它派生的观察仍被屏蔽。
 CLI 生成目标仍为 `text`／`image`。
 
+### 多张原图
+
+MKG-W 优先读取 `image_alignment/qid2images.json`、`entity2images.json`、`entity_id2images.json`
+中的图片列表，按实体 URI、短 ID 或数字 ID 查找。没有索引条目时，扫描 `images_by_id/<数字 ID>/`、
+`images_by_id/<实体 ID>/` 及旧版 `images/<实体名称>/`，保留所有发现的原图并按路径去重。
+`EntityRecord.image_paths` 保存完整列表，`existing_modalities.image` 兼容性地保留首图。
+目标是缺失图片时，加载器屏蔽整份图片列表，Stage 1 不读取或附加这些目标原图。
+
+多图执行“逐图描述 → 带原图联合抽取 → 统一合并”。3 张图片通常为 3 次描述请求加 1 次抽取请求，
+不含网络重试和格式修正。每张图片使用独立的 `existing:image:001:original`、
+`existing:image:001:description` 等引用。引用某份描述的三元组必须同时引用该描述对应的原图；
+可以只引用原图来纠正描述错误，不能用另一张图的 ID 代替。单图继续使用旧 ID 和旧产物结构。
+
+原图在首次模型调用前全部读取并冻结。每次描述只附加对应图片，联合抽取及其格式修正保留同一份原图字节。
+`image_modeling.images` 分别保存描述、图片指纹、路径和调用引用，`extraction_batches` 记录批次。
+全部事实统一参与后续相关性排序和 Stage 2 共享事实选择，不为图片单独分配生成配额。
+
+`inference.stage1_image_batch_size` 默认 4，可在 `configs/qwen7b-stage1.yaml` 或
+`configs/media-stage1-api.yaml` 中调整。超过批大小时分别抽取，再按完全相同的主谓宾合并来源；
+各批只能引用本批实际附加的图片，其他批的图片和描述不会进入本批抽取提示词。
+联合视觉判断发生在批内，程序不声称完成了跨批语义冲突识别或同义关系合并。
+模型应保留不同视角的限定并记录不确定项，程序保留这些结果，不通过多图投票决定事实真假。
+
+启动脚本通过 `QWEN_MAX_IMAGES_PER_PROMPT` 设置 vLLM 的 `--limit-mm-per-prompt image=4`，默认 4。
+服务端图片上限不能低于抽取批大小；已有服务需重启后才应用该设置。图片分辨率、文字及输出仍共享模型上下文，
+若请求超出服务上下文，应减小批大小或调整服务配置；程序不会偷偷丢弃图片来满足上限。
+描述、所有批次、网络重试及格式修正仍共享 Stage 1 的总时限（默认 180 秒）。
+任何声明的原图读取失败、描述失败或抽取失败都会报告错误，不把部分图片的结果伪装成完整成功。
+本次验证采用模拟模型响应和真实小图片／音频文件，未调用真实千问、GPT 或图像生成模型。
+
 视频／音频也自动执行“原媒体生成描述 → 描述加原媒体证据提取三元组”：
 
 - 视频 `video` 接受本地 MP4／MOV／WebM。ffprobe 检查时长和流，ffmpeg 从完整时间轴约每秒取一帧，

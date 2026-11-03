@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from mmkgc.adapters.base import GeneratedImageArtifact
-from mmkgc.data import EntityRecord
+from mmkgc.data import EntityRecord, existing_image_paths
 from mmkgc.pipeline import PreparedEntity
 from mmkgc.stages.plan_context import compile_plan_context
 from mmkgc.stages.relation_planning import apply_candidate_slot_plans
@@ -17,6 +17,16 @@ from mmkgc.stages.candidate_planning import FACT_SELECTION_SCHEMA, apply_fact_se
 
 
 def _validate_saved_media_sources(knowledge: dict[str, Any], record: EntityRecord) -> None:
+    from mmkgc.adapters.image_knowledge import image_modeling_entries
+    images = image_modeling_entries(knowledge.get("image_modeling", {}))
+    if images and existing_image_paths(record) != [entry["original_image"]["asset"] for entry in images]:
+        raise ValueError("Current source image assets differ from the saved generation inputs")
+    for entry in images:
+        original = entry["original_image"]
+        path = Path(original["resolved_path"])
+        if (not path.is_file() or path.stat().st_size != original["byte_count"]
+                or hashlib.sha256(path.read_bytes()).hexdigest() != original["sha256"]):
+            raise ValueError("Current source image bytes differ from the saved generation inputs")
     for modality, entry in knowledge.get("media_modeling", {}).items():
         original = entry["original_media"]
         if str(record.existing_modalities.get(modality)) != original["asset"]:

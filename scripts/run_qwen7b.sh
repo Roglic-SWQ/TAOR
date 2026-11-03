@@ -14,8 +14,14 @@ QWEN_MODEL_NAME="${QWEN_MODEL_NAME:-Qwen/Qwen2-VL-7B-Instruct}"
 QWEN_GPU="${QWEN_GPU:-0}"
 QWEN_GPU_MEMORY_UTILIZATION="${QWEN_GPU_MEMORY_UTILIZATION:-0.85}"
 QWEN_MAX_MODEL_LEN="${QWEN_MAX_MODEL_LEN:-12288}"
+QWEN_MAX_IMAGES_PER_PROMPT="${QWEN_MAX_IMAGES_PER_PROMPT:-4}"
 QWEN_DTYPE="${QWEN_DTYPE:-bfloat16}"
 VLLM_ATTENTION_BACKEND="${VLLM_ATTENTION_BACKEND:-XFORMERS}"
+
+if [[ ! "${QWEN_MAX_IMAGES_PER_PROMPT}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "QWEN_MAX_IMAGES_PER_PROMPT must be a positive integer" >&2
+    exit 1
+fi
 
 if ! command -v conda >/dev/null 2>&1; then
     echo "conda was not found in PATH" >&2
@@ -47,6 +53,7 @@ echo "  model:       ${QWEN_MODEL_DIR}"
 echo "  endpoint:    http://${QWEN_HOST}:${QWEN_PORT}/v1"
 echo "  model name:  ${QWEN_MODEL_NAME}"
 echo "  attention:   ${VLLM_ATTENTION_BACKEND}"
+echo "  max images:  ${QWEN_MAX_IMAGES_PER_PROMPT}"
 
 export VLLM_ATTENTION_BACKEND
 CUDA_VISIBLE_DEVICES="${QWEN_GPU}" exec "${QWEN_PYTHON}" -m vllm.entrypoints.openai.api_server \
@@ -56,4 +63,5 @@ CUDA_VISIBLE_DEVICES="${QWEN_GPU}" exec "${QWEN_PYTHON}" -m vllm.entrypoints.ope
     --port "${QWEN_PORT}" \
     --dtype "${QWEN_DTYPE}" \
     --gpu-memory-utilization "${QWEN_GPU_MEMORY_UTILIZATION}" \
-    --max-model-len "${QWEN_MAX_MODEL_LEN}"
+    --max-model-len "${QWEN_MAX_MODEL_LEN}" \
+    --limit-mm-per-prompt "image=${QWEN_MAX_IMAGES_PER_PROMPT}"

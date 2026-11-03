@@ -341,8 +341,10 @@ class StrictJsonStagePlanner:
         if "deadline" in parent:
             deadline = min(deadline, parent["deadline"])
         context = {key: parent[key] for key in ("image_input", "image_input_metadata", "image_description_model_call_ref",
-                   "media_inputs", "media_input_metadata", "media_description_model_call_refs") if key in parent}
-        for key in ("image_input_metadata", "image_description_model_call_ref", "media_input_metadata", "media_description_model_call_refs"):
+                   "media_inputs", "media_input_metadata", "media_description_model_call_refs",
+                   "image_description_model_call_refs", "image_extraction_batch") if key in parent}
+        for key in ("image_input_metadata", "image_description_model_call_ref", "media_input_metadata", "media_description_model_call_refs",
+                    "image_description_model_call_refs", "image_extraction_batch"):
             if key in context:
                 call[key] = context[key]
         token = KNOWLEDGE_REQUEST_CONTEXT.set({**context, "deadline": deadline, "call": call})

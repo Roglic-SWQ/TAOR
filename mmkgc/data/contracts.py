@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
 
@@ -26,6 +27,21 @@ class EntityRecord:
     existing_modalities: Dict[str, Any]
     ground_truth_modalities: Dict[str, Optional[str]]
     modality_completion_policy: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    image_paths: List[str] = field(default_factory=list)
+
+
+def existing_image_paths(record: EntityRecord) -> list[str]:
+    """Return all available originals, accepting historical single-image records."""
+    primary = record.existing_modalities.get("image")
+    values = ([primary] if primary else []) + list(record.image_paths)
+    paths = []
+    for value in values:
+        if not isinstance(value, (str, Path)) or not str(value).strip():
+            raise ValueError("existing image paths must be nonempty local paths")
+        path = str(Path(value))
+        if path not in paths:
+            paths.append(path)
+    return paths
 
 
 @runtime_checkable

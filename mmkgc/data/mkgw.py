@@ -74,6 +74,10 @@ class MKGWDataStore:
         self.entity_info = _load_json(self.dataset_dir / "entity_info.json", {})
         self.entity_texts = self._load_entity_texts()
         self.relation_info = _load_json(self.dataset_dir / "relation_info.json", {})
+        self._image_indexes = [
+            _load_json(self.dataset_dir / "image_alignment" / name, {})
+            for name in ("qid2images.json", "entity2images.json", "entity_id2images.json")
+        ]
         self.triples = []
         for filename in self.graph_filenames:
             self.triples.extend(self._load_triples(filename))
@@ -164,24 +168,51 @@ class MKGWDataStore:
         return texts
 
     def image_path(self, entity_id: int) -> Optional[str]:
+        paths = self.image_paths(entity_id)
+        return paths[0] if paths else None
+
+    def image_paths(self, entity_id: int) -> List[str]:
+        """Load the aligned image list, falling back to entity image directories."""
         metadata = self.entity_metadata(entity_id)
         entity_key = self.entity_key(entity_id)
+        paths: List[str] = []
+        root = self.dataset_dir.resolve()
+
+        def add(path):
+            resolved = path.resolve()
+            if not resolved.is_relative_to(root):
+                raise ValueError("entity image path must stay within dataset_dir")
+            value = str(resolved)
+            if value not in paths:
+                paths.append(value)
+
+        for index in self._image_indexes:
+            for key in (self.entity_id_to_uri[entity_id], entity_key, str(entity_id)):
+                values = index.get(key, [])
+                if not isinstance(values, list) or any(not isinstance(value, str) or not value.strip() for value in values):
+                    raise ValueError("image alignment entries must be lists of nonempty paths")
+                for value in values:
+                    # Declared missing/unreadable files fail explicitly when Stage 1 loads them.
+                    add(root / value)
+        if paths:
+            return paths
+
         image_root = self.dataset_dir / "images"
         extensions = (".jpg", ".jpeg", ".png", ".webp", ".gif")
-
-        for variant in _label_variants(metadata["label"], entity_key):
-            candidate_dir = image_root / variant
+        directories = [self.dataset_dir / "images_by_id" / str(entity_id),
+                       self.dataset_dir / "images_by_id" / entity_key,
+                       *[image_root / variant for variant in _label_variants(metadata["label"], entity_key)]]
+        for candidate_dir in directories:
             if not candidate_dir.is_dir():
                 continue
             for name in ("image.jpg", "image.jpeg", "image.png", "image.webp", "image.gif"):
                 candidate = candidate_dir / name
-                if candidate.exists():
-                    return str(candidate)
+                if candidate.is_file():
+                    add(candidate)
             for candidate in sorted(candidate_dir.iterdir()):
                 if candidate.is_file() and candidate.suffix.lower() in extensions:
-                    return str(candidate)
-
-        return None
+                    add(candidate)
+        return paths
 
     def image_summary(self, entity_id: int) -> Optional[str]:
         """Return a precomputed semantic summary for the entity image, if available."""
@@ -259,7 +290,8 @@ class MKGWDataStore:
         metadata = self.entity_metadata(entity_id)
         raw_metadata = self.entity_info.get(self.entity_key(entity_id), {})
         description = metadata["description"]
-        image = self.image_path(entity_id)
+        images = self.image_paths(entity_id)
+        image = images[0] if images else None
         image_summary = self.image_summary(entity_id) if image else None
         text = description.strip() or None
         existing_modalities = {"text": text, "image": image, "image_summary": image_summary}
@@ -297,6 +329,7 @@ class MKGWDataStore:
             existing_modalities=existing_modalities,
             ground_truth_modalities=ground_truth_modalities,
             modality_completion_policy=modality_completion_policy,
+            image_paths=(images if existing_modalities.get("image") else []),
         )
 
     def select_records(self, missing_mode: str, limit: int | None = None) -> List[EntityRecord]:

@@ -5,6 +5,7 @@ from mmkgc.data.contracts import (
     DatasetStore,
     EntityRecord,
     build_modality_completion_policy,
+    existing_image_paths,
     target_modalities,
 )
 from mmkgc.data.factory import DATASET_STORE_TYPES, build_dataset_store
@@ -18,6 +19,7 @@ __all__ = [
     "MODALITY_COMPLETION_STATUSES",
     "MKGWDataStore",
     "build_modality_completion_policy",
+    "existing_image_paths",
     "build_dataset_store",
     "target_modalities",
 ]

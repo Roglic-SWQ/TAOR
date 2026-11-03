@@ -56,8 +56,11 @@ class QwenConfig:
     stage3_max_concurrency: int = 1
     prompt_profile: str = PROMPT_VERSION
     audio_input_type: str = "input_audio"
+    stage1_image_batch_size: int = 4
 
     def __post_init__(self) -> None:
+        if type(self.stage1_image_batch_size) is not int or self.stage1_image_batch_size < 1:
+            raise ValueError("stage1_image_batch_size must be a positive integer")
         if self.audio_input_type not in {"input_audio", "audio_url"}:
             raise ValueError("audio_input_type must be input_audio or audio_url")
         if type(self.stage3_max_concurrency) is not int or self.stage3_max_concurrency < 1:
@@ -96,6 +99,7 @@ def _coerce_qwen_config(data: dict, source_path: str | Path) -> QwenConfig:
         temperature=float(temperature),
         stage3_max_concurrency=inference.get("stage3_max_concurrency", 1),
         prompt_profile=inference.get("prompt_profile", PROMPT_VERSION),
+        stage1_image_batch_size=inference.get("stage1_image_batch_size", 4),
     )
 
 
@@ -800,8 +804,10 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
         )
 
     def build_knowledge(self, record, missing_mode, coarse):
+        from mmkgc.data.contracts import existing_image_paths
+        image_paths = existing_image_paths(record) if missing_mode != "image" else []
         modalities = [modality for modality in ("image", "video", "audio")
-                      if modality != missing_mode and record.existing_modalities.get(modality)]
+                      if modality != missing_mode and (image_paths if modality == "image" else record.existing_modalities.get(modality))]
         if not modalities:
             return super().build_knowledge(record, missing_mode, coarse)
         from mmkgc.adapters.media_knowledge import (
@@ -809,6 +815,9 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
             load_source_media, with_media_description,
         )
         from mmkgc.stages.modeling import build_knowledge_input, apply_knowledge_response
+        from mmkgc.adapters.image_knowledge import load_source_images, MULTI_IMAGE_MODELING_VERSION
+        from mmkgc.adapters.media_knowledge import SourceMedia
+        from mmkgc.adapters.image_batches import image_batch_input, merge_image_batches
         started = time.perf_counter()
         deadline = started + self.knowledge_stage_timeout_seconds
         inputs = build_knowledge_input(record, missing_mode, coarse)
@@ -817,8 +826,12 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
             remaining = deadline - time.perf_counter()
             if remaining <= 0:
                 raise TimeoutError("Stage 1 total time budget exhausted during media loading")
-            sources.append(load_source_media(record, modality, self.dataset_root,
-                                             timeout_seconds=min(15.0, remaining)))
+            if modality == "image":
+                sources.extend(SourceMedia("image", metadata, image=image)
+                               for image, metadata in load_source_images(record, self.dataset_root))
+            else:
+                sources.append(load_source_media(record, modality, self.dataset_root,
+                                                 timeout_seconds=min(15.0, remaining)))
         model = self.config.model_name.lower()
         if "qwen" in model and "vl" in model and "omni" not in model and any(
                 source.modality == "audio" or source.audio_payload for source in sources):
@@ -830,8 +843,12 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
         for source in sources:
             modality, metadata = source.modality, source.metadata
             call_ref = f"stage1_{modality}_description:{record.entity_key}:{metadata['sha256'][:16]}"
+            if modality == "image" and len(image_paths) > 1:
+                call_ref += ":" + metadata["evidence_id"]
             prompt = DESCRIPTION_PROMPTS[modality]
-            if modality != "image":
+            if modality == "image" and len(image_paths) > 1:
+                prompt += f" Original evidence ID: {metadata['evidence_id']}. Describe only this image."
+            elif modality != "image":
                 prompt += (f" Original evidence ID: {metadata['evidence_id']}. "
                            f"File duration: {metadata['duration_seconds']:.3f} seconds.")
             if modality == "video":
@@ -840,13 +857,17 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
                            f"Source has audio track: {metadata['has_audio_stream']}.")
             call_started = time.perf_counter()
             call = {"stage": f"stage1_{modality}_description", "prompt_version": (
-                    IMAGE_MODELING_VERSION if modality == "image" else MEDIA_MODELING_VERSION),
+                    (MULTI_IMAGE_MODELING_VERSION if len(image_paths) > 1 else IMAGE_MODELING_VERSION)
+                    if modality == "image" else MEDIA_MODELING_VERSION),
                     "prompt": prompt, "contract_repair_retries": 0, "network_attempts": [],
                     "model_call_ref": call_ref, "media_input_metadata": [{"modality": modality, **metadata}],
                     "stage_timeout_seconds": self.knowledge_stage_timeout_seconds}
             if modality == "image":
                 call["image_input_metadata"] = metadata
-                context.update(image_input_metadata=metadata, image_description_model_call_ref=call_ref)
+                if len(image_paths) == 1:
+                    context.update(image_input_metadata=metadata, image_description_model_call_ref=call_ref)
+                else:
+                    context.setdefault("image_description_model_call_refs", {})[metadata["evidence_id"]] = call_ref
             token = KNOWLEDGE_REQUEST_CONTEXT.set({"deadline": deadline, "call": call, "media_inputs": [source]})
             try:
                 description = self._complete_prompt(prompt).strip()
@@ -866,13 +887,38 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
                 self.calls.append(call)
                 KNOWLEDGE_REQUEST_CONTEXT.reset(token)
             inputs = with_media_description(inputs, source, description, call_ref)
-            context["media_description_model_call_refs"][modality] = call_ref
-        token = KNOWLEDGE_REQUEST_CONTEXT.set(context)
-        try:
-            return self._refine("stage1_knowledge", record, missing_mode, inputs,
-                                lambda response: apply_knowledge_response(inputs, response))
-        finally:
-            KNOWLEDGE_REQUEST_CONTEXT.reset(token)
+            key = metadata["evidence_id"] if modality == "image" and len(image_paths) > 1 else modality
+            context["media_description_model_call_refs"][key] = call_ref
+        images = [source for source in sources if source.modality == "image"]
+        other_sources = [source for source in sources if source.modality != "image"]
+        batch_size = self.config.stage1_image_batch_size
+        groups = [images[index:index + batch_size] + other_sources for index in range(0, len(images), batch_size)] or [other_sources]
+        results, batch_records = [], []
+        for index, group in enumerate(groups, 1):
+            original_refs = {source.metadata["evidence_id"] for source in group if source.modality == "image"}
+            batch_inputs = image_batch_input(inputs, original_refs)
+            batch_context = {**context, "media_inputs": group,
+                "media_input_metadata": [{"modality": source.modality, **source.metadata} for source in group]}
+            if len(image_paths) > 1:
+                batch_record = {"batch_index": index, "batch_count": len(groups),
+                                "original_image_refs": sorted(original_refs)}
+                batch_context["image_extraction_batch"] = batch_record
+                batch_context["image_description_model_call_refs"] = {
+                    ref: context["image_description_model_call_refs"][ref] for ref in sorted(original_refs)}
+                batch_context["media_description_model_call_refs"] = {
+                    key: value for key, value in context["media_description_model_call_refs"].items()
+                    if key in original_refs or key in {"video", "audio"}}
+                batch_records.append(batch_record)
+            token = KNOWLEDGE_REQUEST_CONTEXT.set(batch_context)
+            try:
+                results.append(self._refine("stage1_knowledge", record, missing_mode, batch_inputs,
+                    lambda response: apply_knowledge_response(batch_inputs, response)))
+            finally:
+                KNOWLEDGE_REQUEST_CONTEXT.reset(token)
+        result = merge_image_batches(inputs, results)
+        if len(image_paths) > 1:
+            result["image_modeling"]["extraction_batches"] = batch_records
+        return result
 
     def _endpoint(self) -> str:
         return f"{self.config.base_url.rstrip('/')}/chat/completions"
