@@ -43,8 +43,10 @@ class Views:
         self.duplicate = duplicate
     def generate_with_context(self, label, entity_type, relation, angle, facts, *, context):
         self.calls.append(deepcopy(context))
-        index = 1 if self.duplicate else len(self.calls)
-        return {'positive_prompt': f'Museum red brick facade and arched entrance, composition {index}',
+        from mmkgc.stages.presentation import image_rendering_plan
+        rendering = image_rendering_plan(0 if self.duplicate else len(self.calls) - 1)
+        return {'positive_prompt': 'Museum red brick facade and arched entrance, '
+                + rendering['framing'] + ', ' + rendering['subject_placement'],
                 'used_text_cues': [], 'omitted_risky_details': []}
 
 
@@ -161,7 +163,8 @@ def test_views_share_facts_and_checks_and_receive_previous_presentations(monkeyp
 
 def test_duplicate_presentations_do_not_generate_duplicate_images():
     _, _, _, views, result = generated(duplicate=True, budget=4)
-    assert len(views.calls) == 4
+    # The complete entity shares a budget of twice the requested image count.
+    assert len(views.calls) == 8
     assert len(result['relation_alternation_generation']['image_candidates']) == 1
     assert len(result['generated_image_artifacts']) == 1
     assert all(len(call['presentation_context']['previous_candidates']) == 1 for call in views.calls[1:])
@@ -274,6 +277,8 @@ def test_previous_presentations_are_task_context_and_not_new_source_facts():
     payload = generation_payload('Museum', 'museum', 'facade', 'ignored', [], context)
     prompt = build_generation_prompt('image', payload)
     actual = json.loads(prompt.split('INPUT_JSON:\n', 1)[1])
-    assert actual['presentation_context']['previous_candidates'] == context['presentation_context']['previous_candidates']
+    assert 'previous_candidates' not in actual['presentation_context']
+    assert actual['presentation_context']['previous_renderings'] == context['presentation_context']['previous_renderings']
+    assert actual['presentation_context']['requested_rendering'] == context['presentation_context']['requested_rendering']
     assert actual['source_facts'] == context['source_facts']
     assert 'not invented unseen geometry' in prompt

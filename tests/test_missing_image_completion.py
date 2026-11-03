@@ -152,6 +152,54 @@ def test_batch_continues_after_failure_and_resumes_without_regenerating_success(
     assert batch.load(job.root / "metrics_summary.json")["processed_entities"] == 3
 
 
+@pytest.mark.parametrize("failure", ["health", "request"])
+def test_service_recovery_preserves_checkpoints_and_leaves_remaining_entities_pending(tmp_path, monkeypatch, failure):
+    job = make_job(tmp_path)
+    job.config["restart_service_on_timeout"] = failure == "request"
+    def unhealthy(url):
+        raise TimeoutError("service overloaded")
+    monkeypatch.setattr(batch, "qwen_health", unhealthy)
+    class Pipeline:
+        def run(self, entity, mode):
+            if entity.entity_key == "Q2":
+                if failure == "request":
+                    raise TimeoutError("generation request timed out")
+                raise ValueError("invalid response")
+            return result(entity)
+    writer = RunWriter(job.root / "attempts", "attempt_0001", {})
+    store = SimpleNamespace(build_record=lambda entity_id, mode: record(entity_id))
+    with pytest.raises(batch.QwenServiceUnavailableError):
+        batch.run_entities(job, Pipeline(), store, writer)
+    resumed = batch.Job(job.root)
+    assert resumed.rows["Q1"]["status"] == "completed"
+    assert batch.resumable_complete(resumed.rows["Q1"], resumed.root)
+    assert resumed.rows["Q2"]["status"] == "failed"
+    assert resumed.rows["Q3"]["status"] == "pending"
+
+
+def test_entity_attempt_limit_prevents_one_failed_entity_blocking_resumed_batch(tmp_path):
+    job = make_job(tmp_path)
+    job.config["max_entity_attempts"] = 4
+    job.rows["Q1"].update(status="failed", attempt=4)
+    job.rows["Q2"].update(status="failed", attempt=3)
+    assert [item["entity_key"] for _, item in batch.pending_entities(job, True)] == ["Q2", "Q3"]
+
+
+def test_worker_returns_recovery_exit_code_for_supervisor(tmp_path, monkeypatch):
+    job = make_job(tmp_path, 1)
+    job.config["dataset_dir"] = str(tmp_path)
+    batch.save(job.root / "job_config.json", job.config)
+    monkeypatch.setattr(batch, "verify_inputs", lambda config: None)
+    monkeypatch.setattr(batch, "qwen_health", lambda endpoint: None)
+    monkeypatch.setattr("mmkgc.data.MKGWDataStore", lambda *args, **kwargs: object())
+    monkeypatch.setattr("mmkgc.defaults.build_default_mainline_runtime", lambda **kwargs: SimpleNamespace(pipeline=object()))
+    def request_recovery(*args, **kwargs):
+        raise batch.QwenServiceUnavailableError("restart required")
+    monkeypatch.setattr(batch, "run_entities", request_recovery)
+    assert batch.worker(job.root) == 75
+    assert batch.load(job.root / "progress.json")["status"] == "recovering"
+
+
 @pytest.mark.parametrize("status,alive,decision", [
     ("running", True, "wait"), ("completed", True, "wait"),
     ("completed", False, "ready"), ("completed_with_failures", False, "ready"),
@@ -216,7 +264,8 @@ def test_resume_rejects_success_outside_own_output(tmp_path):
 
 
 @pytest.mark.parametrize("budget", [3, 5])
-def test_prepared_batch_propagates_budget_to_runtime_and_reports(tmp_path, monkeypatch, budget):
+@pytest.mark.parametrize("freeze_code", [False, True])
+def test_prepared_batch_propagates_budget_to_runtime_and_reports(tmp_path, monkeypatch, budget, freeze_code):
     project = tmp_path / "project"
     dataset = project / "datasets/fixture"
     dataset.mkdir(parents=True)
@@ -235,10 +284,14 @@ def test_prepared_batch_propagates_budget_to_runtime_and_reports(tmp_path, monke
     (configs / "stage4-model-fusion-gpu1-visible.yaml").write_text("gpt4omini_judge:\n  model_config: configs/openai-gpt4o-mini-judge.yaml\n")
     manifest = configs / "manifest.json"
     batch.save(manifest, [{"entity_key": "Q1", "entity_id": 0}, {"entity_key": "Q2", "entity_id": 1}])
+    source = project / "mmkgc" / "__init__.py"
+    source.parent.mkdir()
+    source.write_text("VERSION = 1\n")
     monkeypatch.setattr(batch, "PROJECT", project)
     monkeypatch.setattr(batch.sys, "path", list(batch.sys.path))
     args = SimpleNamespace(dataset_dir=str(dataset), entity_manifest=str(manifest), expected_entities=2,
-                           candidate_budget=budget, job_dir=str(project / "outputs/new_job"), wait_for_run=None)
+                           candidate_budget=budget, job_dir=str(project / "outputs/new_job"), wait_for_run=None,
+                           freeze_code=freeze_code)
     root = batch.prepare(args)
     config = batch.load(root / "job_config.json")
     assert config["runtime_kwargs"]["candidate_budget"] == budget
@@ -246,6 +299,31 @@ def test_prepared_batch_propagates_budget_to_runtime_and_reports(tmp_path, monke
     assert batch.load(root / "progress.json")["candidate_budget"] == budget
     assert f"{budget} 张" in (root / "timing_summary.zh.md").read_text()
     batch.verify_inputs(config)
+    assert config["code_frozen"] == freeze_code
+    if freeze_code:
+        frozen = root / "code_snapshot/mmkgc/__init__.py"
+        assert frozen.read_text() == source.read_text()
+        source.write_text("VERSION = 2\n")
+        batch.verify_inputs(config)
+        frozen.write_text("VERSION = 3\n")
+        with pytest.raises(RuntimeError, match="Queued input changed"):
+            batch.verify_inputs(config)
+
+
+def test_missing_scope_uses_test_entities_and_original_alignment_without_changing_dataset(tmp_path):
+    (tmp_path / "test.txt").write_text("http://www.wikidata.org/entity/Q1 P31 http://www.wikidata.org/entity/Q2 .\n")
+    index = tmp_path / "image_alignment/qid2images.json"
+    batch.save(index, {"Q1": [], "Q2": ["source.png"], "Q3": []})
+    keys, source = batch.original_missing_image_scope(tmp_path)
+    assert keys == ["Q1"] and source == index
+    assert not (tmp_path / "test_missing_image_qids.json").exists()
+
+
+def test_missing_scope_rejects_incomplete_original_alignment(tmp_path):
+    (tmp_path / "test.txt").write_text("Q1 P31 Q2\n")
+    batch.save(tmp_path / "image_alignment/qid2images.json", {"Q1": []})
+    with pytest.raises(ValueError, match="cover every test entity"):
+        batch.original_missing_image_scope(tmp_path)
 
 
 def test_prepare_rejects_invalid_budget_before_creating_output():

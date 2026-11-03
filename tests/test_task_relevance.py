@@ -55,6 +55,20 @@ def test_full_catalogue_survives_semantic_rejection_and_both_old_sampling_limits
     assert build_knowledge_input(target, "image", coarse) == inputs
 
 
+def test_identity_prompt_omits_full_id_manifest_but_preserves_all_graph_facts():
+    _, _, inputs, _ = large_knowledge()
+    inputs["evidence_selection"] = {"catalog_fact_count": 3500, "modeled_fact_count": 3500,
+        "modeled_stage0_fact_ids": [f"fact:{index:04d}" for index in range(3500)]}
+    original = deepcopy(inputs)
+    view = model_input_view(inputs)
+    assert "modeled_stage0_fact_ids" not in view["evidence_selection"]
+    assert view["evidence_selection"]["modeled_fact_count"] == 3500
+    assert inputs == original
+    knowledge = apply_knowledge_response(inputs, reply(inputs))
+    assert len(knowledge["relation_facts"]) == len(inputs["fact_candidates"]) == 200
+    assert knowledge["stage1_v3"]["evidence_selection"] == inputs["evidence_selection"]
+
+
 def test_all_facts_are_scored_before_top_k_and_late_fact_can_reach_planning():
     _, _, _, knowledge = large_knowledge()
     original = deepcopy(knowledge)

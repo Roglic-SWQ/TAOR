@@ -64,6 +64,7 @@ def build_default_mainline_runtime(
     stage2_model_config: str | Path = "configs/qwen7b-stage2.yaml",
     model_config: str | Path = "configs/qwen7b-mainline.yaml",
     model_call_timeout_seconds: float = 60.0,
+    knowledge_stage_timeout_seconds: float = 180.0,
     stage4_config: str | Path | None = "configs/stage4-model-fusion.yaml",
     dataset_root: str | Path | None = DEFAULT_DATASET_DIR,
     sdxl_model_dir: str | Path = "SDXL/stable-diffusion-xl-base-1.0",
@@ -73,6 +74,7 @@ def build_default_mainline_runtime(
     sdxl_seed: int = 20260708,
     sdxl_guidance_scale: float = 7.5,
     sdxl_device: str = "cuda",
+    skip_stage4: bool = False,
 ) -> PipelineRuntime:
     """Build the single supported MMKGC mainline."""
 
@@ -106,6 +108,7 @@ def build_default_mainline_runtime(
     knowledge_planner = QwenLocalSemanticStagePlanner(
         load_qwen_config(stage1_config_path),
         timeout_seconds=model_call_timeout_seconds,
+        knowledge_stage_timeout_seconds=knowledge_stage_timeout_seconds,
         dataset_root=resolve_dataset_root(dataset_root),
     )
     relation_planner = OpenAICompatibleRelationPlanner(
@@ -146,6 +149,7 @@ def build_default_mainline_runtime(
         relation_planner=relation_planner,
         stage4_config=stage4_config,
         dataset_root=resolve_dataset_root(dataset_root),
+        skip_stage4=skip_stage4,
     )
     return PipelineRuntime(
         pipeline=pipeline,

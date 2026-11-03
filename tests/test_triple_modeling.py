@@ -150,6 +150,32 @@ def test_prompt_and_local_repair_schema_use_only_the_new_extraction_contract():
     assert "DO NOT repeat, rewrite" in prompt
 
 
+def test_local_triple_repair_schema_decodes_with_installed_lm_format_enforcer():
+    parser_module = pytest.importorskip("lmformatenforcer")
+    record, _, inputs, reply = example()
+    prompt = build_stage_prompt(stage="stage1_knowledge", record=record, missing_mode="image", deterministic=inputs, prior={})
+    schema = local_semantic_json_schema(prompt)
+    parser = parser_module.JsonSchemaParser(schema)
+    for character in json.dumps(reply):
+        assert character in parser.get_allowed_characters()
+        parser = parser.add_character(character)
+    assert parser.can_end()
+    repeated = deepcopy(reply)
+    repeated["extracted_triples"][0]["evidence_refs"] *= 2
+    parser = parser_module.JsonSchemaParser(schema)
+    for character in json.dumps(repeated):
+        if character not in parser.get_allowed_characters():
+            break
+        parser = parser.add_character(character)
+    else:
+        pytest.fail("The decoder accepted repeated references to the sole source")
+    invalid = deepcopy(reply)
+    invalid["entity_profile"]["core_identity"] = " "
+    assert knowledge_response_errors(inputs, invalid)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(invalid, triple_response_schema(inputs))
+
+
 def test_default_planner_repairs_from_sources_and_exports_the_new_contract_marker():
     record, coarse, _, reply = example()
     invalid = deepcopy(reply)

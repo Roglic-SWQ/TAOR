@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from typing import Any
+from mmkgc.data.contracts import existing_image_paths
 
 MODALITIES = {"text", "image", "video", "audio"}
 SOURCE_FIELDS = {
@@ -21,6 +22,9 @@ def public_sources(record: Any, target: str) -> tuple[dict[str, Any], list[dict[
     if target not in MODALITIES:
         raise ValueError("unknown target modality")
     existing, context, catalog = record.existing_modalities, {}, []
+    images = existing_image_paths(record) if target != "image" else []
+    if len(images) > 1:
+        context["image_paths"] = images
     for field, modality in SOURCE_FIELDS.items():
         if modality == target:
             continue
@@ -37,7 +41,7 @@ def public_sources(record: Any, target: str) -> tuple[dict[str, Any], list[dict[
             catalog.append(item)
     for modality in ("image", "video", "audio"):
         if modality != target:
-            context["has_" + modality] = bool(existing.get(modality))
+            context["has_" + modality] = bool(images) if modality == "image" else bool(existing.get(modality))
     observations = existing.get("observations", [])
     if not isinstance(observations, list):
         raise ValueError("observations must be a list of perception outputs")
@@ -69,7 +73,7 @@ def public_sources(record: Any, target: str) -> tuple[dict[str, Any], list[dict[
     if public:
         context["observations"] = public
     unprocessed = [modality for modality in ("image", "video", "audio")
-                   if modality != target and existing.get(modality)
+                   if modality != target and (images if modality == "image" else existing.get(modality))
                    and not any(item["modality"] == modality for item in catalog)]
     if unprocessed:
         context["unprocessed_modalities"] = unprocessed

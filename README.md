@@ -34,8 +34,13 @@ Stage 1 默认采用 `grounded_triples_v2`，统一保存 `subject / relation / 
 图谱事实由程序原样带入，模型只返回实体简要身份、`extracted_triples` 和不确定项，
 不再逐条改写图谱 claim，也不单独生成 attribute 或视觉档案。主谓宾完全相同的事实合并来源，
 入边保留原始主语和宾语。文本、图片观察、视频帧／片段和音频转写／声音观察通过各自来源接入，
-可保留文件、帧号、时间段等定位。已有原图使用两步建模：先看图生成自然语言描述，
-再让模型同时读取描述和同一张原图，核对、补充并抽取三元组。视频／音频也采用两步建模：
+可保留文件、帧号、时间段等定位。已有原图使用两步建模：逐张看图生成独立描述，
+再让模型同时读取各描述与对应原图，核对、补充并联合抽取三元组。每张图保留独立证据 ID，
+完全相同的三元组合并全部来源。默认每批最多 4 张，超过时分批抽取后合并；
+`configs/qwen7b-stage1.yaml` 的 `inference.stage1_image_batch_size` 控制批大小，
+千问启动脚本通过 `QWEN_MAX_IMAGES_PER_PROMPT` 设置服务端图片上限（默认 4，修改后需重启服务）。
+MKG-W 读取 `image_alignment` 图片索引，也支持 `images_by_id` 和旧版实体名称目录。
+视频／音频也采用两步建模：
 先根据原始画面与音轨／原音频生成描述，再结合描述与同一份媒体输入抽取三元组。
 视频约每秒采一帧并保留完整主音轨，记录实际时间位置；短暂事件可能遗漏。
 两步记录描述、媒体指纹和来源引用；生成描述不作为独立佐证，也不覆盖原始输入记录。
@@ -174,6 +179,11 @@ bash scripts/run_mkgw_image_completion_4580.sh
 任务保留五阶段结果、原候选与修复候选、调用日志和耗时，不复制原图。
 使用 `--resume outputs/<任务名>` 断点续跑，使用 `--prepare-only` 只准备任务。
 详细说明见 `docs/mkgw-missing-image-output-layout.zh.md`。
+
+只生成、暂不评分时，单实体入口 `python -m mmkgc.run` 或批处理准备入口
+`python scripts/complete_mkgw_missing_images.py` 可加 `--skip-stage4`。
+该模式运行 Stage 0–3，保留全部候选图片、提示词和事实计划，结果标记为
+`not_evaluated`；不初始化评分器，也不执行基于评分的 Reflect 或选择最佳图片。
 
 服务使用独立的 `.venv-qwen7b` 环境，安装步骤见运行环境文档。
 下面示例中 `CUDA_VISIBLE_DEVICES=1` 将流水线模型放在物理 GPU 1，

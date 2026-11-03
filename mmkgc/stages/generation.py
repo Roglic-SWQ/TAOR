@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
+import hashlib
 import json
 from typing import Any
 
@@ -14,6 +15,10 @@ from mmkgc.observation import REPAIR_CONFIDENCE, observation_priority, repair_op
 from mmkgc.stages.candidate_planning import PLAN_SCHEMA, PLAN_SCHEMAS, LEGACY_PLAN_SCHEMA
 from mmkgc.plan_schema import FACT_SELECTION_SCHEMA
 from mmkgc.stages.triples import TRIPLE_SCHEMAS
+from mmkgc.stages.presentation import (
+    IMAGE_PRESENTATION_POLICY, MAX_PRESENTATION_REWRITES,
+    duplicate_image_prompt, image_rendering_plan, image_presentation_signature,
+)
 
 
 STAGE_OWNED_METADATA_KEYS = {
@@ -703,12 +708,14 @@ def _generate_modality_candidates(
     generator = text_generator if modality == "text" else image_prompt_generator
     shared = _selection_payload(selection).get("schema_version") == FACT_SELECTION_SCHEMA
     previous_presentations = []
+    previous_renderings = []
+    previous_candidate_ids = []
     original_qwen_prompts = getattr(generator, "prompt_version", None) == QWEN_PROMPT_VERSION
     workers = getattr(generator, "max_concurrency", 1)
     if type(workers) is not int or workers < 1:
         raise ValueError("Stage 3 max_concurrency must be a positive integer")
 
-    def prepare(entry):
+    def prepare(entry, presentation_retry=None):
         index, relation_item = entry
         source_candidate_id = f"{modality}_{index + 1:03d}"
         feedback = repair_by_id.get(source_candidate_id, regeneration_feedback)
@@ -781,6 +788,19 @@ def _generate_modality_candidates(
                 "candidate_index": index + 1, "candidate_budget": candidate_budget,
                 "previous_candidates": list(previous_presentations),
             }
+            if modality == "image":
+                rendering = image_rendering_plan(index)
+                model_context["presentation_context"].update(
+                    policy_version=IMAGE_PRESENTATION_POLICY,
+                    requested_rendering=rendering,
+                    previous_renderings=deepcopy(previous_renderings),
+                    rewrite_feedback=deepcopy(presentation_retry or {}),
+                    sampling_seed=(int.from_bytes(hashlib.sha256(entity_key.encode()).digest()[:4], "big")
+                        + 1009 * index + 101 * (presentation_retry or {}).get("attempt", 0)) % (2**31),
+                    remaining_request_budget=image_attempt_budget - image_attempts,
+                )
+                base["metadata"].update(presentation_policy=IMAGE_PRESENTATION_POLICY,
+                    requested_rendering=deepcopy(rendering))
         legacy_facts = (
             _feedback_facts(feedback) + facts
             if feedback and not original_qwen_prompts else facts
@@ -835,9 +855,9 @@ def _generate_modality_candidates(
             base["metadata"]["status"] = "planned"
         return base, candidate_calls
 
-    def prepare_with_audit(entry):
+    def prepare_with_audit(entry, presentation_retry=None):
         try:
-            return prepare(entry)
+            return prepare(entry, presentation_retry)
         except Exception as exc:
             index, _relation_item = entry
             candidate_id = f"{modality}_{'safe_' if safe_variant else ''}{index + 1:03d}"
@@ -854,8 +874,53 @@ def _generate_modality_candidates(
     if shared and not safe_variant:
         prepared = []
         seen_presentations = {}
+        image_attempts = 0
+        image_attempt_budget = 2 * len(entries)
         for entry in entries:
+            if modality == "image" and image_attempts >= image_attempt_budget:
+                break
             base, calls = prepare_with_audit(entry)
+            if modality == "image":
+                image_attempts += sum(max(1, len(call.get("sampling_attempts", []))) for call in calls) or 1
+                all_calls = []
+                rejected = []
+                for attempt in range(MAX_PRESENTATION_REWRITES + 1):
+                    duplicate = duplicate_image_prompt(base["positive_prompt"], previous_presentations)
+                    for call in calls:
+                        call.update(presentation_attempt=attempt,
+                                    presentation_policy=IMAGE_PRESENTATION_POLICY)
+                    if duplicate is None:
+                        for call in calls:
+                            call["presentation_disposition"] = "accepted"
+                        all_calls.extend(calls)
+                        base["metadata"]["presentation_rewrites"] = attempt
+                        base["metadata"]["presentation_signature"] = image_presentation_signature(base["positive_prompt"])
+                        base["metadata"]["presentation_attempt_budget"] = image_attempt_budget
+                        previous_presentations.append(base["positive_prompt"])
+                        previous_renderings.append(deepcopy(base["metadata"]["requested_rendering"]))
+                        previous_candidate_ids.append(base["candidate_id"])
+                        break
+                    previous_index, reason = duplicate
+                    duplicate_of = previous_candidate_ids[previous_index]
+                    exhausted = attempt == MAX_PRESENTATION_REWRITES or image_attempts >= image_attempt_budget
+                    for call in calls:
+                        call.update(presentation_disposition=("duplicate_skipped" if exhausted
+                            else "duplicate_rewrite"), duplicate_of=duplicate_of, duplicate_reason=reason)
+                    all_calls.extend(calls)
+                    rejected.append(base["positive_prompt"])
+                    if exhausted:
+                        base = None
+                        break
+                    base, calls = prepare_with_audit(entry, {
+                        "attempt": attempt + 1, "max_rewrites": MAX_PRESENTATION_REWRITES,
+                        "reason": reason, "duplicate_of": duplicate_of,
+                        "rejected_prompts": list(rejected),
+                        "instruction": "Create a visibly different composition using requested_rendering. "
+                            "Preserve the same factual scope; changing punctuation or word order is insufficient.",
+                    })
+                    image_attempts += sum(max(1, len(call.get("sampling_attempts", []))) for call in calls) or 1
+                prepared.append((base, all_calls))
+                continue
             presentation = base["positive_prompt"] if modality == "image" else base["generated_content"]["value"]
             key = " ".join(presentation.casefold().split())
             if key in seen_presentations:
@@ -979,6 +1044,17 @@ def relation_alternation_generation(
             candidate_budget,
         )
         model_calls.extend(image_model_calls)
+        if _selection_payload(selection).get("schema_version") == FACT_SELECTION_SCHEMA:
+            drafts = [call for call in image_model_calls if call.get("modality") == "image_prompt"]
+            output["image_prompt_search"] = {
+                "policy_version": IMAGE_PRESENTATION_POLICY,
+                "target_candidates": candidate_budget,
+                "accepted_candidates": len(output["image_candidates"]),
+                "request_budget": 2 * candidate_budget,
+                "requests": sum(max(1, len(call.get("sampling_attempts", []))) for call in drafts),
+                "duplicate_rewrites": sum(call.get("presentation_disposition") == "duplicate_rewrite" for call in drafts),
+                "shortfall": max(0, candidate_budget - len(output["image_candidates"])),
+            }
     return {
         "relation_alternation_generation": output,
         "model_calls": model_calls,

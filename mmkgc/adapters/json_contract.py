@@ -60,7 +60,21 @@ def local_semantic_json_schema(prompt: str) -> dict[str, Any]:
     payload = _payload_from_prompt(prompt)
     if isinstance(payload, dict) and payload.get("schema") in {"grounded_triples_v1", "grounded_triples_v2"}:
         from mmkgc.stages.triples import triple_response_schema
-        return triple_response_schema(payload)
+        schema = triple_response_schema(payload)
+        # This LM Format Enforcer cannot combine string patterns with lengths,
+        # and treats patterns as full matches. Keep nonblank/source validation
+        # in the application; the local decoder only constrains syntax/types.
+        def syntax_only_strings(node):
+            if isinstance(node, dict):
+                if node.get("type") == "string":
+                    node.pop("pattern", None)
+                for child in node.values():
+                    syntax_only_strings(child)
+            elif isinstance(node, list):
+                for child in node:
+                    syntax_only_strings(child)
+        syntax_only_strings(schema)
+        return schema
     if isinstance(payload, dict) and payload.get("repair_kind") == "stage1_targeted_repair_v1":
         return payload["response_schema"]
     if not all(f'"{key}"' in prompt for key in ('entity_profile', 'text_visual_profile', 'relation_facts')):

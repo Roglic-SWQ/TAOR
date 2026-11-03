@@ -53,6 +53,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Generation budget, independent of selected facts; defaults to text=1, image=3.")
     parser.add_argument("--max-selected-facts", type=int, default=64,
                         help="Maximum facts selected by Stage 2; the model may choose fewer.")
+    parser.add_argument("--skip-stage4", action="store_true",
+                        help="Save generated candidates without scoring or Reflect; Stage 4 can run later.")
     parser.add_argument(
         "--continue-on-error", action="store_true",
         help="Record failed entities and test the remaining records; exit nonzero if any fail.",
@@ -145,6 +147,7 @@ def main(argv: list[str] | None = None) -> int:
         candidate_budget=candidate_budget,
         max_selected_facts=args.max_selected_facts,
         relevance_fact_budget=args.relevance_fact_budget,
+        skip_stage4=args.skip_stage4,
         stage1_reranker_model_dir=args.stage1_reranker_model_dir,
         stage1_reranker_device=args.stage1_reranker_device,
         stage1_reranker_max_length=args.stage1_reranker_max_length,
@@ -211,7 +214,8 @@ def main(argv: list[str] | None = None) -> int:
         "base_url": base_url,
         "api_key_configured": api_key_configured,
         "image_generator": image_generator_mode,
-        "stage4_ranker": "model-fusion",
+        "stage4_ranker": "deferred" if args.skip_stage4 else "model-fusion",
+        "skip_stage4": args.skip_stage4,
         "stage4_config": args.stage4_config,
         "stage4_profile_name": stage4_profile_name,
         "stage4_judge_max_concurrency": getattr(

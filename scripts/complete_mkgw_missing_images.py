@@ -34,7 +34,7 @@ import zipfile
 
 
 PROJECT = Path(__file__).resolve().parents[1]
-TERMINAL = {"completed", "failed", "no_valid_image", "export_failed"}
+TERMINAL = {"completed", "generated", "generation_empty", "failed", "no_valid_image", "export_failed"}
 STAGES = ("stage0", "stage1_knowledge", "stage1_reranker", "stage2", "stage3", "stage3_regeneration", "stage4")
 _CURRENT_ENTITY = ContextVar("mmkgc_timed_entity", default=None)
 STORAGE_POLICY = {
@@ -45,6 +45,10 @@ STORAGE_POLICY = {
     "save_model_calls": True,
     "copy_original_images": False,
 }
+
+
+class QwenServiceUnavailableError(RuntimeError):
+    """The supervisor must recycle the local service before resuming (exit 75)."""
 
 
 def now():
@@ -78,6 +82,26 @@ def sha256(path):
     return digest.hexdigest()
 
 
+def original_missing_image_scope(dataset):
+    """Use the original list, or derive the test-only scope from the aligned originals."""
+    original = dataset / "test_missing_image_qids.json"
+    if original.exists():
+        keys = load(original)
+        if not isinstance(keys, list) or any(not isinstance(key, str) for key in keys):
+            raise ValueError("Original missing-image scope must be a list of entity keys")
+        return keys, original
+    original = dataset / "image_alignment" / "qid2images.json"
+    index = load(original)
+    test_keys = {part.rstrip("/").rsplit("/", 1)[-1]
+                 for line in (dataset / "test.txt").read_text().splitlines()
+                 for part in line.split()[:3:2]}
+    if not isinstance(index, dict) or not test_keys <= index.keys():
+        raise ValueError("Original image alignment must cover every test entity")
+    if any(not isinstance(index[key], list) for key in test_keys):
+        raise ValueError("Original image alignment entries must be image lists")
+    return sorted(key for key in test_keys if not index[key]), original
+
+
 def process_identity(pid):
     """A PID plus its Linux start tick avoids waiting on a reused PID."""
     if not pid:
@@ -102,7 +126,7 @@ def fresh_missing_record(record):
 
     existing = {**record.existing_modalities, "image": None, "image_summary": None}
     truth = {**record.ground_truth_modalities, "image": None}
-    return replace(record, existing_modalities=existing, ground_truth_modalities=truth,
+    return replace(record, existing_modalities=existing, ground_truth_modalities=truth, image_paths=[],
                    modality_completion_policy=build_modality_completion_policy("image", existing, truth))
 
 
@@ -148,6 +172,20 @@ def resumable_complete(row, job_dir):
         image.resolve().relative_to(Path(job_dir).resolve() / "completed_images")
         return image.is_file() and sha256(image) == row.get("image_sha256")
     except ValueError:
+        return False
+
+
+def resumable_generated(row, job_dir):
+    if row.get("status") != "generated" or not row.get("generated_images"):
+        return False
+    try:
+        for image in row["generated_images"]:
+            path = Path(image["image_path"])
+            path.resolve().relative_to(Path(job_dir).resolve())
+            if not path.is_file() or sha256(path) != image["image_sha256"]:
+                return False
+        return True
+    except (KeyError, OSError, ValueError):
         return False
 
 
@@ -208,7 +246,9 @@ class Job:
             self.rows[item["entity_key"]] = load(path) if path.exists() else {**item, "status": "pending", "stages": {}}
         self.state = load(self.root / "progress.json") if (self.root / "progress.json").exists() else {}
         self.state.update(expected_entities=len(self.manifest), run_dir=str(self.root),
-                          candidate_budget=self.config.get("runtime_kwargs", {}).get("candidate_budget", 5))
+                          candidate_budget=self.config.get("runtime_kwargs", {}).get("candidate_budget", 5),
+                          entity_pipeline=bool(self.config.get("entity_pipeline", False)),
+                          max_inflight_entities=2 if self.config.get("entity_pipeline", False) else 1)
         self.lock = threading.RLock()
         self.active = {}
         self.clock_started = None
@@ -233,6 +273,9 @@ class Job:
                               completed_entities=counts["completed"], failed_entities=counts["failed"],
                               no_valid_image_entities=counts["no_valid_image"], export_failed_entities=counts["export_failed"],
                               attempted_entities=sum(counts[key] for key in TERMINAL))
+            self.state.update(generated_entities=counts["generated"], generation_empty_entities=counts["generation_empty"],
+                              generated_image_count=sum(row.get("generated_image_count", 0) for row in self.rows.values()),
+                              stage4_deferred=bool(self.config.get("skip_stage4", False)))
             if self.clock_started is not None:
                 self.state["active_wall_seconds"] = round(self.clock_base + time.perf_counter() - self.clock_started, 3)
                 attempts = self.state.get("timed_attempts_completed", 0)
@@ -261,7 +304,7 @@ class Job:
                 writer.writerow(flat)
             atomic_text(self.root / "entity_timing.csv", "\ufeff" + stream.getvalue())
             atomic_text(self.root / "completion_manifest.jsonl", "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in ordered))
-            save(self.root / "failures.json", [row for row in ordered if row["status"] in TERMINAL - {"completed"}])
+            save(self.root / "failures.json", [row for row in ordered if row["status"] in TERMINAL - {"completed", "generated"}])
             finals = [row["pipeline_final"] for row in ordered if isinstance(row.get("pipeline_final"), dict)]
             atomic_text(self.root / "results.jsonl", "".join(json.dumps(value, ensure_ascii=False, separators=(",", ":")) + "\n" for value in finals))
             save(self.root / "metrics_summary.json", {
@@ -269,6 +312,8 @@ class Job:
                 "avg_text_candidates": round(statistics.mean(value.get("counts", {}).get("text", 0) for value in finals), 6) if finals else 0.0,
                 "avg_image_candidates": round(statistics.mean(value.get("counts", {}).get("image", 0) for value in finals), 6) if finals else 0.0,
                 "completed_image_entities": counts["completed"], "no_valid_image_entities": counts["no_valid_image"],
+                "generated_entities": counts["generated"], "generation_empty_entities": counts["generation_empty"],
+                "generated_image_count": self.state["generated_image_count"], "stage4_deferred": self.state["stage4_deferred"],
                 "export_failed_entities": counts["export_failed"],
                 "stage_failure_counts": dict(Counter(row.get("failed_stage", "pipeline") for row in ordered if row["status"] == "failed")),
             })
@@ -289,6 +334,15 @@ class Job:
                 summary.insert(5, "实体流水线：GPT 评分请求等待期间，主线程提前执行下一实体的 Stage 0–2；最多两个在途实体，本地 GPU 模型顺序执行。")
                 summary.insert(6, "逐实体耗时可相互重叠，Stage 4 墙钟耗时包含预取下一实体；不能相加当作整批耗时。queue_wait_seconds 和 prefetch_seconds 分别记录排队与预取耗时。")
                 summary.insert(7, f"实际运行墙钟：{self.state.get('active_wall_seconds', 0)} 秒；已计时处理次数：{self.state.get('timed_attempts_completed', 0)}；吞吐：{self.state.get('throughput_seconds_per_attempt')} 秒/处理次数（含失败，排除断点间停机）。")
+            if self.config.get("skip_stage4", False):
+                summary = [f"状态：{self.state.get('status')}；目标实体 {len(ordered)}。",
+                    f"Stage 0–3 仅生成，每实体最多 {self.state['candidate_budget']} 次初始生成尝试；Stage 4 未执行。",
+                    f"已生成实体 {counts['generated']}；候选图片 {self.state['generated_image_count']} 张；无候选实体 {counts['generation_empty']}；失败 {counts['failed']}。",
+                    f"当前：{self.state.get('current_entity')} / {self.state.get('current_stage')}。",
+                    "全部候选保存在 entities/<QID>/generated_images/，对应的事实、提示词、种子和调用日志一并保留。",
+                    "候选尚未评分，不指定最佳图；Stage 4 评分及基于评分的 Reflect 修复均留待后续执行。",
+                    "图谱证据仅使用 train.txt；原始数据和历史任务保持原样。",
+                    f"累计运行 {self.state.get('active_wall_seconds', 0)} 秒；更新时间：{self.state['updated_at']}（UTC）。"]
             if self.state.get("waiting_for"):
                 summary.insert(1, "等待 50 实体测试结束：" + self.state["waiting_for"])
             if self.state.get("error_message"):
@@ -297,7 +351,7 @@ class Job:
             recent = [row for row in ordered if row["status"] != "pending"][-20:]
             cells = "".join("<tr>" + "".join("<td>" + html.escape(str(value)) + "</td>" for value in
                 (row['entity_key'], row.get('label', ''), row['status'], row.get('seconds', ''), row.get('image_path', ''))) + "</tr>" for row in recent)
-            page = '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta http-equiv="refresh" content="30"><title>4580 实体补全</title><body style="font:16px system-ui;margin:24px">'
+            page = f'<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta http-equiv="refresh" content="30"><title>{len(ordered)} 实体补全</title><body style="font:16px system-ui;margin:24px">'
             page += "".join("<p>" + html.escape(line) + "</p>" for line in summary)
             page += '<p><a href="entity_timing.csv">全部实体耗时 CSV</a> · <a href="completion_manifest.jsonl">完整结果索引</a></p><table border="1" cellpadding="6"><tr><th>实体</th><th>名称</th><th>状态</th><th>秒</th><th>新图</th></tr>' + cells + '</table></body></html>'
             atomic_text(self.root / "timing_report.html", page)
@@ -354,9 +408,11 @@ class StageTimer:
         from mmkgc.stages.semantic import StrictJsonStagePlanner
 
         for owner, method, stage in (
+            (module, "coarse_relation_filtering", "stage0"),
             (StrictJsonStagePlanner, "refine_coarse", "stage0"),
             (StrictJsonStagePlanner, "build_knowledge", "stage1_knowledge"),
             (module, "score_knowledge_evidence", "stage1_reranker"),
+            (module, "rerank_knowledge_relevance", "stage1_reranker"),
             (OpenAICompatibleRelationPlanner, "plan", "stage2"),
             (module, "relation_alternation_generation", "stage3"),
             (module, "safer_relation_alternation_generation", "stage3_regeneration"),
@@ -393,7 +449,7 @@ def begin_entity(job, item, index):
 
 
 def persist_entity_result(job, writer, entry, result):
-    from mmkgc.io.writer import _safe_output
+    from mmkgc.io.writer import _safe_output, _transport_ready
 
     row, record = entry["row"], entry["record"]
     key = row["entity_key"]
@@ -405,6 +461,24 @@ def persist_entity_result(job, writer, entry, result):
          "label": record.label, "description": record.description})
     atomic_text(entity_dir / "entity_description.txt", record.label + "\n\n" + record.description + "\n")
     publish_entity_directory(job, row, entity_dir)
+    if job.config.get("skip_stage4", False):
+        if not result.get("final", {}).get("stage4_deferred"):
+            raise ValueError("Generation-only task received a result without deferred Stage 4")
+        candidates = []
+        for artifact in _transport_ready(result.get("generated_image_artifacts", [])):
+            if not artifact.get("image_bytes"):
+                continue
+            candidate_id = artifact["candidate_id"]
+            path = entity_dir / "generated_images" / (candidate_id + ".png")
+            if not path.is_file():
+                raise ValueError("Generated candidate artifact is missing")
+            candidates.append({"candidate_id": candidate_id, "image_path": str(path.resolve()),
+                               "image_sha256": sha256(path)})
+        row.update(status="generated" if candidates else "generation_empty", stage4_deferred=True,
+                   generated_image_count=len(candidates), generated_images=candidates)
+        save(entity_dir / "generation_checkpoint.json", {"entity_key": key, "stage4_deferred": True,
+             "generated_images": candidates, "generation_status": row["status"]})
+        return
     ranking = result.get("kg_aware_candidate_consistency_ranking", {})
     if ranking.get("ranking_status") == "evaluation_failed":
         row.update(status="failed", failed_stage="stage4", error_type="RankingEvaluationError",
@@ -463,15 +537,20 @@ def finish_entity(job, writer, entry):
 def pending_entities(job, retry_failed):
     for index, item in enumerate(job.manifest, 1):
         previous = job.rows[item["entity_key"]]
+        if job.config.get("skip_stage4", False) and resumable_generated(previous, job.root):
+            continue
         if resumable_complete(previous, job.root):
             continue
-        if previous["status"] in TERMINAL - {"completed"} and not retry_failed:
+        if (previous["status"] in TERMINAL - {"completed", "generated"} and job.config.get("max_entity_attempts")
+                and int(previous.get("attempt", 0)) >= job.config["max_entity_attempts"]):
+            continue
+        if previous["status"] in TERMINAL - {"completed", "generated"} and not retry_failed:
             continue
         yield index, item
 
 
 def run_entities(job, pipeline, store, writer, retry_failed=False):
-    if job.config.get("entity_pipeline", False):
+    if job.config.get("entity_pipeline", False) and not job.config.get("skip_stage4", False):
         return run_entities_pipelined(job, pipeline, store, writer, retry_failed)
     for index, item in pending_entities(job, retry_failed):
         entry = begin_entity(job, item, index)
@@ -493,7 +572,16 @@ def run_entities(job, pipeline, store, writer, retry_failed=False):
             finish_entity(job, writer, entry)
             clear_call_history(pipeline)
         if entry["row"]["status"] == "failed":
-            qwen_health(job.config["qwen_endpoint"])
+            if (job.config.get("restart_service_on_timeout", False)
+                    and entry["row"].get("error_type") in {"TimeoutError", "ReadTimeout", "ConnectTimeout"}):
+                job.event("SERVICE_RECOVERY_REQUESTED", entity_key=entry["row"]["entity_key"], reason="entity_request_timeout")
+                raise QwenServiceUnavailableError("Entity request timed out; recycle Qwen to clear outstanding requests")
+            try:
+                qwen_health(job.config["qwen_endpoint"])
+            except Exception as exc:
+                job.event("SERVICE_RECOVERY_REQUESTED", entity_key=entry["row"]["entity_key"], reason="health_check_failed",
+                          error_type=type(exc).__name__)
+                raise QwenServiceUnavailableError("Qwen health check failed; resume after service restart") from exc
 
 
 def run_entities_pipelined(job, pipeline, store, writer, retry_failed=False):
@@ -686,6 +774,7 @@ def worker(root, retry_failed=False):
             job.clock_started = time.perf_counter()
             job.state.update(status="initializing", current_stage="initialization", pipeline_started_at=now())
             job.state.pop("error_message", None)
+            job.state.pop("error_type", None)
             job.flush(reports=True)
             store = MKGWDataStore(job.config["dataset_dir"], graph_split="train")
             runtime = build_default_mainline_runtime(**job.config["runtime_kwargs"])
@@ -697,16 +786,18 @@ def worker(root, retry_failed=False):
             job.flush(reports=True)
             job.event("FULL_BATCH_START", expected_entities=len(job.manifest), attempt=number)
             run_entities(job, runtime.pipeline, store, writer, retry_failed)
-            job.state.update(status="completed" if all(row["status"] == "completed" for row in job.rows.values()) else "completed_with_failures", finished_at=now())
+            success = "generated" if job.config.get("skip_stage4", False) else "completed"
+            job.state.update(status=success if all(row["status"] == success for row in job.rows.values()) else success + "_with_failures", finished_at=now())
             return 0
         except BaseException as exc:
-            job.state.update(status="interrupted" if isinstance(exc, KeyboardInterrupt) else "failed",
+            recovering = isinstance(exc, QwenServiceUnavailableError)
+            job.state.update(status="interrupted" if isinstance(exc, KeyboardInterrupt) else "recovering" if recovering else "failed",
                              error_type=type(exc).__name__, error_message=str(exc))
             job.event("WORKER_STOPPED", error_type=type(exc).__name__)
             if not isinstance(exc, KeyboardInterrupt):
                 import traceback
                 traceback.print_exc()
-            return 1
+            return 75 if recovering else 1
         finally:
             stop.set()
             thread.join(timeout=1)
@@ -722,7 +813,7 @@ def prepare(args):
         raise ValueError("candidate_budget must be a positive integer")
     dataset, manifest = Path(args.dataset_dir).resolve(), Path(args.entity_manifest).resolve()
     rows = load(manifest)
-    original = load(dataset / "test_missing_image_qids.json")
+    original, scope_source = original_missing_image_scope(dataset)
     keys = [row["entity_key"] for row in rows]
     if len(keys) != len(set(keys)) or set(keys) != set(original) or len(keys) != args.expected_entities:
         raise ValueError("Manifest must match the complete original missing-image list without duplicates")
@@ -742,7 +833,7 @@ def prepare(args):
     snapshots = root / "config_snapshots"
     snapshots.mkdir()
     save(root / "entity_manifest.json", rows)
-    shutil.copyfile(dataset / "test_missing_image_qids.json", snapshots / "original_test_missing_image_qids.json")
+    save(snapshots / "original_test_missing_image_qids.json", original)
     for name in ("qwen7b-mainline.yaml", "qwen7b-stage1.yaml", "qwen7b-stage2.yaml", "openai-gpt4o-mini-judge.yaml"):
         shutil.copyfile(PROJECT / "configs" / name, snapshots / name)
     stage4 = yaml.safe_load((PROJECT / "configs/stage4-model-fusion-gpu1-visible.yaml").read_text())
@@ -757,6 +848,8 @@ def prepare(args):
                   stage4_config=str(snapshots / "stage4-model-fusion-gpu1-visible.yaml"), dataset_root=str(dataset),
                   sdxl_model_dir=str(PROJECT / "SDXL/stable-diffusion-xl-base-1.0"), sdxl_width=1024, sdxl_height=1024,
                   sdxl_steps=20, sdxl_seed=20261012, sdxl_guidance_scale=7.5, sdxl_device="cuda:0")
+    if getattr(args, "skip_stage4", False):
+        kwargs["skip_stage4"] = True
     prerequisite = None
     if args.wait_for_run:
         progress = load(Path(args.wait_for_run) / "timing_progress.json")
@@ -766,12 +859,29 @@ def prepare(args):
     with zipfile.ZipFile(root / "source_snapshot.zip", "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for source in sources:
             archive.write(source, source.relative_to(PROJECT))
-    inputs = sources + [root / "entity_manifest.json"] + list(snapshots.iterdir()) + [dataset / name for name in
+    runtime_project = PROJECT
+    if getattr(args, "freeze_code", False):
+        runtime_project = root / "code_snapshot"
+        runtime_project.mkdir()
+        with zipfile.ZipFile(root / "source_snapshot.zip") as archive:
+            archive.extractall(runtime_project)
+        for name in ("Qwen", "Qwen3-Reranker-4B", "SDXL", "CLIP", "blip-itm-large-coco", "Sentence-BERT", "models", ".env"):
+            source = PROJECT / name
+            if source.exists():
+                (runtime_project / name).symlink_to(source, target_is_directory=source.is_dir())
+        (runtime_project / "configs").symlink_to(snapshots, target_is_directory=True)
+        sources = [runtime_project / source.relative_to(PROJECT) for source in sources]
+    inputs = sources + [scope_source, root / "entity_manifest.json", root / "source_snapshot.zip"] + list(snapshots.iterdir()) + [dataset / name for name in
         ("entity2id.txt", "relation2id.txt", "train.txt", "valid.txt", "test.txt", "entity_info.json", "entity_texts.tsv", "test_missing_image_qids.json", "relation_info.json") if (dataset / name).exists()]
-    config = {"created_at": now(), "project_root": str(PROJECT), "dataset_dir": str(dataset), "prerequisite": prerequisite,
+    inputs.extend(path for path in (dataset / "image_alignment" / name for name in
+                  ("qid2images.json", "entity2images.json", "entity_id2images.json")) if path.exists())
+    config = {"created_at": now(), "project_root": str(runtime_project), "source_project_root": str(PROJECT),
+              "code_frozen": runtime_project != PROJECT, "missing_image_scope_source": str(scope_source),
+              "dataset_dir": str(dataset), "prerequisite": prerequisite,
               "scope": "regenerate_original_missing_image_list", "expected_entities": len(rows),
               "candidate_budget": args.candidate_budget,
-              "entity_pipeline": not getattr(args, "serial_entities", False),
+              "entity_pipeline": not getattr(args, "serial_entities", False) and not getattr(args, "skip_stage4", False),
+              "skip_stage4": getattr(args, "skip_stage4", False),
               "storage_policy": STORAGE_POLICY,
               "source_images_untouched": True, "old_synthetic_images_used_as_ground_truth": False,
               "graph_split": "train", "zero_train_degree_entities": sum(row.get("train_degree") == 0 for row in rows),
@@ -792,7 +902,7 @@ def launch(root, retry_failed=False):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise RuntimeError("This job already has a running worker") from None
-    log = Path(job.config["project_root"]) / "outputs" / "_logs" / (job.root.name + ".log")
+    log = Path(job.config.get("source_project_root", job.config["project_root"])) / "outputs" / "_logs" / (job.root.name + ".log")
     log.parent.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, "CUDA_VISIBLE_DEVICES": os.environ.get("PIPELINE_GPU", "1"), "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUNBUFFERED": "1",
            "OMP_NUM_THREADS": "4", "MKL_NUM_THREADS": "4", "TOKENIZERS_PARALLELISM": "false"}
@@ -816,6 +926,8 @@ def main():
     parser.add_argument("--expected-entities", type=int, default=4580)
     parser.add_argument("--candidate-budget", type=int, default=3, help="Candidate images per entity (default: 3)")
     parser.add_argument("--serial-entities", action="store_true", help="For a new job, disable next-entity preparation during GPT waits")
+    parser.add_argument("--freeze-code", action="store_true", help="Execute this job from a frozen copy of the current Python source")
+    parser.add_argument("--skip-stage4", action="store_true", help="Generate and checkpoint all candidates without scoring or Reflect")
     parser.add_argument("--job-dir")
     parser.add_argument("--wait-for-run")
     parser.add_argument("--launch", action="store_true", help="Start a detached worker for a new job, or resume with --worker")

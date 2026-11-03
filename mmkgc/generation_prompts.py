@@ -145,6 +145,13 @@ def build_generation_prompt(kind: str, payload: dict[str, Any]) -> str:
             )
         return rules + "INPUT_JSON:\n" + json.dumps(payload, ensure_ascii=False)
     payload = {**payload, "prompt_version": IMAGE_PROMPT_VERSION}
+    presentation = deepcopy(payload.get("presentation_context", {}))
+    if presentation.get("policy_version") == "grounded_image_diversity_v1":
+        # Full previous drafts anchor a small deterministic model to repeat
+        # their wording. Retain layout history; only rejected rewrites are
+        # shown explicitly as negative examples when recovery is necessary.
+        presentation.pop("previous_candidates", None)
+        payload["presentation_context"] = presentation
     rules = IMAGE_RULES
     if payload.get("presentation_context"):
         rules += (
@@ -155,6 +162,17 @@ def build_generation_prompt(kind: str, payload: dict[str, Any]) -> str:
             "presentation or detail emphasis, not invented unseen geometry or new attributes. "
             "Do not force novelty when the evidence cannot support it. Missing a visible detail "
             "in one view is different from depicting it incorrectly.\n"
+        )
+    if presentation.get("requested_rendering"):
+        rules += (
+            "Implement presentation_context.requested_rendering as concrete framing and subject placement "
+            "in positive_prompt. These are rendering choices, not additional evidence. Use the same "
+            "selected factual basis and keep unknown surroundings neutral. A close view must not invent "
+            "fine details; a wider view must not invent people, landmarks or settings. Never alter "
+            "source-supported attributes just to follow a layout. Previous renderings and rejected_prompts "
+            "are generated alternatives, NOT facts to copy. Make this composition visibly different from "
+            "the prior layouts; do not merely paraphrase, reorder phrases, change punctuation, or append "
+            "a candidate number. Return only the final prompt JSON.\n"
         )
     if payload.get("regeneration_feedback"):
         rules += (

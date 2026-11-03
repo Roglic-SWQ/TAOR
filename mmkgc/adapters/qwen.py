@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -56,8 +58,22 @@ class QwenConfig:
     stage3_max_concurrency: int = 1
     prompt_profile: str = PROMPT_VERSION
     audio_input_type: str = "input_audio"
+    stage1_image_batch_size: int = 4
+    image_prompt_temperature: float | None = None
+    image_prompt_top_p: float = 0.9
 
     def __post_init__(self) -> None:
+        if (self.image_prompt_temperature is not None and (
+                isinstance(self.image_prompt_temperature, bool)
+                or not isinstance(self.image_prompt_temperature, (int, float))
+                or not math.isfinite(self.image_prompt_temperature)
+                or not 0 <= self.image_prompt_temperature <= 2)):
+            raise ValueError("image_prompt_temperature must be finite and between 0 and 2")
+        if (isinstance(self.image_prompt_top_p, bool) or not isinstance(self.image_prompt_top_p, (int, float))
+                or not math.isfinite(self.image_prompt_top_p) or not 0 < self.image_prompt_top_p <= 1):
+            raise ValueError("image_prompt_top_p must be finite and in (0, 1]")
+        if type(self.stage1_image_batch_size) is not int or self.stage1_image_batch_size < 1:
+            raise ValueError("stage1_image_batch_size must be a positive integer")
         if self.audio_input_type not in {"input_audio", "audio_url"}:
             raise ValueError("audio_input_type must be input_audio or audio_url")
         if type(self.stage3_max_concurrency) is not int or self.stage3_max_concurrency < 1:
@@ -96,6 +112,9 @@ def _coerce_qwen_config(data: dict, source_path: str | Path) -> QwenConfig:
         temperature=float(temperature),
         stage3_max_concurrency=inference.get("stage3_max_concurrency", 1),
         prompt_profile=inference.get("prompt_profile", PROMPT_VERSION),
+        stage1_image_batch_size=inference.get("stage1_image_batch_size", 4),
+        image_prompt_temperature=inference.get("image_prompt_temperature"),
+        image_prompt_top_p=inference.get("image_prompt_top_p", 0.9),
     )
 
 
@@ -575,6 +594,10 @@ class QwenLocalImagePromptGenerator(_CandidateCallLog):
             record["initial_finish_reason"] = initial_finish_reason
         if repaired_finish_reason is not None:
             record["repaired_finish_reason"] = repaired_finish_reason
+        record["sampling_attempts"] = list(getattr(self._call_state, "sampling_attempts", []))
+        record["temperature"] = (self.config.image_prompt_temperature
+            if self.config.image_prompt_temperature is not None else self.config.temperature)
+        record["top_p"] = self.config.image_prompt_top_p
         return record
 
     def _request_json(self, prompt: str, *, structured_repair: bool = False) -> tuple[dict[str, Any], int]:
@@ -594,7 +617,22 @@ class QwenLocalImagePromptGenerator(_CandidateCallLog):
             "max_tokens": self.config.image_prompt_max_token,
             "temperature": self.config.temperature,
         }
-        if structured_repair:
+        # Keep Stage 1/2 and text sampling untouched. Image prompt sampling has
+        # its own knobs and a reproducible per-candidate, per-rewrite seed.
+        request_body["temperature"] = (self.config.image_prompt_temperature
+            if self.config.image_prompt_temperature is not None else self.config.temperature)
+        request_body["top_p"] = self.config.image_prompt_top_p
+        from mmkgc.adapters.json_contract import _payload_from_prompt
+        presentation = (_payload_from_prompt(prompt) or {}).get("presentation_context", {})
+        if isinstance(presentation.get("sampling_seed"), int):
+            request_body["seed"] = (presentation["sampling_seed"]
+                + int(getattr(self._call_state, "request_count", 0))) % (2**31)
+        self._call_state.request_count = getattr(self._call_state, "request_count", 0) + 1
+        if not hasattr(self._call_state, "sampling_attempts"):
+            self._call_state.sampling_attempts = []
+        self._call_state.sampling_attempts.append({key: request_body[key]
+            for key in ("temperature", "top_p", "seed") if key in request_body})
+        if structured_repair and presentation.get("policy_version") != "grounded_image_diversity_v1":
             request_body['guided_json'] = IMAGE_REPAIR_SCHEMA
             request_body['guided_decoding_backend'] = 'lm-format-enforcer'
             request_body['repetition_penalty'] = 1.1
@@ -602,6 +640,13 @@ class QwenLocalImagePromptGenerator(_CandidateCallLog):
             "Authorization": f"Bearer {self.config.api_key}",
             "Content-Type": "application/json",
         }
+        local_qwen = ('qwen' in self.config.model_name.casefold()
+                      and urlsplit(self.config.base_url).hostname in {'127.0.0.1', 'localhost', '::1'})
+        if local_qwen:
+            request_id = uuid.uuid4().hex
+            request_body['request_id'] = request_id
+            headers.update({'X-MMKGC-Request-Id': request_id,
+                'X-MMKGC-Timeout-Seconds': str(max(0.05, self.timeout_seconds - min(5, self.timeout_seconds / 10)))})
         req = request.Request(
             self._endpoint(),
             data=json.dumps(request_body).encode("utf-8"),
@@ -624,6 +669,8 @@ class QwenLocalImagePromptGenerator(_CandidateCallLog):
         *,
         generation_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        self._call_state.request_count = 0
+        self._call_state.sampling_attempts = []
         prompt = self._build_prompt(record_label, entity_type, relation, angle, facts, generation_context)
         response_text = ""
         initial_response_text = ""
@@ -640,6 +687,11 @@ class QwenLocalImagePromptGenerator(_CandidateCallLog):
         local_qwen = ('qwen' in self.config.model_name.casefold()
                       and urlsplit(self.config.base_url).hostname in {'127.0.0.1', 'localhost', '::1'})
         start_time = time.perf_counter()
+        presentation = (generation_context or self.context).get("presentation_context", {})
+        max_requests = presentation.get("remaining_request_budget")
+        request_limit = 3 if local_qwen else 2
+        if type(max_requests) is int:
+            request_limit = min(request_limit, max(1, max_requests))
         try:
             response_json, latency_ms = self._request_json(prompt)
             initial_response_json = response_json
@@ -647,7 +699,7 @@ class QwenLocalImagePromptGenerator(_CandidateCallLog):
             response_text = self._extract_response_text(response_json)
             initial_response_text = response_text
             current_text, current_finish = response_text, initial_finish_reason
-            for attempt in range((2 if local_qwen else 1) + 1):
+            for attempt in range(request_limit):
                 try:
                     prompt_package = self._parse_prompt_package(current_text)
                     if current_finish == 'length':
@@ -655,7 +707,7 @@ class QwenLocalImagePromptGenerator(_CandidateCallLog):
                 except ValueError as parse_error:
                     validation_attempts.append({'attempt': attempt, 'response_text': current_text,
                                                 'finish_reason': current_finish, 'error': str(parse_error)})
-                    if attempt == (2 if local_qwen else 1):
+                    if attempt == request_limit - 1:
                         raise
                     repair_attempted = True
                     repair_count += 1
@@ -796,12 +848,15 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
                 else "qwen-local-stage-semantic-planner"
             ),
             targeted_knowledge_repairs="qwen" in config.model_name.lower(),
+            source_bound_text_extraction="qwen" in config.model_name.lower(),
             knowledge_stage_timeout_seconds=knowledge_stage_timeout_seconds,
         )
 
     def build_knowledge(self, record, missing_mode, coarse):
+        from mmkgc.data.contracts import existing_image_paths
+        image_paths = existing_image_paths(record) if missing_mode != "image" else []
         modalities = [modality for modality in ("image", "video", "audio")
-                      if modality != missing_mode and record.existing_modalities.get(modality)]
+                      if modality != missing_mode and (image_paths if modality == "image" else record.existing_modalities.get(modality))]
         if not modalities:
             return super().build_knowledge(record, missing_mode, coarse)
         from mmkgc.adapters.media_knowledge import (
@@ -809,6 +864,9 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
             load_source_media, with_media_description,
         )
         from mmkgc.stages.modeling import build_knowledge_input, apply_knowledge_response
+        from mmkgc.adapters.image_knowledge import load_source_images, MULTI_IMAGE_MODELING_VERSION
+        from mmkgc.adapters.media_knowledge import SourceMedia
+        from mmkgc.adapters.image_batches import image_batch_input, merge_image_batches
         started = time.perf_counter()
         deadline = started + self.knowledge_stage_timeout_seconds
         inputs = build_knowledge_input(record, missing_mode, coarse)
@@ -817,8 +875,12 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
             remaining = deadline - time.perf_counter()
             if remaining <= 0:
                 raise TimeoutError("Stage 1 total time budget exhausted during media loading")
-            sources.append(load_source_media(record, modality, self.dataset_root,
-                                             timeout_seconds=min(15.0, remaining)))
+            if modality == "image":
+                sources.extend(SourceMedia("image", metadata, image=image)
+                               for image, metadata in load_source_images(record, self.dataset_root))
+            else:
+                sources.append(load_source_media(record, modality, self.dataset_root,
+                                                 timeout_seconds=min(15.0, remaining)))
         model = self.config.model_name.lower()
         if "qwen" in model and "vl" in model and "omni" not in model and any(
                 source.modality == "audio" or source.audio_payload for source in sources):
@@ -830,8 +892,12 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
         for source in sources:
             modality, metadata = source.modality, source.metadata
             call_ref = f"stage1_{modality}_description:{record.entity_key}:{metadata['sha256'][:16]}"
+            if modality == "image" and len(image_paths) > 1:
+                call_ref += ":" + metadata["evidence_id"]
             prompt = DESCRIPTION_PROMPTS[modality]
-            if modality != "image":
+            if modality == "image" and len(image_paths) > 1:
+                prompt += f" Original evidence ID: {metadata['evidence_id']}. Describe only this image."
+            elif modality != "image":
                 prompt += (f" Original evidence ID: {metadata['evidence_id']}. "
                            f"File duration: {metadata['duration_seconds']:.3f} seconds.")
             if modality == "video":
@@ -840,13 +906,17 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
                            f"Source has audio track: {metadata['has_audio_stream']}.")
             call_started = time.perf_counter()
             call = {"stage": f"stage1_{modality}_description", "prompt_version": (
-                    IMAGE_MODELING_VERSION if modality == "image" else MEDIA_MODELING_VERSION),
+                    (MULTI_IMAGE_MODELING_VERSION if len(image_paths) > 1 else IMAGE_MODELING_VERSION)
+                    if modality == "image" else MEDIA_MODELING_VERSION),
                     "prompt": prompt, "contract_repair_retries": 0, "network_attempts": [],
                     "model_call_ref": call_ref, "media_input_metadata": [{"modality": modality, **metadata}],
                     "stage_timeout_seconds": self.knowledge_stage_timeout_seconds}
             if modality == "image":
                 call["image_input_metadata"] = metadata
-                context.update(image_input_metadata=metadata, image_description_model_call_ref=call_ref)
+                if len(image_paths) == 1:
+                    context.update(image_input_metadata=metadata, image_description_model_call_ref=call_ref)
+                else:
+                    context.setdefault("image_description_model_call_refs", {})[metadata["evidence_id"]] = call_ref
             token = KNOWLEDGE_REQUEST_CONTEXT.set({"deadline": deadline, "call": call, "media_inputs": [source]})
             try:
                 description = self._complete_prompt(prompt).strip()
@@ -866,13 +936,38 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
                 self.calls.append(call)
                 KNOWLEDGE_REQUEST_CONTEXT.reset(token)
             inputs = with_media_description(inputs, source, description, call_ref)
-            context["media_description_model_call_refs"][modality] = call_ref
-        token = KNOWLEDGE_REQUEST_CONTEXT.set(context)
-        try:
-            return self._refine("stage1_knowledge", record, missing_mode, inputs,
-                                lambda response: apply_knowledge_response(inputs, response))
-        finally:
-            KNOWLEDGE_REQUEST_CONTEXT.reset(token)
+            key = metadata["evidence_id"] if modality == "image" and len(image_paths) > 1 else modality
+            context["media_description_model_call_refs"][key] = call_ref
+        images = [source for source in sources if source.modality == "image"]
+        other_sources = [source for source in sources if source.modality != "image"]
+        batch_size = self.config.stage1_image_batch_size
+        groups = [images[index:index + batch_size] + other_sources for index in range(0, len(images), batch_size)] or [other_sources]
+        results, batch_records = [], []
+        for index, group in enumerate(groups, 1):
+            original_refs = {source.metadata["evidence_id"] for source in group if source.modality == "image"}
+            batch_inputs = image_batch_input(inputs, original_refs)
+            batch_context = {**context, "media_inputs": group,
+                "media_input_metadata": [{"modality": source.modality, **source.metadata} for source in group]}
+            if len(image_paths) > 1:
+                batch_record = {"batch_index": index, "batch_count": len(groups),
+                                "original_image_refs": sorted(original_refs)}
+                batch_context["image_extraction_batch"] = batch_record
+                batch_context["image_description_model_call_refs"] = {
+                    ref: context["image_description_model_call_refs"][ref] for ref in sorted(original_refs)}
+                batch_context["media_description_model_call_refs"] = {
+                    key: value for key, value in context["media_description_model_call_refs"].items()
+                    if key in original_refs or key in {"video", "audio"}}
+                batch_records.append(batch_record)
+            token = KNOWLEDGE_REQUEST_CONTEXT.set(batch_context)
+            try:
+                results.append(self._refine("stage1_knowledge", record, missing_mode, batch_inputs,
+                    lambda response: apply_knowledge_response(batch_inputs, response)))
+            finally:
+                KNOWLEDGE_REQUEST_CONTEXT.reset(token)
+        result = merge_image_batches(inputs, results)
+        if len(image_paths) > 1:
+            result["image_modeling"]["extraction_batches"] = batch_records
+        return result
 
     def _endpoint(self) -> str:
         return f"{self.config.base_url.rstrip('/')}/chat/completions"
@@ -914,13 +1009,26 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
         }
         if context is not None and context.get("media_inputs") and context["call"].get("stage") == "stage1_knowledge":
             request_body["response_format"] = {"type": "json_object"}
+        from mmkgc.adapters.json_contract import _payload_from_prompt
+        prompt_payload = _payload_from_prompt(prompt) or {}
+        source_bound = (prompt_payload.get("schema") == "source_bound_text_triples_v1"
+                        or prompt_payload.get("repair_kind") == "stage1_source_patch_v1")
+        if source_bound:
+            # Python validates this source-only contract. The installed vLLM
+            # grammar decoder can stall even on small schemas; never use it
+            # for this extraction or its local patches.
+            request_body.pop("response_format", None)
+            request_body["max_tokens"] = min(request_body["max_tokens"], 2048)
+            if prompt_payload.get("repair_kind"):
+                count = len(prompt_payload.get("fields_to_replace", []))
+                request_body["max_tokens"] = min(request_body["max_tokens"], max(512, 256 + 256 * count))
         if "qwen" in self.config.model_name.lower():
             from mmkgc.adapters.json_contract import local_semantic_json_schema, semantic_output_token_cap
             request_body["repetition_penalty"] = 1.05
             targeted_token_cap = semantic_output_token_cap(prompt)
             if targeted_token_cap is not None:
                 request_body["max_tokens"] = min(request_body["max_tokens"], targeted_token_cap)
-            if ("VALIDATION_FEEDBACK_JSON:" in prompt or "Previous parse error:" in prompt
+            if not source_bound and ("VALIDATION_FEEDBACK_JSON:" in prompt or "Previous parse error:" in prompt
                     or "stage1_targeted_repair_v1" in prompt):
                 request_body.update(guided_json=local_semantic_json_schema(prompt),
                                     guided_decoding_backend="lm-format-enforcer")
@@ -929,21 +1037,26 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
             "Authorization": f"Bearer {self.config.api_key}",
             "Content-Type": "application/json",
         }
-        req = request.Request(
-            self._endpoint(),
-            data=json.dumps(request_body).encode("utf-8"),
-            headers=headers,
-            method="POST",
-        )
         deadline = context["deadline"] if context is not None else None
+        local_qwen = ("qwen" in self.config.model_name.lower()
+                      and urlsplit(self.config.base_url).hostname in {"127.0.0.1", "localhost", "::1"})
         for attempt in range(2):
             remaining = deadline - time.perf_counter() if deadline is not None else self.timeout_seconds
             if remaining <= 0:
                 raise TimeoutError("Stage 1 total time budget exhausted")
             timeout = min(self.timeout_seconds, remaining)
+            request_id = uuid.uuid4().hex
+            attempt_headers = dict(headers)
+            if local_qwen:
+                request_body["request_id"] = request_id
+                attempt_headers.update({"X-MMKGC-Request-Id": request_id,
+                    "X-MMKGC-Timeout-Seconds": str(max(0.05, timeout - min(5.0, timeout / 10)))})
+            req = request.Request(self._endpoint(), data=json.dumps(request_body).encode("utf-8"),
+                                  headers=attempt_headers, method="POST")
             event = {"contract_attempt": context["call"]["contract_repair_retries"],
                      "network_attempt": attempt + 1, "timeout_seconds": timeout,
-                     "guided_json": "guided_json" in request_body} if context is not None else None
+                     "request_id": request_id, "guided_json": "guided_json" in request_body,
+                     "source_bound": source_bound} if context is not None else None
             if event is not None:
                 context["call"]["network_attempts"].append(event)
             started = time.perf_counter()
@@ -960,6 +1073,15 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
                     event.update(status="failed", error_type=type(exc).__name__, error_message=str(exc))
                 retryable = (exc.code in {408, 429, 500, 502, 503, 504}
                              if isinstance(exc, error.HTTPError) else True)
+                # Never submit an overlapping local request after a timeout.
+                # The service deadline aborts it; missing middleware is handled
+                # by the batch supervisor's existing service recovery path.
+                if local_qwen and (isinstance(exc, TimeoutError)
+                        or isinstance(exc, error.HTTPError) and exc.code in {408, 504}
+                        or isinstance(exc, error.URLError) and isinstance(exc.reason, TimeoutError)):
+                    retryable = False
+                if event is not None and isinstance(exc, error.HTTPError):
+                    event["server_abort_confirmed"] = exc.headers.get("X-MMKGC-Aborted") == "true" if exc.headers else False
                 if attempt == 0 and retryable and (deadline is None or deadline - time.perf_counter() > 1):
                     time.sleep(1)
                     continue
@@ -968,6 +1090,12 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
                         body = exc.read().decode("utf-8", errors="replace").strip()
                     except Exception:
                         body = ""
+                    if (local_qwen and exc.code in {408, 504}
+                            and (not exc.headers or exc.headers.get("X-MMKGC-Aborted") != "true")):
+                        # An unconfirmed engine abort requires supervisor
+                        # recovery, even if the HTTP health endpoint responds.
+                        raise TimeoutError("Local Stage 1 timed out without confirmed engine abort: "
+                                           + body[:2000]) from exc
                     if body:
                         raise error.HTTPError(exc.url, exc.code, f"{exc.reason} | {body[:2000]}",
                                               exc.hdrs, exc.fp) from exc

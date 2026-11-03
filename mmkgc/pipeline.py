@@ -65,7 +65,11 @@ class MMKGCPipeline:
         relevance_fact_budget: int = 64,
         stage4_config: str | Path | None = None,
         dataset_root: str | Path | None = None,
+        skip_stage4: bool = False,
     ):
+        if type(skip_stage4) is not bool:
+            raise ValueError("skip_stage4 must be a boolean")
+        self.skip_stage4 = skip_stage4
         self.candidate_budget = candidate_budget
         self.text_generator = text_generator
         self.image_prompt_generator = image_prompt_generator
@@ -81,7 +85,7 @@ class MMKGCPipeline:
         self.dataset_root = Path(dataset_root).resolve() if dataset_root is not None else None
         self.project_root = Path(__file__).resolve().parents[1]
         self.ranking_engine = ranking_engine
-        if self.ranking_engine is None:
+        if self.ranking_engine is None and not self.skip_stage4:
             from mmkgc.ranking import factory
 
             self.ranking_engine = factory.build_model_fusion_engine(
@@ -152,6 +156,25 @@ class MMKGCPipeline:
         model_calls.extend(generation_model_calls)
         generated_image_artifacts = list(generation.get("generated_image_artifacts", []))
         generation = {"relation_alternation_generation": generation["relation_alternation_generation"]}
+        if self.skip_stage4:
+            payload = generation["relation_alternation_generation"]
+            image_count = sum(bool(artifact.get("image_bytes") if isinstance(artifact, dict) else artifact.image_bytes)
+                              for artifact in generated_image_artifacts)
+            counts = {"text": len(payload.get("text_candidates", [])), "image": image_count}
+            return {
+                "entity": asdict(record), "coarse_relation_filtering": coarse,
+                "knowledge_modeling": knowledge, "fine_grained_relation_selection": selection,
+                "relation_alternation_generation": generation,
+                "kg_aware_candidate_consistency_ranking": {
+                    "ranking_status": "not_evaluated", "evaluation_skipped": True,
+                    "reason": "Stage 4 deferred; generated candidates have not been scored."},
+                "model_calls": model_calls, "image_model_calls": image_model_calls,
+                "ranking_model_calls": [], "generated_image_artifacts": generated_image_artifacts,
+                "final": {"entity_key": record.entity_key, "ranking_status": "not_evaluated",
+                    "generation_status": "generated" if any(counts.values()) else "generation_empty",
+                    "stage4_deferred": True, "best_text_candidate_id": None,
+                    "best_image_candidate_id": None, "counts": counts},
+            }
         context = build_ranking_context(
             record.entity_key,
             record.label,
@@ -300,7 +323,7 @@ class MMKGCPipeline:
                 missing.append("image_prompt_generator")
             if self.image_generator is None:
                 missing.append("image_generator")
-        if self.ranking_engine is None:
+        if self.ranking_engine is None and not self.skip_stage4:
             missing.append("ranking_engine")
         if missing:
             raise RuntimeError(
@@ -400,8 +423,13 @@ def _semantic_model_calls(
             "media_input_metadata",
             "media_description_model_call_refs",
             "image_description_model_call_ref",
+            "image_description_model_call_refs",
+            "image_extraction_batch",
             "model_call_ref",
             "knowledge_repair_version",
+            "source_bound_response",
+            "text_extraction_batch",
+            "response_wrappers_removed",
             "validation_attempts",
             "targeted_repairs",
             "network_attempts",

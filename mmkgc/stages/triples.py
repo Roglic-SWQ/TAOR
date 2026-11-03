@@ -29,11 +29,19 @@ def model_input_view(inputs: dict[str, Any], limit: int = 32) -> dict[str, Any]:
         if len(examples) >= limit:
             break
     refs = {ref for fact in examples for ref in fact["evidence_refs"]}
+    image_modeling = inputs.get("image_modeling", {})
+    image_fields = ("schema_version", "description_evidence_ref", "original_image_ref", "extraction_uses_original_image")
+    image_view = ({"schema_version": image_modeling["schema_version"],
+                   "extraction_uses_original_images": True,
+                   "images": [{key: entry[key] for key in image_fields} for entry in image_modeling["images"]]}
+                  if "images" in image_modeling else
+                  {key: image_modeling[key] for key in image_fields} if image_modeling else {})
+    selection_view = {key: deepcopy(value) for key, value in inputs.get("evidence_selection", {}).items()
+                      if key != "modeled_stage0_fact_ids"}
     return {**{key: deepcopy(value) for key, value in inputs.items()
-               if key not in {"fact_candidates", "evidence_catalog", "source_inputs", "image_modeling", "media_modeling"}},
-            **({"image_modeling": {key: inputs["image_modeling"][key] for key in
-                ("schema_version", "description_evidence_ref", "original_image_ref", "extraction_uses_original_image")}}
-               if "image_modeling" in inputs else {}),
+               if key not in {"fact_candidates", "evidence_catalog", "source_inputs", "image_modeling", "media_modeling", "evidence_selection"}},
+            **({"evidence_selection": selection_view} if selection_view else {}),
+            **({"image_modeling": image_view} if image_view else {}),
             **({"media_modeling": {modality: {key: entry[key] for key in (
                 "schema_version", "description_evidence_ref", "original_media_ref", "extraction_uses_original_media", "input_coverage")}
                 for modality, entry in inputs["media_modeling"].items()}} if "media_modeling" in inputs else {}),
@@ -68,11 +76,10 @@ def triple_response_schema(inputs: Mapping[str, Any]) -> dict[str, Any]:
     source_refs = extraction_sources(inputs)
     def refs(values, *, required=False):
         result = {"type": "array", "uniqueItems": True,
+                  "maxItems": len(values),
                   "items": {"type": "string", **({"enum": values} if values else {})}}
         if required:
             result["minItems"] = 1
-        if not values:
-            result["maxItems"] = 0
         return result
     triples = {"type": "array", "items": obj({
         "subject": text, "relation": text, "object": text,
@@ -120,7 +127,25 @@ def build_triple_prompt(inputs: dict[str, Any], errors: list[dict[str, Any]] | N
     payload = model_input_view(inputs)
     payload["extractable_evidence_ids"] = extraction_sources(inputs)
     parts = [instruction]
-    if inputs.get("image_modeling"):
+    if inputs.get("image_modeling", {}).get("images"):
+        parts.append(
+            "MULTI-IMAGE EXTRACTION: Each numbered description is accompanied by its SAME original "
+            "image in this request. Inspect EVERY supplied original again, correcting description errors "
+            "and recovering supported details that were missed. Descriptions are intermediate observations, "
+            "not independent confirmation. Keep every image's evidence ID separate. Each image-derived "
+            "triple MUST cite the actual supporting original_image_ref from image_modeling.images. "
+            "When citing a description_evidence_ref, also cite THAT description's original_image_ref, "
+            "never another image as a substitute. Corrections may cite an original without its description. "
+            "Merge identical subject/relation/object claims and union their supporting image references; "
+            "retain complementary details and view/time qualifications. Do not treat repeated descriptions "
+            "as independent corroboration or resolve disagreements by majority vote. Distinguish different "
+            "views from real contradictions; record unresolved conflicts in uncertain_aspects and do not "
+            "assert an unqualified conflicting attribute. Anchor visible components, colors, layout and "
+            "spatial relations to the exact target label. Never invent unseen details from another view. "
+            "Extract from the attached images only; images outside this batch are not visible evidence. "
+            "Return one COMPLETE unified extraction response for this batch, not separate fact schemas."
+        )
+    elif inputs.get("image_modeling"):
         parts.append(
             "IMAGE EXTRACTION: You are given a model-generated description AND its original image "
             "attached to this request. Inspect the original image again. The description is an intermediate "
@@ -231,6 +256,15 @@ def triple_response_errors(inputs: dict[str, Any], response: Any) -> list[dict[s
                 if inputs.get("image_modeling"):
                     processed.add("image")
                 for modality in sorted(processed):
+                    if modality == "image" and "images" in inputs.get("image_modeling", {}):
+                        image_items = [item for item in cited if item.get("modality") == "image"]
+                        originals = {item["evidence_id"] for item in image_items
+                                     if item.get("representation") == "original_image"}
+                        required = {item["original_image_ref"] for item in image_items if item.get("original_image_ref")}
+                        if (image_items and not originals) or required - originals:
+                            add("missing_original_image_ref", path + "/evidence_refs",
+                                "image-derived facts must cite their supporting original; each description needs its OWN original_image_ref")
+                        continue
                     original_ref = f"existing:{modality}:original"
                     if any(item.get("modality") == modality for item in cited) and original_ref not in triple["evidence_refs"]:
                         add(f"missing_original_{modality}_ref", path + "/evidence_refs",

@@ -94,6 +94,7 @@ class StrictJsonStagePlanner:
         prompt_profile: str = PROMPT_VERSION,
         max_knowledge_repairs: int = 2,
         targeted_knowledge_repairs: bool = False,
+        source_bound_text_extraction: bool = False,
         knowledge_stage_timeout_seconds: float = 180.0,
     ) -> None:
         if not isinstance(prompt_profile, str) or prompt_profile not in PROMPT_PROFILES:
@@ -108,6 +109,7 @@ class StrictJsonStagePlanner:
                 or not math.isfinite(knowledge_stage_timeout_seconds) or knowledge_stage_timeout_seconds <= 0):
             raise ValueError("knowledge_stage_timeout_seconds must be finite and positive")
         self.targeted_knowledge_repairs = targeted_knowledge_repairs
+        self.source_bound_text_extraction = source_bound_text_extraction
         self.knowledge_stage_timeout_seconds = knowledge_stage_timeout_seconds
         self.calls: list[dict[str, Any]] = []
 
@@ -141,6 +143,22 @@ class StrictJsonStagePlanner:
         from mmkgc.stages.modeling import build_knowledge_input, apply_knowledge_response
 
         inputs = build_knowledge_input(record, missing_mode, coarse)
+        if self.source_bound_text_extraction:
+            from mmkgc.adapters.source_text_triples import text_source_batches
+            batches = text_source_batches(inputs)
+            if len(batches) > 1:
+                from mmkgc.adapters.image_batches import merge_image_batches
+                parent = KNOWLEDGE_REQUEST_CONTEXT.get() or {}
+                deadline = min(parent.get("deadline", float("inf")),
+                               time.perf_counter() + self.knowledge_stage_timeout_seconds)
+                token = KNOWLEDGE_REQUEST_CONTEXT.set({**parent, "deadline": deadline})
+                try:
+                    results = [self._refine("stage1_knowledge", record, missing_mode, batch,
+                        lambda response, batch=batch: apply_knowledge_response(batch, response))
+                        for batch in batches]
+                    return merge_image_batches(inputs, results)
+                finally:
+                    KNOWLEDGE_REQUEST_CONTEXT.reset(token)
         return self._refine(
             "stage1_knowledge",
             record,
@@ -324,6 +342,12 @@ class StrictJsonStagePlanner:
         from mmkgc.stages.modeling import KnowledgeResponseValidationError
         from mmkgc.stages.triples import TRIPLE_SCHEMA, TRIPLE_SCHEMAS
         triples = inputs.get("schema") in TRIPLE_SCHEMAS
+        source_task = None
+        if triples and self.source_bound_text_extraction:
+            from mmkgc.adapters.source_text_triples import source_text_task
+            source_task = source_text_task(inputs)
+            if source_task is not None:
+                prompt = source_task.prompt()
 
         call: dict[str, Any] = {
             "stage": "stage1_knowledge", "prompt_version": inputs["schema"] if triples else self.prompt_version,
@@ -332,6 +356,11 @@ class StrictJsonStagePlanner:
             "prompt": prompt, "contract_repair_retries": 0, "validation_attempts": [],
             "network_attempts": [], "stage_timeout_seconds": self.knowledge_stage_timeout_seconds,
         }
+        if source_task is not None:
+            call["prompt_version"] = "source_bound_text_triples_v1"
+            call["knowledge_repair_version"] = "stage1_source_patch_v1"
+            if "text_extraction_batch" in inputs:
+                call["text_extraction_batch"] = deepcopy(inputs["text_extraction_batch"])
         seen: set[str] = set()
         request_prompt = prompt
         repair_task = repair_base = None
@@ -341,8 +370,10 @@ class StrictJsonStagePlanner:
         if "deadline" in parent:
             deadline = min(deadline, parent["deadline"])
         context = {key: parent[key] for key in ("image_input", "image_input_metadata", "image_description_model_call_ref",
-                   "media_inputs", "media_input_metadata", "media_description_model_call_refs") if key in parent}
-        for key in ("image_input_metadata", "image_description_model_call_ref", "media_input_metadata", "media_description_model_call_refs"):
+                   "media_inputs", "media_input_metadata", "media_description_model_call_refs",
+                   "image_description_model_call_refs", "image_extraction_batch") if key in parent}
+        for key in ("image_input_metadata", "image_description_model_call_ref", "media_input_metadata", "media_description_model_call_refs",
+                    "image_description_model_call_refs", "image_extraction_batch"):
             if key in context:
                 call[key] = context[key]
         token = KNOWLEDGE_REQUEST_CONTEXT.set({**context, "deadline": deadline, "call": call})
@@ -360,14 +391,33 @@ class StrictJsonStagePlanner:
                 try:
                     if repair_task is not None:
                         from mmkgc.adapters.stage1_repair import merge_knowledge_repair
-                        response = merge_knowledge_repair(repair_base, repair_task, response_text)
+                        patch_text = response_text
+                        if source_task is not None:
+                            from mmkgc.adapters.source_text_triples import parse_source_response
+                            patch, wrapper_removed = parse_source_response(response_text)
+                            # Qwen sometimes wraps an otherwise complete patch
+                            # in one "response" object. Unwrap only this exact,
+                            # unambiguous container; merge still checks all keys.
+                            if set(patch) == {"response"} and isinstance(patch["response"], dict):
+                                patch = patch["response"]
+                                wrapper_removed = True
+                            patch_text = json.dumps(patch, ensure_ascii=False)
+                            if wrapper_removed:
+                                call.setdefault("response_wrappers_removed", []).append(attempt)
+                        response = merge_knowledge_repair(repair_base, repair_task, patch_text)
+                    elif source_task is not None:
+                        from mmkgc.adapters.source_text_triples import parse_source_response
+                        response, wrapper_removed = parse_source_response(response_text)
+                        if wrapper_removed:
+                            call.setdefault("response_wrappers_removed", []).append(attempt)
                     else:
                         response = parse_strict_json_object(response_text)
-                    refined = apply_response(response)
+                    canonical = source_task.decode(response) if source_task is not None else response
+                    refined = apply_response(canonical)
                 except (SemanticStageParseError, KnowledgeResponseValidationError) as exc:
                     if isinstance(exc, KnowledgeResponseValidationError):
                         errors = exc.errors
-                    elif _should_attempt_contract_repair(exc, response_text):
+                    elif source_task is not None or _should_attempt_contract_repair(exc, response_text):
                         errors = [{"code": "invalid_json", "path": "", "message": str(exc)}]
                     else:
                         raise
@@ -391,7 +441,16 @@ class StrictJsonStagePlanner:
                     if repair_task is not None and any(e["path"].startswith("/targeted_repair") for e in errors):
                         continue
                     repair_task = None
-                    if self.targeted_knowledge_repairs and isinstance(exc, KnowledgeResponseValidationError):
+                    if source_task is not None and isinstance(exc, KnowledgeResponseValidationError):
+                        from mmkgc.adapters.source_text_triples import targeted_source_repair
+                        repair_task = targeted_source_repair(source_task, response, errors)
+                        if repair_task is not None:
+                            repair_base = deepcopy(response)
+                            request_prompt = repair_task.prompt
+                            call.setdefault("targeted_repairs", []).append({
+                                "attempt": attempt + 1, "fields": list(repair_task.fields),
+                                "fact_ids": [], "prompt": request_prompt})
+                    elif self.targeted_knowledge_repairs and isinstance(exc, KnowledgeResponseValidationError):
                         from mmkgc.adapters.stage1_repair import targeted_knowledge_repair
                         repair_task = targeted_knowledge_repair(
                             _prompt_deterministic_output("stage1_knowledge", inputs), response, errors)
@@ -402,7 +461,7 @@ class StrictJsonStagePlanner:
                                 "attempt": attempt + 1, "fields": list(repair_task.fields),
                                 "fact_ids": list(repair_task.facts), "prompt": request_prompt})
                     if repair_task is None:
-                        request_prompt = build_knowledge_contract_repair_prompt(inputs=inputs, errors=errors)
+                        request_prompt = source_task.prompt(errors) if source_task is not None else build_knowledge_contract_repair_prompt(inputs=inputs, errors=errors)
                     call["contract_repair_prompt"] = request_prompt
                     continue
                 call["validation_attempts"].append({"attempt": attempt, "response_text": response_text, "errors": []})
@@ -412,6 +471,9 @@ class StrictJsonStagePlanner:
                     if repair_task is not None:
                         call["response_text"] = json.dumps(response, ensure_ascii=False)
                         call["targeted_repairs"][-1]["response_text"] = response_text
+                if source_task is not None:
+                    call["source_bound_response"] = deepcopy(response)
+                    call["response_text"] = json.dumps(canonical, ensure_ascii=False)
                 refined["semantic_refinement"] = _refinement_status(
                     self.planner_name, "stage1_knowledge", "applied", None,
                     prompt_version=call["prompt_version"],

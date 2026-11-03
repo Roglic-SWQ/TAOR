@@ -23,6 +23,7 @@ class KnowledgeRepairTask:
     facts: tuple[str, ...]
     schema: dict[str, Any]
     prompt: str
+    deletable_fields: tuple[str, ...] = ()
 
 
 def targeted_knowledge_repair(inputs, response, errors) -> KnowledgeRepairTask | None:
@@ -114,14 +115,21 @@ def merge_knowledge_repair(base, task: KnowledgeRepairTask, raw: str):
         if not isinstance(patch[name], dict) or set(patch[name]) != set(keys):
             fail("repair_key_mismatch", f"{name} must contain exactly {list(keys)}")
     result = deepcopy(base)
+    deletions = []
     for path, value in patch["fields"].items():
+        if value is None and path in task.deletable_fields:
+            deletions.append(path)
+            continue
         parts = path.strip("/").split("/")
         target = result
         for part in parts[:-1]:
             target = target[int(part)] if isinstance(target, list) else target[part]
         key = int(parts[-1]) if isinstance(target, list) else parts[-1]
         target[key] = deepcopy(value)
-    claims = {item["fact_id"]: item for item in result["relation_facts"]}
+    for path in sorted(deletions, key=lambda path: int(path.rsplit("/", 1)[1]), reverse=True):
+        parent, index = path.strip("/").rsplit("/", 1)
+        del result[parent][int(index)]
+    claims = {item["fact_id"]: item for item in result.get("relation_facts", [])}
     for fid, claim in patch["facts"].items():
         if not isinstance(claim, str) or not claim.strip():
             fail("invalid_repair_claim", "Every repaired claim must be nonempty text")

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
+
 import json
 import re
 from collections import Counter
@@ -751,6 +753,10 @@ def _compact_stage3_candidate(item: Any) -> tuple[Any, list[str]]:
         compact["source_candidate_id"] = item.get("source_candidate_id")
     if item.get("verification_targets") is not None:
         compact["verification_targets"] = item["verification_targets"]
+    if isinstance(item.get("metadata"), dict) and item["metadata"].get("presentation_policy"):
+        compact["presentation"] = {key: deepcopy(item["metadata"][key]) for key in (
+            "presentation_policy", "requested_rendering", "presentation_signature", "presentation_rewrites")
+            if key in item["metadata"]}
     if item.get("plan_schema_version") in CANDIDATE_PLAN_SCHEMAS:
         compact.update(plan_schema_version=item["plan_schema_version"],
                        source_fact_refs=list(item["source_fact_refs"]))
@@ -841,6 +847,10 @@ def _stage3_model_call_ref(item: dict[str, Any]) -> str | None:
 
 
 def _compact_stage4_ranking(payload: dict[str, Any]) -> dict[str, Any]:
+    if payload.get("evaluation_skipped") is True:
+        return {"ranking_status": "not_evaluated", "evaluation_skipped": True,
+                "reason": payload.get("reason"), "evaluated_text_candidate_count": 0,
+                "evaluated_image_candidate_count": 0}
     reference = payload.get("kg_aware_candidate_consistency_ranking")
     reference = reference if isinstance(reference, dict) else {}
     text_ranking = _compact_stage4_candidate_ranking(payload.get("text_ranking"), "text")

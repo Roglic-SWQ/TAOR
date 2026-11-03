@@ -97,8 +97,11 @@ def run_doctor(argv: list[str] | None = None) -> dict[str, Any]:
         checks.append(_check("image_generator_mode", "skipped", "image generation is not required"))
         checks.append(_check("sdxl_model_dir", "skipped", "text-only run"))
 
-    stage4_devices = _check_stage4_profile(args, project_root, checks)
-    cuda_devices.extend(stage4_devices)
+    if args.skip_stage4:
+        checks.append(_check("stage4_profile", "skipped", "Stage 4 deferred by --skip-stage4"))
+    else:
+        stage4_devices = _check_stage4_profile(args, project_root, checks)
+        cuda_devices.extend(stage4_devices)
     _check_cuda_devices(cuda_devices, checks)
 
     return {
