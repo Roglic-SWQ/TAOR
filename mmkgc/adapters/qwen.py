@@ -24,7 +24,7 @@ from mmkgc.generation_prompts import (
 )
 from mmkgc.adapters.image_prompt_repair import (
     REPAIR_SCHEMA as IMAGE_REPAIR_SCHEMA, REPAIR_VERSION as IMAGE_REPAIR_VERSION,
-    compact_repair_prompt, validate_positive_prompt,
+    compact_repair_prompt, recover_truncated_audit_tail, validate_positive_prompt,
 )
 from mmkgc.qwen7b_prompts import (
     IMAGE_SYSTEM as QWEN_IMAGE_SYSTEM,
@@ -684,6 +684,7 @@ class QwenLocalImagePromptGenerator(_CandidateCallLog):
         repair_attempted = False
         repair_count = 0
         validation_attempts = []
+        audit_recovery = None
         local_qwen = ('qwen' in self.config.model_name.casefold()
                       and urlsplit(self.config.base_url).hostname in {'127.0.0.1', 'localhost', '::1'})
         start_time = time.perf_counter()
@@ -700,6 +701,18 @@ class QwenLocalImagePromptGenerator(_CandidateCallLog):
             initial_response_text = response_text
             current_text, current_finish = response_text, initial_finish_reason
             for attempt in range(request_limit):
+                if current_finish == 'length':
+                    recovered = recover_truncated_audit_tail(current_text)
+                    if recovered is not None:
+                        audit_recovery = recovered.pop('audit_recovery')
+                        prompt_package = self._parse_prompt_package(json.dumps(recovered, ensure_ascii=False))
+                        prompt_package['audit_recovery'] = audit_recovery
+                        validation_attempts.append({'attempt': attempt, 'response_text': current_text,
+                            'finish_reason': current_finish, 'error': None, 'audit_recovery': audit_recovery})
+                        response_text = current_text
+                        if repair_attempted:
+                            response_json = {'initial_response': initial_response_json, 'repaired_response': repaired_json}
+                        break
                 try:
                     prompt_package = self._parse_prompt_package(current_text)
                     if current_finish == 'length':
@@ -744,6 +757,7 @@ class QwenLocalImagePromptGenerator(_CandidateCallLog):
                         "contract_repair_retries": repair_count,
                     },
                     'validation_attempts': validation_attempts,
+                    **({'audit_recovery': audit_recovery} if audit_recovery else {}),
                     'image_prompt_repair_version': IMAGE_REPAIR_VERSION,
                     **self._build_call_record(
                         status="generated",

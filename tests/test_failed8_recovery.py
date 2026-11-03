@@ -222,7 +222,7 @@ def test_local_qwen_repair_uses_bounded_json_and_no_invalid_response(monkeypatch
     assert result['positive_prompt'] == json.loads(good)['positive_prompt']
     call = g.consume_last_call('Q1', 'image_003')
     assert call['metadata']['contract_repair_retries'] == 1
-    assert call['image_prompt_repair_version'] == 'qwen_image_prompt_source_rebuild_v1'
+    assert call['image_prompt_repair_version'] == 'qwen_image_prompt_source_rebuild_v2'
 
 
 def test_local_qwen_repair_budget_is_bounded_without_local_json_salvage(monkeypatch):
