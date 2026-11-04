@@ -1167,8 +1167,9 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
             request_body["response_format"] = {"type": "json_object"}
         from mmkgc.adapters.json_contract import _payload_from_prompt
         prompt_payload = _payload_from_prompt(prompt) or {}
-        source_bound = (prompt_payload.get("schema") == "source_bound_text_triples_v1"
-                        or prompt_payload.get("repair_kind") == "stage1_source_patch_v1")
+        from mmkgc.adapters.source_text_triples import SOURCE_SCHEMAS, SOURCE_REPAIR_KINDS
+        source_bound = (prompt_payload.get("schema") in SOURCE_SCHEMAS
+                        or prompt_payload.get("repair_kind") in SOURCE_REPAIR_KINDS)
         if source_bound:
             # Python validates this source-only contract. The installed vLLM
             # grammar decoder can stall even on small schemas; never use it

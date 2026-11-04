@@ -79,7 +79,8 @@ def test_selection_may_use_less_than_limit_without_candidate_allocations():
     _, prompt = fact_selection_prompt('Museum', 'image', before, 8)
     payload = json.loads(prompt)
     assert payload['max_selected_facts'] == 8
-    assert 'candidate_budget' not in payload and 'candidates' not in payload['output_template']
+    assert 'candidate_budget' not in payload and 'output_template' not in payload
+    assert payload['allowed_fact_ids'] == [fact['fact_id'] for fact in before['relation_facts']]
     assert 'PRIVATE_TARGET' not in prompt
 
 
