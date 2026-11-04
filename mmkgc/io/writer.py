@@ -755,7 +755,9 @@ def _compact_stage3_candidate(item: Any) -> tuple[Any, list[str]]:
         compact["verification_targets"] = item["verification_targets"]
     if isinstance(item.get("metadata"), dict) and item["metadata"].get("presentation_policy"):
         compact["presentation"] = {key: deepcopy(item["metadata"][key]) for key in (
-            "presentation_policy", "requested_rendering", "presentation_signature", "presentation_rewrites")
+            "presentation_policy", "requested_rendering", "presentation_signature", "presentation_rewrites",
+            "image_description", "focus_plan", "image_candidate_kind", "prompt_source_candidate_id",
+            "seed_variant_index", "seed_variant_reason")
             if key in item["metadata"]}
     if item.get("plan_schema_version") in CANDIDATE_PLAN_SCHEMAS:
         compact.update(plan_schema_version=item["plan_schema_version"],

@@ -79,10 +79,13 @@ def test_batch_checkpoints_all_generated_images_and_resume_checks_their_hashes(t
     assert len(list(batch.pending_entities(job, False))) == 1
 
 
-def test_generation_only_preserves_duplicate_prompt_suppression(tmp_path, monkeypatch):
+def test_generation_only_fills_seed_variants_without_scoring(tmp_path, monkeypatch):
     result = pipeline(monkeypatch, duplicate=True).finish(prepared())
-    assert len(result["generated_image_artifacts"]) == 1
-    assert result["final"]["counts"]["image"] == 1
+    assert len(result["generated_image_artifacts"]) == 3
+    assert result["final"]["counts"]["image"] == 3
+    summary=result['relation_alternation_generation']['relation_alternation_generation']['image_prompt_search']
+    assert summary['unique_prompt_count']==1 and summary['seed_variant_count']==2
+    assert summary['generated_image_count']==3
 
 
 def test_generation_only_does_not_count_failed_image_metadata_as_a_generated_image(monkeypatch):

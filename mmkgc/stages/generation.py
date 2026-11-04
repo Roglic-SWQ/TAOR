@@ -17,7 +17,8 @@ from mmkgc.plan_schema import FACT_SELECTION_SCHEMA
 from mmkgc.stages.triples import TRIPLE_SCHEMAS
 from mmkgc.stages.presentation import (
     IMAGE_PRESENTATION_POLICY, MAX_PRESENTATION_REWRITES,
-    duplicate_image_prompt, image_rendering_plan, image_presentation_signature,
+    duplicate_image_prompt, image_presentation_signature, IMAGE_REQUESTS_PER_CANDIDATE,
+    MIN_IMAGE_CANDIDATE_REQUESTS, ImageFocusValidationError,
 )
 
 
@@ -683,6 +684,40 @@ def _provider_model_call(
     return dict(call)
 
 
+_IMAGE_VARIANT_METADATA = (
+    'presentation_policy', 'image_description', 'focus_plan',
+    'image_candidate_kind', 'prompt_source_candidate_id',
+    'seed_variant_index', 'seed_variant_reason',
+)
+
+
+def _fill_image_seed_variants(candidates, candidate_ids):
+    """Fill missing image slots from accepted prompts without another LLM call.
+
+    Each slot keeps its own ID, so SDXL derives a different reproducible seed.
+    Only original accepted candidates are sources; variants never form a chain.
+    """
+    if not candidates:
+        return []
+    by_id = {candidate['candidate_id']: candidate for candidate in candidates}
+    sources = [by_id[key] for key in candidate_ids if key in by_id]
+    for source in sources:
+        source['metadata'].update(image_candidate_kind='distinct_prompt',
+            prompt_source_candidate_id=source['candidate_id'], seed_variant_index=0)
+    variants_per_source = {}
+    for index, candidate_id in enumerate(key for key in candidate_ids if key not in by_id):
+        source = sources[index % len(sources)]
+        source_id = source['candidate_id']
+        variants_per_source[source_id] = variants_per_source.get(source_id, 0) + 1
+        variant = deepcopy(source)
+        variant['candidate_id'] = candidate_id
+        variant['metadata'].update(image_candidate_kind='seed_variant',
+            prompt_source_candidate_id=source_id, seed_variant_index=variants_per_source[source_id],
+            seed_variant_reason='insufficient_distinct_prompts')
+        by_id[candidate_id] = variant
+    return [by_id[key] for key in candidate_ids]
+
+
 def _generate_modality_candidates(
     modality: str,
     entity_key: str,
@@ -708,7 +743,8 @@ def _generate_modality_candidates(
     generator = text_generator if modality == "text" else image_prompt_generator
     shared = _selection_payload(selection).get("schema_version") == FACT_SELECTION_SCHEMA
     previous_presentations = []
-    previous_renderings = []
+    previous_focus_plans = []
+    previous_descriptions = []
     previous_candidate_ids = []
     original_qwen_prompts = getattr(generator, "prompt_version", None) == QWEN_PROMPT_VERSION
     workers = getattr(generator, "max_concurrency", 1)
@@ -789,18 +825,17 @@ def _generate_modality_candidates(
                 "previous_candidates": list(previous_presentations),
             }
             if modality == "image":
-                rendering = image_rendering_plan(index)
                 model_context["presentation_context"].update(
                     policy_version=IMAGE_PRESENTATION_POLICY,
-                    requested_rendering=rendering,
-                    previous_renderings=deepcopy(previous_renderings),
+                    previous_prompt=previous_presentations[-1] if previous_presentations else None,
+                    previous_focus_plans=deepcopy(previous_focus_plans),
+                    previous_descriptions=list(previous_descriptions),
                     rewrite_feedback=deepcopy(presentation_retry or {}),
                     sampling_seed=(int.from_bytes(hashlib.sha256(entity_key.encode()).digest()[:4], "big")
                         + 1009 * index + 101 * (presentation_retry or {}).get("attempt", 0)) % (2**31),
                     remaining_request_budget=image_attempt_budget - image_attempts,
                 )
-                base["metadata"].update(presentation_policy=IMAGE_PRESENTATION_POLICY,
-                    requested_rendering=deepcopy(rendering))
+                base["metadata"].update(presentation_policy=IMAGE_PRESENTATION_POLICY)
         legacy_facts = (
             _feedback_facts(feedback) + facts
             if feedback and not original_qwen_prompts else facts
@@ -839,10 +874,16 @@ def _generate_modality_candidates(
                 if part.strip()
             )
             positive = str(prompt.get("positive_prompt", "")).strip()
+            if not positive:
+                raise ValueError('Image positive_prompt must be nonempty')
             brief_suffix = "" if callable(structured_generate) else _positive_prompt_suffix(brief)
             if brief_suffix:
                 positive = ", ".join(part for part in (positive, brief_suffix) if part)
             base["positive_prompt"] = positive
+            if prompt.get('image_description'):
+                base['metadata']['image_description'] = prompt['image_description']
+            if prompt.get('focus_plan'):
+                base['metadata']['focus_plan'] = deepcopy(prompt['focus_plan'])
             base["generated_content"] = {"type": "image_prompt", "value": base["positive_prompt"]}
             prompt_call = _provider_model_call(
                 image_prompt_generator,
@@ -863,7 +904,7 @@ def _generate_modality_candidates(
             candidate_id = f"{modality}_{'safe_' if safe_variant else ''}{index + 1:03d}"
             call = _provider_model_call(generator, entity_key, candidate_id)
             if call is not None:
-                call.update(stage="stage3_generation", status="failed", modality=modality)
+                call.update(stage="stage3_generation", status="failed", modality=call.get('modality') or modality)
                 setattr(exc, "model_call", call)
             setattr(exc, "candidate_id", candidate_id)
             raise
@@ -875,11 +916,18 @@ def _generate_modality_candidates(
         prepared = []
         seen_presentations = {}
         image_attempts = 0
-        image_attempt_budget = 2 * len(entries)
+        image_attempt_budget = IMAGE_REQUESTS_PER_CANDIDATE * len(entries)
         for entry in entries:
-            if modality == "image" and image_attempts >= image_attempt_budget:
+            if modality == "image" and image_attempts + MIN_IMAGE_CANDIDATE_REQUESTS > image_attempt_budget:
                 break
-            base, calls = prepare_with_audit(entry)
+            try:
+                base, calls = prepare_with_audit(entry)
+            except ImageFocusValidationError as exc:
+                call = getattr(exc, 'model_call', {})
+                call.update(presentation_disposition='focus_rejected', presentation_policy=IMAGE_PRESENTATION_POLICY)
+                image_attempts += max(1, len(call.get('sampling_attempts', [])))
+                prepared.append((None, [call]))
+                continue
             if modality == "image":
                 image_attempts += sum(max(1, len(call.get("sampling_attempts", []))) for call in calls) or 1
                 all_calls = []
@@ -897,12 +945,15 @@ def _generate_modality_candidates(
                         base["metadata"]["presentation_signature"] = image_presentation_signature(base["positive_prompt"])
                         base["metadata"]["presentation_attempt_budget"] = image_attempt_budget
                         previous_presentations.append(base["positive_prompt"])
-                        previous_renderings.append(deepcopy(base["metadata"]["requested_rendering"]))
+                        if base['metadata'].get('focus_plan'):
+                            previous_focus_plans.append(deepcopy(base['metadata']['focus_plan']))
+                        if base['metadata'].get('image_description'):
+                            previous_descriptions.append(base['metadata']['image_description'])
                         previous_candidate_ids.append(base["candidate_id"])
                         break
                     previous_index, reason = duplicate
                     duplicate_of = previous_candidate_ids[previous_index]
-                    exhausted = attempt == MAX_PRESENTATION_REWRITES or image_attempts >= image_attempt_budget
+                    exhausted = attempt == MAX_PRESENTATION_REWRITES or image_attempts + MIN_IMAGE_CANDIDATE_REQUESTS > image_attempt_budget
                     for call in calls:
                         call.update(presentation_disposition=("duplicate_skipped" if exhausted
                             else "duplicate_rewrite"), duplicate_of=duplicate_of, duplicate_reason=reason)
@@ -911,13 +962,22 @@ def _generate_modality_candidates(
                     if exhausted:
                         base = None
                         break
-                    base, calls = prepare_with_audit(entry, {
-                        "attempt": attempt + 1, "max_rewrites": MAX_PRESENTATION_REWRITES,
-                        "reason": reason, "duplicate_of": duplicate_of,
-                        "rejected_prompts": list(rejected),
-                        "instruction": "Create a visibly different composition using requested_rendering. "
-                            "Preserve the same factual scope; changing punctuation or word order is insufficient.",
-                    })
+                    try:
+                        base, calls = prepare_with_audit(entry, {
+                            "attempt": attempt + 1, "max_rewrites": MAX_PRESENTATION_REWRITES,
+                            "reason": reason, "duplicate_of": duplicate_of,
+                            "rejected_prompts": list(rejected),
+                            "instruction": "Choose a complementary supported visual emphasis using the shared facts "
+                                "and previous prompts. Vary useful attributes, perspective or composition without "
+                                "a fixed framing sequence; changing punctuation or word order is insufficient.",
+                        })
+                    except ImageFocusValidationError as exc:
+                        call = getattr(exc, 'model_call', {})
+                        call.update(presentation_disposition='focus_rejected', presentation_policy=IMAGE_PRESENTATION_POLICY)
+                        image_attempts += max(1, len(call.get('sampling_attempts', [])))
+                        all_calls.append(call)
+                        base = None
+                        break
                     image_attempts += sum(max(1, len(call.get("sampling_attempts", []))) for call in calls) or 1
                 prepared.append((base, all_calls))
                 continue
@@ -939,11 +999,16 @@ def _generate_modality_candidates(
     else:
         prepared = [prepare_with_audit(entry) for entry in entries]
 
-    # Merge in candidate order and keep the shared local GPU pipeline on the caller thread.
+    # Keep all rejected prompt diagnostics, then fill image slots independently
+    # of LLM history. Seed variants are never presented as new accepted prompts.
     for base, candidate_calls in prepared:
         model_calls.extend(candidate_calls)
-        if base is None:
-            continue
+    planned = [base for base, _calls in prepared if base is not None]
+    if shared and modality == 'image' and not safe_variant:
+        planned = _fill_image_seed_variants(planned, [f'image_{index + 1:03d}' for index, _ in entries])
+
+    # Keep the shared local GPU pipeline on the caller thread.
+    for base in planned:
         if modality == "image":
             if image_generator is not None:
                 artifact = image_generator.generate(
@@ -952,6 +1017,10 @@ def _generate_modality_candidates(
                     base["positive_prompt"],
                     "",
                 )
+                variant_metadata = {key: base['metadata'][key] for key in _IMAGE_VARIANT_METADATA
+                                    if key in base['metadata']}
+                artifact.metadata.update(deepcopy(variant_metadata))
+                artifact.model_call.update(deepcopy(variant_metadata))
                 model_calls.append(artifact.model_call)
                 if artifact.image_bytes or artifact.metadata is not None:
                     image_artifacts.append(artifact)
@@ -1046,13 +1115,22 @@ def relation_alternation_generation(
         model_calls.extend(image_model_calls)
         if _selection_payload(selection).get("schema_version") == FACT_SELECTION_SCHEMA:
             drafts = [call for call in image_model_calls if call.get("modality") == "image_prompt"]
+            variants = sum(candidate['metadata'].get('image_candidate_kind') == 'seed_variant'
+                           for candidate in output['image_candidates'])
+            unique_prompts = len(output['image_candidates']) - variants
             output["image_prompt_search"] = {
                 "policy_version": IMAGE_PRESENTATION_POLICY,
+                "fill_policy": "accepted_prompt_seed_variants_v1",
                 "target_candidates": candidate_budget,
                 "accepted_candidates": len(output["image_candidates"]),
-                "request_budget": 2 * candidate_budget,
+                "unique_prompt_count": unique_prompts,
+                "seed_variant_count": variants,
+                "generated_image_count": sum(bool(artifact.image_bytes) for artifact in image_artifacts),
+                "prompt_shortfall": max(0, candidate_budget - unique_prompts),
+                "request_budget": IMAGE_REQUESTS_PER_CANDIDATE * candidate_budget,
                 "requests": sum(max(1, len(call.get("sampling_attempts", []))) for call in drafts),
                 "duplicate_rewrites": sum(call.get("presentation_disposition") == "duplicate_rewrite" for call in drafts),
+                "focus_rejections": sum(call.get("presentation_disposition") == "focus_rejected" for call in drafts),
                 "shortfall": max(0, candidate_budget - len(output["image_candidates"])),
             }
     return {

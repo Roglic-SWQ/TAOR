@@ -43,10 +43,11 @@ class Views:
         self.duplicate = duplicate
     def generate_with_context(self, label, entity_type, relation, angle, facts, *, context):
         self.calls.append(deepcopy(context))
-        from mmkgc.stages.presentation import image_rendering_plan
-        rendering = image_rendering_plan(0 if self.duplicate else len(self.calls) - 1)
+        views = [(framing, placement) for placement in ('centered subject', 'subject on the left', 'subject on the right')
+                 for framing in ('medium framing', 'close framing', 'wide framing')]
+        framing, placement = views[(0 if self.duplicate else len(self.calls) - 1) % len(views)]
         return {'positive_prompt': 'Museum red brick facade and arched entrance, '
-                + rendering['framing'] + ', ' + rendering['subject_placement'],
+                + framing + ', ' + placement,
                 'used_text_cues': [], 'omitted_risky_details': []}
 
 
@@ -161,12 +162,14 @@ def test_views_share_facts_and_checks_and_receive_previous_presentations(monkeyp
     assert 'candidates' not in artifact and 'candidate_budget' not in artifact
 
 
-def test_duplicate_presentations_do_not_generate_duplicate_images():
+def test_duplicate_presentations_fill_with_explicit_seed_variants():
     _, _, _, views, result = generated(duplicate=True, budget=4)
-    # The complete entity shares a budget of twice the requested image count.
-    assert len(views.calls) == 8
-    assert len(result['relation_alternation_generation']['image_candidates']) == 1
-    assert len(result['generated_image_artifacts']) == 1
+    # The stub emits one request per draft; each rejected slot has two rewrites.
+    assert len(views.calls) == 10
+    assert len(result['relation_alternation_generation']['image_candidates']) == 4
+    assert len(result['generated_image_artifacts']) == 4
+    summary=result['relation_alternation_generation']['image_prompt_search']
+    assert summary['unique_prompt_count']==1 and summary['seed_variant_count']==3
     assert all(len(call['presentation_context']['previous_candidates']) == 1 for call in views.calls[1:])
 
 
@@ -240,7 +243,7 @@ def test_no_evidence_produces_no_synthetic_candidates():
 
 
 @pytest.mark.parametrize('duplicate', [False, True])
-def test_shared_selection_and_fewer_candidates_resume_original_image_bytes(tmp_path, duplicate):
+def test_shared_selection_and_seed_variants_resume_original_image_bytes(tmp_path, duplicate):
     knowledge, selection, reasoning = selected()
     call = {'stage': 'stage2_selection', 'status': 'applied', 'response_schema_version': FACT_SELECTION_SCHEMA,
             'max_selected_facts': 8, 'response_text': json.dumps(reply())}
@@ -252,9 +255,14 @@ def test_shared_selection_and_fewer_candidates_resume_original_image_bytes(tmp_p
     entity_dir = next(writer.entities_dir.iterdir())
     restored, generated_result = load_saved_image_run(entity_dir, target(), 3)
     assert restored.selection['fine_grained_relation_selection']['selected_fact_ids'] == ['rf:2', 'rf:3']
-    assert len(generated_result['generated_image_artifacts']) == (1 if duplicate else 3)
+    assert len(generated_result['generated_image_artifacts']) == 3
     for image in generated_result['generated_image_artifacts']:
         assert image.image_bytes == (entity_dir / image.relative_image_path).read_bytes()
+    resumed_candidates=generated_result['relation_alternation_generation']['image_candidates']
+    assert sum(c['metadata']['image_candidate_kind']=='seed_variant' for c in resumed_candidates)==(2 if duplicate else 0)
+    resaved=_stage_artifact('relation_alternation_generation',generated_result['relation_alternation_generation'])['data']
+    assert [c['presentation']['image_candidate_kind'] for c in resaved['image_candidates']]==[
+        c['metadata']['image_candidate_kind'] for c in resumed_candidates]
 
 
 def test_repair_keeps_shared_facts_without_running_multiview_planning_again():
@@ -277,8 +285,9 @@ def test_previous_presentations_are_task_context_and_not_new_source_facts():
     payload = generation_payload('Museum', 'museum', 'facade', 'ignored', [], context)
     prompt = build_generation_prompt('image', payload)
     actual = json.loads(prompt.split('INPUT_JSON:\n', 1)[1])
-    assert 'previous_candidates' not in actual['presentation_context']
-    assert actual['presentation_context']['previous_renderings'] == context['presentation_context']['previous_renderings']
-    assert actual['presentation_context']['requested_rendering'] == context['presentation_context']['requested_rendering']
+    assert actual['presentation_context']['previous_candidates'] == context['presentation_context']['previous_candidates']
+    assert actual['presentation_context']['previous_prompt'] == context['presentation_context']['previous_candidates'][-1]
+    assert 'requested_rendering' not in actual['presentation_context']
+    assert 'previous_renderings' not in actual['presentation_context']
     assert actual['source_facts'] == context['source_facts']
     assert 'not invented unseen geometry' in prompt

@@ -27,6 +27,10 @@ class SemanticStageParseError(ValueError):
     """Raised when a semantic stage response violates the JSON contract."""
 
 
+class SourceExtractionRetryNeeded(SemanticStageParseError):
+    """A source chunk must be re-extracted in smaller, complete requests."""
+
+
 class StageSemanticPlanner(Protocol):
     """Planner interface for the fixed semantic mainline."""
 
@@ -144,18 +148,16 @@ class StrictJsonStagePlanner:
 
         inputs = build_knowledge_input(record, missing_mode, coarse)
         if self.source_bound_text_extraction:
-            from mmkgc.adapters.source_text_triples import text_source_batches
-            batches = text_source_batches(inputs)
-            if len(batches) > 1:
+            from mmkgc.adapters.source_text_triples import text_source_batches, source_text_task
+            if source_text_task(inputs) is not None:
+                batches = text_source_batches(inputs)
                 from mmkgc.adapters.image_batches import merge_image_batches
                 parent = KNOWLEDGE_REQUEST_CONTEXT.get() or {}
                 deadline = min(parent.get("deadline", float("inf")),
                                time.perf_counter() + self.knowledge_stage_timeout_seconds)
                 token = KNOWLEDGE_REQUEST_CONTEXT.set({**parent, "deadline": deadline})
                 try:
-                    results = [self._refine("stage1_knowledge", record, missing_mode, batch,
-                        lambda response, batch=batch: apply_knowledge_response(batch, response))
-                        for batch in batches]
+                    results = [self._refine_text_batch(record, missing_mode, batch) for batch in batches]
                     return merge_image_batches(inputs, results)
                 finally:
                     KNOWLEDGE_REQUEST_CONTEXT.reset(token)
@@ -166,6 +168,32 @@ class StrictJsonStagePlanner:
             inputs,
             lambda response: apply_knowledge_response(inputs, response),
         )
+
+    def _refine_text_batch(self, record, missing_mode, inputs):
+        from mmkgc.stages.modeling import apply_knowledge_response
+        try:
+            return self._refine("stage1_knowledge", record, missing_mode, inputs,
+                lambda response: apply_knowledge_response(inputs, response))
+        except SourceExtractionRetryNeeded as exc:
+            from mmkgc.adapters.source_text_triples import resplit_text_source_batch
+            from mmkgc.adapters.image_batches import merge_image_batches
+            depth = inputs.get('text_extraction_batch', {}).get('recovery_depth', 0)
+            batches = resplit_text_source_batch(inputs) if depth < 2 else []
+            if not batches:
+                raise
+            exc.model_call['source_recovery'] = {
+                'reason': str(exc), 'status': 'resplitting',
+                'batches': [deepcopy(batch['text_extraction_batch']) for batch in batches]}
+            results = [self._refine_text_batch(record, missing_mode, batch) for batch in batches]
+            frozen = getattr(exc, 'valid_source_response', None)
+            if frozen is not None:
+                results.insert(0, apply_knowledge_response(inputs, frozen))
+                exc.model_call['source_recovery']['preserved_valid_rows'] = len(frozen['extracted_triples'])
+            # For a single initial chunk, merge against its entire original
+            # catalogue, never against one child's shortened evidence text.
+            result = merge_image_batches(inputs, results)
+            exc.model_call['source_recovery']['status'] = 'recovered'
+            return result
 
     def refine_selection(
         self,
@@ -358,7 +386,7 @@ class StrictJsonStagePlanner:
         }
         if source_task is not None:
             call["prompt_version"] = "source_bound_text_triples_v1"
-            call["knowledge_repair_version"] = "stage1_source_patch_v1"
+            call["knowledge_repair_version"] = "stage1_source_patch_v2"
             if "text_extraction_batch" in inputs:
                 call["text_extraction_batch"] = deepcopy(inputs["text_extraction_batch"])
         seen: set[str] = set()
@@ -378,7 +406,9 @@ class StrictJsonStagePlanner:
                 call[key] = context[key]
         token = KNOWLEDGE_REQUEST_CONTEXT.set({**context, "deadline": deadline, "call": call})
         try:
-            for attempt in range(self.max_knowledge_repairs + 1):
+            attempt, repair_limit = -1, self.max_knowledge_repairs
+            while attempt < repair_limit:
+                attempt += 1
                 if time.perf_counter() >= deadline:
                     call["contract_repair_stopped_reason"] = "stage_time_budget_exhausted"
                     raise TimeoutError("Stage 1 total time budget exhausted")
@@ -389,22 +419,26 @@ class StrictJsonStagePlanner:
                     raise TimeoutError("Stage 1 total time budget exhausted")
                 call["response_text"] = response_text
                 try:
+                    if source_task is not None and repair_task is None:
+                        from mmkgc.adapters.source_text_triples import source_response_recovery_reason
+                        reason = source_response_recovery_reason(response_text, call['network_attempts'])
+                        if reason:
+                            call['contract_repair_stopped_reason'] = reason
+                            call['validation_attempts'].append({'attempt': attempt,
+                                'response_text': response_text,
+                                'errors': [{'code': reason, 'path': '',
+                                            'message': 're-extract this original text span in smaller requests'}]})
+                            raise SourceExtractionRetryNeeded(reason)
                     if repair_task is not None:
                         from mmkgc.adapters.stage1_repair import merge_knowledge_repair
-                        patch_text = response_text
                         if source_task is not None:
-                            from mmkgc.adapters.source_text_triples import parse_source_response
-                            patch, wrapper_removed = parse_source_response(response_text)
-                            # Qwen sometimes wraps an otherwise complete patch
-                            # in one "response" object. Unwrap only this exact,
-                            # unambiguous container; merge still checks all keys.
-                            if set(patch) == {"response"} and isinstance(patch["response"], dict):
-                                patch = patch["response"]
-                                wrapper_removed = True
-                            patch_text = json.dumps(patch, ensure_ascii=False)
-                            if wrapper_removed:
+                            from mmkgc.adapters.source_text_triples import merge_source_repair
+                            response, repair_info = merge_source_repair(repair_base, repair_task, response_text)
+                            call.setdefault('source_patch_results', []).append({'attempt': attempt, **repair_info})
+                            if repair_info.get('normalizations'):
                                 call.setdefault("response_wrappers_removed", []).append(attempt)
-                        response = merge_knowledge_repair(repair_base, repair_task, patch_text)
+                        else:
+                            response = merge_knowledge_repair(repair_base, repair_task, response_text)
                     elif source_task is not None:
                         from mmkgc.adapters.source_text_triples import parse_source_response
                         response, wrapper_removed = parse_source_response(response_text)
@@ -414,6 +448,8 @@ class StrictJsonStagePlanner:
                         response = parse_strict_json_object(response_text)
                     canonical = source_task.decode(response) if source_task is not None else response
                     refined = apply_response(canonical)
+                except SourceExtractionRetryNeeded:
+                    raise
                 except (SemanticStageParseError, KnowledgeResponseValidationError) as exc:
                     if isinstance(exc, KnowledgeResponseValidationError):
                         errors = exc.errors
@@ -426,27 +462,52 @@ class StrictJsonStagePlanner:
                                 contract_repair_error_type=type(exc).__name__)
                     call.setdefault("contract_repair_original_response_preview", _truncate_text(response_text, 4000))
                     call.setdefault("contract_repair_original_response_truncated", len(response_text) > 4000)
+                    if source_task is not None and repair_task is None and isinstance(exc, SemanticStageParseError):
+                        call['contract_repair_stopped_reason'] = 'invalid_json_resplit'
+                        raise SourceExtractionRetryNeeded('invalid_json_resplit') from exc
                     try:
                         fingerprint = json.dumps(json.loads(response_text), sort_keys=True, ensure_ascii=False, separators=(",", ":"))
                     except json.JSONDecodeError:
                         fingerprint = response_text.strip()
                     if fingerprint in seen:
                         call["contract_repair_stopped_reason"] = "repeated_invalid_response"
-                        raise
-                    if attempt == self.max_knowledge_repairs:
-                        call["contract_repair_stopped_reason"] = "repair_limit_reached"
+                    # Large source patches are split into at most three fields
+                    # per request. Allocate one request for each additional
+                    # batch, while retaining the original retry allowance.
+                    if source_task is not None and attempt == 0 and self.max_knowledge_repairs:
+                        from mmkgc.adapters.source_text_triples import targeted_source_repair
+                        initial_task = targeted_source_repair(source_task, response, errors)
+                        if initial_task is not None:
+                            repair_limit += max(0, math.ceil(len(initial_task.fields) / 3) - 1)
+                            call['source_patch_request_limit'] = repair_limit
+                    if fingerprint in seen or attempt == repair_limit:
+                        call["contract_repair_stopped_reason"] = (
+                            'repeated_invalid_response' if fingerprint in seen else 'repair_limit_reached')
+                        if source_task is not None and all(error['code'] in {
+                                'invalid_source_response', 'invalid_repair_shape', 'invalid_repair_json',
+                                'repair_key_mismatch', 'duplicate_repair_key', 'invalid_json'} for error in errors):
+                            from mmkgc.adapters.source_text_triples import valid_source_rows
+                            recovery = SourceExtractionRetryNeeded('source_patch_format_repeated')
+                            recovery.valid_source_response = valid_source_rows(source_task, response)
+                            raise recovery from exc
                         raise
                     seen.add(fingerprint)
-                    # A malformed patch is retried against its unchanged base.
-                    if repair_task is not None and any(e["path"].startswith("/targeted_repair") for e in errors):
+                    # A malformed patch is retried against its unchanged base,
+                    # with the latest errors instead of an identical request.
+                    if repair_task is not None and (any(e["path"].startswith("/targeted_repair") for e in errors)
+                                                     or source_task is not None and isinstance(exc, SemanticStageParseError)):
+                        if source_task is not None:
+                            from mmkgc.adapters.source_text_triples import source_repair_feedback_prompt
+                            request_prompt = source_repair_feedback_prompt(repair_task, errors)
+                            call['contract_repair_prompt'] = request_prompt
                         continue
                     repair_task = None
                     if source_task is not None and isinstance(exc, KnowledgeResponseValidationError):
-                        from mmkgc.adapters.source_text_triples import targeted_source_repair
-                        repair_task = targeted_source_repair(source_task, response, errors)
+                        from mmkgc.adapters.source_text_triples import targeted_source_repair, source_repair_feedback_prompt
+                        repair_task = targeted_source_repair(source_task, response, errors, max_fields=3)
                         if repair_task is not None:
                             repair_base = deepcopy(response)
-                            request_prompt = repair_task.prompt
+                            request_prompt = repair_task.prompt if attempt == 0 else source_repair_feedback_prompt(repair_task, errors)
                             call.setdefault("targeted_repairs", []).append({
                                 "attempt": attempt + 1, "fields": list(repair_task.fields),
                                 "fact_ids": [], "prompt": request_prompt})

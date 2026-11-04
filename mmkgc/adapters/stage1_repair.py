@@ -109,6 +109,12 @@ def merge_knowledge_repair(base, task: KnowledgeRepairTask, raw: str):
         patch = json.loads(raw, object_pairs_hook=unique)
     except (json.JSONDecodeError, TypeError) as exc:
         fail("invalid_repair_json", str(exc))
+    # Empty, unrequested containers carry no model-authored information.
+    # Never fill a missing container when it owns requested fields or claims.
+    if isinstance(patch, dict) and set(patch) <= {"fields", "facts"}:
+        for name, keys in (("fields", task.fields), ("facts", task.facts)):
+            if name not in patch and not keys:
+                patch[name] = {}
     if not isinstance(patch, dict) or set(patch) != {"fields", "facts"}:
         fail("invalid_repair_shape", "Return exactly fields and facts objects")
     for name, keys in (("fields", task.fields), ("facts", task.facts)):

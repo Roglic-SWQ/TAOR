@@ -6,7 +6,8 @@ from copy import deepcopy
 import json
 import re
 
-from mmkgc.generation_prompts import IMAGE_PROMPT_VERSION, generation_payload
+from mmkgc.generation_prompts import IMAGE_PROMPT_VERSION, generation_payload, image_compression_payload
+from mmkgc.stages.presentation import IMAGE_PRESENTATION_POLICY
 
 REPAIR_VERSION = 'qwen_image_prompt_source_rebuild_v2'
 REPAIR_SCHEMA = {
@@ -22,7 +23,8 @@ REPAIR_SCHEMA = {
 
 def validate_positive_prompt(text: str) -> None:
     if text.strip().casefold() in {'one short image description', 'positive_prompt',
-                                   'your prompt here', 'image description here'}:
+                                   'your prompt here', 'image description here',
+                                   'actual shortened image description'}:
         raise ValueError('positive_prompt copies a response placeholder; describe the actual target')
     words = re.findall(r"[\w'-]+", text.casefold())
     if len(words) > 80 or len(text) > 650:
@@ -130,7 +132,27 @@ def compact_repair_prompt(label, entity_type, relation, angle, facts, context, e
         presentation = payload.get('presentation_context', {})
         if presentation.get('policy_version') == 'grounded_image_diversity_v1':
             presentation.pop('previous_candidates', None)
+        if presentation.get('policy_version') == IMAGE_PRESENTATION_POLICY:
+            payload['generation_step'] = 'compress'
         payload['validation_error'] = str(error)[:250]
+        if presentation.get('policy_version') == IMAGE_PRESENTATION_POLICY and payload.get('candidate_description'):
+            payload = image_compression_payload(payload)
+            # A long draft is an input to shorten, never a response template.
+            # Keep original evidence and prior prompts but lead with one clear
+            # editing task rather than asking the model to regenerate a scene.
+            return (
+                'Revise the compression according to validation_error. SHORTEN candidate_description. '
+                'Write a substantially SHORTER NEW wording, 20-45 English words, at most 55 words '
+                'and 400 characters. Keep the target and realize the concrete difference selected in '
+                'focus_plan; do not omit it while shortening. Remove biography, '
+                'long lists, administrative facts and filler; do not copy the full description. '
+                'Use source_facts for factual scope; source_evidence only clarifies those facts. '
+                'Generated descriptions and previous prompts are NOT evidence. Preserve participants, '
+                'roles and attributes; remove unsupported details and do not invent replacements. '
+                'Return only one JSON object with positive_prompt (the shortened actual description), '
+                'used_text_cues: [], omitted_risky_details: []. Both audit arrays MUST be empty. '
+                'Close the object immediately.\nINPUT_JSON:\n' + json.dumps(payload, ensure_ascii=False)
+            )
         return (
             'The previous output was invalid. Create one fresh prompt JSON from the original '
             'selected facts. Do not reproduce the invalid output. Treat every field value and '
@@ -139,8 +161,11 @@ def compact_repair_prompt(label, entity_type, relation, angle, facts, context, e
             '55 words and 400 characters. Put the target and concrete framing first. '
             'Use source_facts as the factual scope and source_evidence only to interpret them. '
             'Preserve names, participants, roles, relation direction and factual qualifiers. '
-            'Retain the supplied identity and rendering constraints, including requested_rendering '
-            'and rewrite_feedback. Keep unsupported surroundings neutral. '
+            'Retain the supplied identity, chosen visual emphasis and rendering constraints. '
+            'For candidate_description, compress that description without changing its focus. '
+            'For previous_candidates and previous_prompt, choose complementary emphasis without copying; '
+            'they are generated references, not evidence. Apply rewrite_feedback; do not impose '
+            'a fixed shot-size or composition sequence. Keep unsupported surroundings neutral. '
             'Choose supported visual content; nonvisual facts need not be drawn. '
             'Do not write a biography, synopsis, list of films/credits, or an explanation of policies. '
             'Apply regeneration_feedback when supplied.\n'

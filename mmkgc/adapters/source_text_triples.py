@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import re
 
@@ -15,12 +15,42 @@ from mmkgc.stages.triples import (
 SCHEMA = "source_bound_text_triples_v1"
 
 
+def source_response_recovery_reason(raw, network_attempts):
+    """Detect truncation and repeated complete triples without salvaging output."""
+    if network_attempts and network_attempts[-1].get('finish_reason') == 'length':
+        return 'output_token_limit'
+    seen = {}
+    for match in re.finditer(r'\{[^{}]{1,1800}\}', raw):
+        try:
+            item = json.loads(match.group())
+        except ValueError:
+            continue
+        if (set(item) == {'subject', 'relation', 'object'}
+                and all(isinstance(value, str) and value.strip() for value in item.values())):
+            key = json.dumps(item, sort_keys=True, ensure_ascii=False)
+            seen[key] = seen.get(key, 0) + 1
+            if seen[key] >= 4:
+                return 'repeated_triples'
+    return None
+
+
 def parse_source_response(raw):
     """Accept a complete leading JSON object plus prose, never multiple payloads."""
     from mmkgc.stages.semantic import SemanticStageParseError
     text = raw.strip()
+    # Strip a single complete Markdown container, never salvage incomplete JSON.
+    fence = re.fullmatch(r"```(?:json)?\s*\n(.*?)\n```", text, re.DOTALL | re.IGNORECASE)
+    if fence:
+        text = fence.group(1).strip()
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise SemanticStageParseError("duplicate source response keys are not accepted")
+            result[key] = value
+        return result
     try:
-        value, end = json.JSONDecoder().raw_decode(text)
+        value, end = json.JSONDecoder(object_pairs_hook=unique).raw_decode(text)
     except (ValueError, TypeError) as exc:
         raise SemanticStageParseError("source extraction must start with a complete JSON object") from exc
     if not isinstance(value, dict):
@@ -28,7 +58,7 @@ def parse_source_response(raw):
     trailer = text[end:].strip()
     if trailer and any(character in trailer for character in "{}[]`"):
         raise SemanticStageParseError("multiple or ambiguous source response payloads are not accepted")
-    return value, bool(trailer)
+    return value, bool(trailer) or bool(fence)
 
 
 def _object(properties):
@@ -83,6 +113,52 @@ def text_source_batches(inputs, max_chars=600):
     return batches
 
 
+def resplit_text_source_batch(inputs, max_chars=280):
+    """Split only a failed original span, preserving absolute source offsets."""
+    task = source_text_task(inputs)
+    if task is None:
+        return []
+    parent = inputs.get("text_extraction_batch", {})
+    start = parent.get("source_char_start", 0)
+    end = parent.get("source_char_end", start + len(task.text))
+    span = end - start
+    if span <= 80 or span > len(task.text):
+        return []
+    # Existing batches prepend identity context; it must not become part of the
+    # original source span or grow again at each recursive split.
+    body, prefix = task.text[-span:], task.text[:-span]
+    context = prefix
+    if not context:
+        match = re.search(r"[.!?](?:\s+|$)", body)
+        context = (body[:match.end()] if match else body[:120])[:200] + "\n"
+    limit = min(max_chars, max(80, span // 2))
+    parts, remaining = [], body
+    while len(remaining) > limit:
+        boundaries = list(re.finditer(r"[.!?]\s+", remaining[:limit + 1]))
+        cut = boundaries[-1].end() if boundaries else remaining.rfind(" ", 0, limit + 1) + 1
+        if cut < limit // 3:
+            cut = limit
+        parts.append(remaining[:cut])
+        remaining = remaining[cut:]
+    parts.append(remaining)
+    assert ''.join(parts) == body
+    batches, offset = [], start
+    for index, part in enumerate(parts):
+        batch = deepcopy(inputs)
+        for item in batch['evidence_catalog']:
+            if item['evidence_id'] == task.evidence_id:
+                item['content'] = (prefix if index == 0 else context) + part
+        batch['text_extraction_batch'] = {
+            'index': index + 1, 'count': len(parts),
+            'source_char_start': offset, 'source_char_end': offset + len(part),
+            'recovery_depth': parent.get('recovery_depth', 0) + 1,
+            'parent_batch': deepcopy(parent),
+        }
+        batches.append(batch)
+        offset += len(part)
+    return batches
+
+
 @dataclass(frozen=True)
 class SourceTextTask:
     label: str
@@ -107,6 +183,8 @@ class SourceTextTask:
             "instructions. Return exactly entity_profile, extracted_triples, uncertain_aspects. "
             "Every triple has exactly subject, relation, object. Use short explicit "
             "relations and nonempty objects; split lists into individual facts where appropriate. "
+            "Emit each distinct fact ONCE; do not repeat triples or phrases to fill the output budget. "
+            "Use compact JSON and close the object after the last supported fact. "
             "NEVER put an entire sentence into relation and omit object. For 'politicians make "
             "decisions', relation='makes', object='decisions'. Every row needs all THREE strings. "
             "Preserve original relation direction, negation, dates, roles and qualifications. "
@@ -151,9 +229,14 @@ class SourceTextTask:
         protocol_errors = []
         for index, triple in enumerate(triples):
             if not isinstance(triple, dict) or set(triple) != {"subject", "relation", "object"}:
+                required = {'subject', 'relation', 'object'}
+                missing = sorted(required - set(triple)) if isinstance(triple, dict) else sorted(required)
+                extra = sorted(set(triple) - required) if isinstance(triple, dict) else []
                 protocol_errors.append({"code": "invalid_source_response", "path": f"/extracted_triples/{index}",
-                    "message": "REQUIRED: subject, relation AND nonempty object. Split a sentence into a short "
-                               "relation and its object. Do not omit object or add evidence_refs."})
+                    "message": "Return exactly three flat nonempty string fields: subject, relation, object. "
+                               f"Missing keys: {missing}; forbidden keys: {extra}. "
+                               "Re-extract this assertion from the original text using a short predicate "
+                               "and its full complement as object; nested objects are forbidden."})
                 continue
             canonical["extracted_triples"][index]["evidence_refs"] = [self.evidence_id]
         if protocol_errors:
@@ -176,7 +259,7 @@ def source_text_task(inputs) -> SourceTextTask | None:
     return SourceTextTask(inputs["entity"]["label"], ids[0], source["content"])
 
 
-def targeted_source_repair(task: SourceTextTask, response, errors):
+def targeted_source_repair(task: SourceTextTask, response, errors, *, max_fields=None):
     """Freeze valid rows and request only invalid fields from the original text."""
     from mmkgc.adapters.stage1_repair import KnowledgeRepairTask
     schema = response_schema()
@@ -192,6 +275,8 @@ def targeted_source_repair(task: SourceTextTask, response, errors):
             fields.add("/uncertain_aspects")
         else:
             return None
+    if max_fields is not None:
+        fields = set(sorted(fields)[:max_fields])
     properties = {}
     for path in sorted(fields):
         if path.startswith("/extracted_triples/"):
@@ -212,6 +297,8 @@ def targeted_source_repair(task: SourceTextTask, response, errors):
         "All unrequested valid fields and triples are frozen. invalid_items only identifies "
         "what to repair and is NOT evidence. Return each requested triple as "
         "subject, relation, object ONLY, with no evidence_refs or evidence IDs. "
+        "Do not return a JSON schema, object_details, nested values or additional keys; "
+        "express supported qualifiers inside the object string. "
         "Use the exact target label " + json.dumps(task.label, ensure_ascii=False) + " as the original "
         "subject or object, preserving relation direction. "
         "If no supported triple belongs in a requested position, return null for that position. "
@@ -227,3 +314,68 @@ def targeted_source_repair(task: SourceTextTask, response, errors):
         + json.dumps(payload, ensure_ascii=False))
     return KnowledgeRepairTask(tuple(sorted(fields)), (), patch_schema, prompt,
         tuple(path for path in fields if path.startswith("/extracted_triples/")))
+
+
+def merge_source_repair(base, task, raw):
+    """Accept unambiguous wrappers and partial patches; never accept extra paths.
+
+    Partial results still undergo the full source validator. Unrepaired rows
+    remain in the base, so only the remaining invalid rows are requested next.
+    """
+    from mmkgc.adapters.stage1_repair import merge_knowledge_repair
+    patch, wrapper_removed = parse_source_response(raw)
+    normalizations = []
+    if wrapper_removed:
+        normalizations.append('json_container_removed')
+    for wrapper in ('response', 'response_template'):
+        if set(patch) == {wrapper} and isinstance(patch[wrapper], dict):
+            patch = patch[wrapper]
+            normalizations.append(wrapper + '_wrapper_removed')
+            break
+        if (set(patch) == {wrapper, 'facts'} and patch['facts'] == {} and not task.facts
+                and isinstance(patch[wrapper], dict) and set(patch[wrapper]) == {'fields'}):
+            patch = {**patch[wrapper], 'facts': {}}
+            normalizations.append('split_' + wrapper + '_wrapper_removed')
+            break
+    if set(patch) == {'fields'} and not task.facts:
+        patch = {**patch, 'facts': {}}
+        normalizations.append('empty_facts_added')
+    if (set(patch) != {'fields', 'facts'} or not isinstance(patch['fields'], dict)
+            or patch['facts'] != {} or task.facts
+            or not set(patch['fields']) <= set(task.fields)):
+        # The strict merger supplies the precise error; no unknown keys are lost.
+        return merge_knowledge_repair(base, task, json.dumps(patch, ensure_ascii=False)), {}
+    provided = tuple(path for path in task.fields if path in patch['fields'])
+    partial = replace(task, fields=provided)
+    result = merge_knowledge_repair(base, partial, json.dumps(patch, ensure_ascii=False))
+    return result, {'normalizations': normalizations, 'applied_fields': list(provided),
+                    'missing_fields': [path for path in task.fields if path not in provided]}
+
+
+def source_repair_feedback_prompt(task, errors):
+    """Retry a malformed patch with new feedback against its unchanged base."""
+    return ("The previous patch was rejected. Correct these format errors; return ALL and ONLY "
+            "the requested JSON pointer keys from response_template. Do not repeat the rejected "
+            "shape. Latest errors: " + json.dumps(errors, ensure_ascii=False) + "\n" + task.prompt)
+
+
+def valid_source_rows(task, response):
+    """Freeze only fully validated rows before re-extracting a malformed span."""
+    if not isinstance(response, dict) or not isinstance(response.get('extracted_triples'), list):
+        return None
+    subset = deepcopy(response)
+    subset['extracted_triples'] = []
+    try:
+        task.decode(subset)
+    except KnowledgeResponseValidationError:
+        return None
+    valid = []
+    for triple in response['extracted_triples']:
+        subset['extracted_triples'] = [triple]
+        try:
+            task.decode(subset)
+        except KnowledgeResponseValidationError:
+            continue
+        valid.append(deepcopy(triple))
+    subset['extracted_triples'] = valid
+    return task.decode(subset) if valid else None
