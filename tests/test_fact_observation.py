@@ -117,8 +117,8 @@ def test_non_visual_fact_is_not_an_image_omission():
     assert not _needs_stage4_regeneration({"ranking_status": "completed"}, feedback)
 
 
-@pytest.mark.parametrize("mode", ["text", "image"])
-def test_passing_candidate_with_required_omission_triggers_scoped_repair(mode):
+def test_text_candidate_with_required_omission_triggers_scoped_repair():
+    mode = "text"
     *_, targets = setup(mode)
     candidate = observed_candidate(targets, mode=mode)
     feedback = build_stage3_feedback(ranked(candidate), attempt=1, generation={f"{mode}_candidates": [
@@ -191,7 +191,7 @@ def test_another_candidates_omission_does_not_repair_an_already_correct_best():
 
 def test_all_rejected_selects_repairable_content_instead_of_service_failure():
     *_, targets = setup()
-    candidate = observed_candidate(targets)
+    candidate = observed_candidate(targets, status="contradicted")
     candidate["hard_gate"] = {"decision": "reject", "hard_violations": ["missing_required_content"]}
     ranking = ranked(candidate)
     ranking["ranking_status"] = "no_valid_candidate"
@@ -218,7 +218,7 @@ def test_real_engine_keeps_structured_observation_and_its_audit_record(mode):
         def complete(self, prompt):
             if "Extract factual triples" in prompt:
                 return '{"triples": []}'
-            return judgment(raw_observation(targets, status="missing", mode=mode))
+            return judgment(raw_observation(targets, status="missing" if mode == "text" else "contradicted", mode=mode))
 
         def complete_multimodal(self, prompt, image_data_url):
             assert image_data_url.startswith("data:image/")
@@ -301,9 +301,12 @@ def test_judge_does_not_silently_accept_legacy_scores_when_factual_checks_are_re
 @pytest.mark.parametrize("mode", ["text", "image"])
 def test_qwen_original_profile_receives_original_content_and_only_its_own_fact_edits(mode):
     record, _, knowledge, selection, reasoning, targets = setup(mode)
-    candidate = observed_candidate(targets, mode=mode)
+    candidate = observed_candidate(targets, mode=mode, status="missing" if mode == "text" else "contradicted")
     candidate["positive_prompt"] = "original prompt without red color"
     feedback = build_stage3_feedback(ranked(candidate), attempt=1, generation={f"{mode}_candidates": [candidate]})
+    if mode == "image":
+        # This test exercises editing after an already decisive prompt review.
+        feedback["candidate_feedback"][0]["repair_route"] = "edit_prompt"
     config = QwenConfig("Qwen/Qwen2-VL-7B-Instruct", "http://localhost:1", "EMPTY", prompt_profile=QWEN_PROMPT_VERSION)
     captures = []
 
@@ -322,7 +325,8 @@ def test_qwen_original_profile_receives_original_content_and_only_its_own_fact_e
         candidate_budget=2, failed_ranking=ranked(candidate), stage3_feedback=feedback,
     )["relation_alternation_generation"]
     assert len(captures) == 1
-    assert "original prompt without red color" in captures[0] and '"action": "add"' in captures[0]
+    action = "add" if mode == "text" else "replace"
+    assert "original prompt without red color" in captures[0] and f'"action": "{action}"' in captures[0]
     # A global list of non-visual cautions can mention the architect, but it must
     # not become this candidate's source fact or an editing target.
     assert '"fact_id": "rf:0002"' not in captures[0]
@@ -336,7 +340,7 @@ def test_qwen_original_profile_receives_original_content_and_only_its_own_fact_e
 ])
 def test_merge_compares_factual_defects_before_quality_and_keeps_originals(repair_state, repair_score, expected):
     *_, targets = setup()
-    original = observed_candidate(targets, score=0.8)
+    original = observed_candidate(targets, status="contradicted", score=0.8)
     repaired = observed_candidate(targets, candidate_id="image_safe_001", status=repair_state, score=repair_score)
     repaired["source_candidate_id"] = "image_001"
     merged = _merge_reflection_ranking(ranked(original), ranked(repaired))
@@ -347,7 +351,7 @@ def test_merge_compares_factual_defects_before_quality_and_keeps_originals(repai
 @pytest.mark.parametrize("regression", ["uncertain", "unverifiable", "lost_supported_fact"])
 def test_higher_quality_cannot_hide_unresolved_repairs_or_lose_correct_facts(regression):
     *_, targets = setup()
-    original = observed_candidate(targets)
+    original = observed_candidate(targets, status="contradicted")
     repaired = observed_candidate(targets, candidate_id="image_safe_001", status="supported", score=0.99)
     raw = raw_observation(targets)
     if regression == "lost_supported_fact":
@@ -395,6 +399,12 @@ def test_pipeline_performs_one_scoped_repair_and_writes_both_observations(mode, 
         def __init__(self):
             self.calls = 0
 
+        def review_image_prompt(self, context, candidate, operations):
+            ids = {operation["check_id"] for operation in operations}
+            targets = [item for item in candidate["verification_targets"] if item["check_id"] in ids]
+            return {"observation": bind_observation(raw_observation(targets, status="missing", mode="text"),
+                    targets, "text", candidate["candidate_id"])}
+
         def rank(self, context):
             self.calls += 1
             if self.calls == 2 and failure == "ranking":
@@ -403,7 +413,8 @@ def test_pipeline_performs_one_scoped_repair_and_writes_both_observations(mode, 
             items = []
             for candidate in candidates:
                 item = {**candidate, **observed_candidate(candidate["verification_targets"], mode=mode,
-                        candidate_id=candidate["candidate_id"], status="supported" if self.calls == 2 else "missing",
+                        candidate_id=candidate["candidate_id"], status="supported" if self.calls == 2 else
+                            "missing" if mode == "text" else "contradicted",
                         score=0.7 if candidate["candidate_id"].endswith("002") else 0.8)}
                 items.append(item)
             return {"ranking_status": "completed", f"{mode}_ranking": {

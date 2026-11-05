@@ -10,7 +10,7 @@ from typing import Any
 
 from mmkgc.ranking.contracts import freeze_value
 from mmkgc.ranking.image_input import ImageInput
-from mmkgc.observation import validate_verification_targets
+from mmkgc.observation import validate_verification_targets, validate_repair_targets
 from mmkgc.plan_schema import FACT_GROUNDED_SCHEMAS as CANDIDATE_PLAN_SCHEMAS, FACT_SELECTION_SCHEMA
 
 
@@ -176,6 +176,7 @@ _CONSTRAINT_FIELDS = (
 )
 _CONSTRAINT_BUCKETS = ("must_include", "should_include", "context_only", "avoid")
 _CANDIDATE_FIELDS = (
+    "repair_targets",
     "plan_schema_version", "source_plan_id", "source_fact_refs", "focus",
     "candidate_id",
     "source_candidate_id",
@@ -725,6 +726,8 @@ def _sanitize_candidate(value: Any, modality: str) -> dict[str, Any]:
             result[key] = modality
         elif key == "verification_targets" and item is not None:
             result[key] = validate_verification_targets(item)
+        elif key == "repair_targets" and item is not None:
+            result[key] = validate_repair_targets(item)
         elif key in _CANDIDATE_STRING_FIELDS:
             if (text := _clean_string(item)) is not None:
                 result[key] = text

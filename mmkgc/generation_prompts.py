@@ -10,7 +10,7 @@ from mmkgc.stages.presentation import IMAGE_PRESENTATION_POLICY
 
 PROMPT_VERSION = "gpt4omini_stage03_v2"
 TEXT_PROMPT_VERSION = "entity_semantics_text_v4"
-IMAGE_PROMPT_VERSION = "entity_semantics_image_v6"
+IMAGE_PROMPT_VERSION = "entity_semantics_image_v7"
 QWEN_PROMPT_VERSION = "qwen7b_original_v1"
 PROMPT_PROFILES = (PROMPT_VERSION, QWEN_PROMPT_VERSION)
 
@@ -212,7 +212,10 @@ def build_generation_prompt(kind: str, payload: dict[str, Any]) -> str:
             "previous_content. Correct specified errors and supported visual omissions while "
             "preserving correct details and the selected factual scope. Feedback is editing "
             "guidance, not additional evidence; non-visual or uncertain facts are not missing "
-            "visual details. Return only the revised prompt JSON.\n"
+            "visual details. When prompt_review is supplied, preserve the existing instructions "
+            "marked supported and correct only the contradicted or missing instructions. Keep "
+            "the original framing and style unless the specific repair requires a change. "
+            "Return only the revised prompt JSON.\n"
         )
     return rules + "INPUT_JSON:\n" + json.dumps(payload, ensure_ascii=False)
 
@@ -304,9 +307,13 @@ def build_image_focus_prompt(payload: dict[str, Any], error: str | None = None) 
         'NO preset sequence of shot sizes, views or styles. Unknown factual appearance, clothing, '
         'locations and relationships must not be invented. Rendering choices may vary without '
         'adding factual scene content. If visible attributes are sparse, keep the supported subject '
-        'and choose a concrete new rendering rather than an abstract or silhouette fallback. '
-        'Read previous_focus_plans and previous_candidates. A later image must change the supported '
-        'attribute focus and vary at least one concrete rendering choice. A different career label '
+        'and avoid arbitrary variation or an abstract or silhouette fallback. '
+        'Read previous_focus_plans. A later image must offer a '
+        'different supported visual emphasis OR a meaningful rendering change. '
+        'A new visual emphasis may keep all five rendering values unchanged; '
+        'a useful rendering change may keep the same supported focus. '
+        'Prefer useful evidence-supported details for entity identification over cosmetic variety. '
+        'A feature mentioned earlier may become the main emphasis now. A different career label '
         'alone does not create a new image. Rewording the same focus or '
         'adding a difference_from_previous sentence alone is insufficient. Do not repeat a rejected '
         'plan from validation_error. Choose a different focus or rendering yourself. '
@@ -321,12 +328,12 @@ def build_image_focus_prompt(payload: dict[str, Any], error: str | None = None) 
         + ('This is the first plan. Choose a supported focus and rendering yourself. '
            if not previous else
            'There are ' + str(len(previous)) + ' accepted plans. The above plans are PREVIOUS RESULTS, '
-           'not the requested output. Select a NEW plan now. Keep the entity and facts, but actively '
-           'change at least two useful rendering dimensions from each previous plan. Repeating the '
-           'previous five rendering values is invalid, even if the biographical focus changes. '
-           'If the evidence gives no new visible attribute, KEEP the factual subject and change the '
-           'camera, layout, light or rendering treatment. These are YOUR presentation choices and '
-           'do not need additional factual evidence. Do not invent a new outfit or location. '
+           'not the requested output. Select a NEW plan now. Keep the entity and facts. '
+           'For every earlier plan, choose a useful new visual emphasis or rendering, not necessarily both. '
+           'Do not change the camera, layout, style or lighting just to satisfy a quota. '
+           'If there is no new supported visible detail, a useful presentation change is allowed; '
+           'do not invent a new outfit, location or geometry. Do not force arbitrary novelty '
+           'when the evidence is sparse. '
            'You choose which dimensions and values; no fixed order. ')
         + ('The previous attempt was REJECTED: ' + error[:900] + '. Correct it now. ' if error else '')
         + 'Return the next plan JSON with rendering as an object, not a description or copied previous plan.'

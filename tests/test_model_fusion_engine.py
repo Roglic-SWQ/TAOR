@@ -403,7 +403,7 @@ def _profile(
     )
 
 
-def _context() -> Any:
+def _context(mode: str) -> Any:
     text_candidates = [
         _text_candidate("text_001", "Legacy first text."),
         _text_candidate("text_002", "Good grounded text."),
@@ -431,7 +431,7 @@ def _context() -> Any:
     return build_ranking_context(
         entity_key="Q1",
         entity_label="Example Entity",
-        missing_mode="both",
+        missing_mode=mode,
         existing_modalities={"text": "Existing public text", "image": None},
         knowledge={
             "entity_profile": {
@@ -517,12 +517,12 @@ def _text_only_context() -> Any:
     )
 
 
-def _both_context(
+def _candidate_context(
     *,
     text_candidates: list[dict[str, Any]] | None = None,
     image_candidates: list[dict[str, Any]] | None = None,
     image_inputs: dict[str, Any] | None = None,
-    missing_mode: str = "both",
+    missing_mode: str = "image",
 ) -> Any:
     text_candidates = (
         [_text_candidate("text_001", "Example film.")]
@@ -621,7 +621,8 @@ def _image_candidate(candidate_id: str) -> dict[str, Any]:
     }
 
 
-def test_engine_selects_model_fusion_top1_and_keeps_sentinel_out() -> None:
+@pytest.mark.parametrize("mode", ["text", "image"])
+def test_engine_selects_model_fusion_top1_and_keeps_sentinel_out(mode) -> None:
     sentence_bert = FakeSentenceBERTScorer(
         {
             "Legacy first text.": 0.2,
@@ -672,19 +673,15 @@ def test_engine_selects_model_fusion_top1_and_keeps_sentinel_out() -> None:
         },
     )
 
-    result = engine.rank(_context())
+    result = engine.rank(_context(mode))
 
     assert result["ranking_status"] == "completed"
     assert result["ranker"] == "model_fusion"
-    assert result["score_version"] == "stage4_image_fusion_v4_no_visual_graph"
+    assert result["score_version"] == "stage4_rubric_fusion_v5"
     assert result["profile_name"] == "test-profile"
     assert "calibration_profile" not in result
-    assert result["required_scorers"] == [
-        "blip_itm",
-        "clip",
-        "gpt4omini_judge",
-        "sentence_bert",
-    ]
+    assert result["required_scorers"] == (["gpt4omini_judge", "sentence_bert"] if mode == "text"
+                                          else ["blip_itm", "clip", "gpt4omini_judge"])
     assert result["optional_scorers"] == []
     assert result["failed_optional_scorers"] == []
     assert result["candidate_score_weights"] == {
@@ -699,8 +696,8 @@ def test_engine_selects_model_fusion_top1_and_keeps_sentinel_out() -> None:
             "judge": 0.50,
         },
     }
-    assert result["text_ranking"]["best_candidate_id"] == "text_003"
-    assert result["image_ranking"]["best_candidate_id"] == "image_004"
+    assert result["text_ranking"]["best_candidate_id"] == ("text_003" if mode == "text" else None)
+    assert result["image_ranking"]["best_candidate_id"] == ("image_004" if mode == "image" else None)
     assert result["pair_ranking"] == {
         "ranked_pairs": [],
         "top_5_pairs": [],
@@ -719,32 +716,32 @@ def test_engine_selects_model_fusion_top1_and_keeps_sentinel_out() -> None:
         candidate["candidate_id"]: candidate
         for candidate in result["image_ranking"]["ranked_candidates"]
     }
-    assert "legacy_score" not in text_by_id["text_001"]
-    assert "legacy_score" not in image_by_id["image_001"]
-    assert text_by_id["text_003"]["model_scores"]["sentence_bert"] == 0.99
-    assert text_by_id["text_003"]["candidate_score"] == pytest.approx(
-        text_by_id["text_003"]["model_scores"]["candidate_score"]
-    )
-    assert text_by_id["text_003"]["candidate_score"] == pytest.approx(
-        0.20 * text_by_id["text_003"]["model_scores"]["sentence_bert"]
-        + 0.45
-        * text_by_id["text_003"]["model_scores"]["structured_kg_alignment"]
-        + 0.35 * text_by_id["text_003"]["model_scores"]["gpt4omini_judge"]
-    )
-    assert image_by_id["image_004"]["candidate_score"] == pytest.approx(
-        0.20 * image_by_id["image_004"]["model_scores"]["clip"]
-        + 0.30 * image_by_id["image_004"]["model_scores"]["blip_itm"]
-        + 0.50 * image_by_id["image_004"]["model_scores"]["gpt4omini_judge"]
-    )
-    assert "quality" not in text_by_id["text_003"]["model_scores"]
-    assert "kg_consistency" not in text_by_id["text_003"]
-    assert text_by_id["text_003"]["hard_gate"]["decision"] == "pass"
-    assert text_by_id["text_003"]["soft_violations"] == ["missing_should_include"]
-    assert "penalty" not in text_by_id["text_003"]
-    assert text_by_id["text_003"]["fused_score"] == text_by_id["text_003"]["final_score"]
-    assert text_by_id["text_003"]["score"] == text_by_id["text_003"]["final_score"]
-    assert text_by_id["text_003"]["ranking_reason"]
-    assert text_by_id["text_004"]["hard_gate"]["decision"] == "reject"
+    if mode == "text":
+        assert image_by_id == {}
+        assert "legacy_score" not in text_by_id["text_001"]
+        best = text_by_id["text_003"]
+        assert best["model_scores"]["sentence_bert"] == 0.99
+        assert best["candidate_score"] == pytest.approx(best["model_scores"]["candidate_score"])
+        assert best["candidate_score"] == pytest.approx(
+            0.20 * best["model_scores"]["sentence_bert"]
+            + 0.45 * best["model_scores"]["structured_kg_alignment"]
+            + 0.35 * best["model_scores"]["gpt4omini_judge"])
+        assert "quality" not in best["model_scores"]
+        assert "kg_consistency" not in best
+        assert best["hard_gate"]["decision"] == "pass"
+        assert best["soft_violations"] == ["missing_should_include"]
+        assert "penalty" not in best
+        assert best["fused_score"] == best["score"] == best["final_score"]
+        assert best["ranking_reason"]
+        assert text_by_id["text_004"]["hard_gate"]["decision"] == "reject"
+    else:
+        assert text_by_id == {}
+        assert "legacy_score" not in image_by_id["image_001"]
+        best = image_by_id["image_004"]
+        assert best["candidate_score"] == pytest.approx(
+            0.20 * best["model_scores"]["clip"]
+            + 0.30 * best["model_scores"]["blip_itm"]
+            + 0.50 * best["model_scores"]["gpt4omini_judge"])
 
     judge_calls = [
         call
@@ -797,7 +794,7 @@ def test_engine_passes_image_input_to_gpt4omini_image_judge_only() -> None:
     )
     engine = _engine(gpt4omini_judge=judge)
 
-    engine.rank(_both_context())
+    engine.rank(_candidate_context())
 
     image_calls = [call for call in judge.calls if call["kind"] == "image"]
     pair_calls = [call for call in judge.calls if call["kind"] == "pair"]
@@ -822,7 +819,7 @@ def test_missing_generated_image_input_rejects_without_visual_scorer_call() -> N
         sentence_bert=FakeSentenceBERTScorer({"Example film.": 0.8}),
     )
 
-    result = engine.rank(_both_context(image_inputs={}))
+    result = engine.rank(_candidate_context(image_inputs={}))
 
     assert result["image_ranking"]["best_candidate_id"] is None
     assert result["image_ranking"]["ranked_candidates"][0]["hard_gate"] == {
@@ -835,12 +832,12 @@ def test_missing_generated_image_input_rejects_without_visual_scorer_call() -> N
         "reason": "generated ImageInput is required for image scoring",
     }
     assert clip.quality_calls == []
-    assert result["ranking_status"] == "completed"
+    assert result["ranking_status"] == "no_valid_candidate"
 
 
 
 def test_visual_scores_use_raw_zero_to_one_normalization() -> None:
-    context = _both_context(
+    context = _candidate_context(
         missing_mode="image",
         text_candidates=[],
         image_candidates=[_image_candidate("image_001")],
@@ -856,7 +853,7 @@ def test_visual_scores_use_raw_zero_to_one_normalization() -> None:
         ),
     ).rank(context)
 
-    assert result["score_version"] == "stage4_image_fusion_v4_no_visual_graph"
+    assert result["score_version"] == "stage4_rubric_fusion_v5"
     assert "calibration_profile" not in result
     scores = result["image_ranking"]["ranked_candidates"][0]["model_scores"]
     assert scores["clip_raw_score"] == 90.0
@@ -986,7 +983,8 @@ def test_optional_bertscore_failure_degrades_without_blocking_ranking() -> None:
     assert "bertscore" not in ranked["auxiliary_metrics"]
 
 
-def test_all_rejected_candidates_do_not_publish_best_candidate() -> None:
+@pytest.mark.parametrize("mode", ["text", "image"])
+def test_all_rejected_candidates_do_not_publish_best_candidate(mode) -> None:
     engine = _engine(
         gpt4omini_judge=FakeGPT4OMiniJudge(
             text_scores={"text_001": 0.1},
@@ -997,21 +995,23 @@ def test_all_rejected_candidates_do_not_publish_best_candidate() -> None:
         )
     )
 
-    result = engine.rank(_both_context())
+    result = engine.rank(_candidate_context(missing_mode=mode))
 
     assert result["ranking_status"] == "no_valid_candidate"
     assert result["text_ranking"]["best_candidate_id"] is None
     assert result["image_ranking"]["best_candidate_id"] is None
 
 
-def test_both_mode_ranks_surviving_modality_without_pair_requirement() -> None:
+@pytest.mark.parametrize("mode", ["text", "image"])
+def test_single_modality_ranks_without_pair_requirement(mode) -> None:
     engine = _engine()
 
-    result = engine.rank(_both_context(image_candidates=[], image_inputs={}))
+    result = engine.rank(_candidate_context(missing_mode=mode))
 
     assert result["ranking_status"] == "completed"
-    assert result["text_ranking"]["best_candidate_id"] == "text_001"
-    assert result["image_ranking"]["best_candidate_id"] is None
+    assert result[f"{mode}_ranking"]["best_candidate_id"] == f"{mode}_001"
+    other = "image" if mode == "text" else "text"
+    assert result[f"{other}_ranking"]["ranked_candidates"] == []
     assert result["pair_ranking"]["ranked_pairs"] == []
 
 
@@ -1028,7 +1028,7 @@ def test_required_gpt4omini_candidate_parse_error_rejects_candidate_and_continue
         ),
     )
 
-    result = engine.rank(_both_context(image_candidates=image_candidates))
+    result = engine.rank(_candidate_context(image_candidates=image_candidates))
 
     assert result["ranking_status"] == "completed"
     assert result["image_ranking"]["best_candidate_id"] == "image_002"
@@ -1061,7 +1061,7 @@ def test_required_gpt4omini_candidate_service_error_rejects_candidate_and_contin
 
     result = engine.rank(_text_only_context())
 
-    assert result["ranking_status"] == "no_valid_candidate"
+    assert result["ranking_status"] == "evaluation_failed"
     assert result["text_ranking"]["best_candidate_id"] is None
     rejected = result["text_ranking"]["rejected_candidates"]
     assert rejected[0]["hard_gate"]["hard_violations"] == ["judge_service_error"]

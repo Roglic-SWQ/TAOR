@@ -1,33 +1,36 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from types import SimpleNamespace
 
 import pytest
+import httpx
 
 from mmkgc.ranking import factory
 
 
-def test_openai_compatible_completion_client_uses_judge_token_floor(monkeypatch) -> None:
-    captured: dict[str, object] = {}
+@pytest.fixture
+def captured_request(monkeypatch):
+    captured = {}
 
-    class FakeResponse:
-        def __enter__(self):
-            return self
+    async def handle(req):
+        captured.update(url=str(req.url), headers=dict(req.headers), body=json.loads(req.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}]})
 
-        def __exit__(self, exc_type, exc, traceback) -> None:
-            return None
+    real_client = httpx.AsyncClient
 
-        def read(self) -> bytes:
-            return b'{"choices":[{"message":{"content":"{}"}}]}'
+    def client(**kwargs):
+        captured["timeout"] = kwargs["timeout"]
+        return real_client(**kwargs, transport=httpx.MockTransport(handle), trust_env=False)
 
-    def fake_urlopen(req, timeout):
-        captured["body"] = json.loads(req.data.decode("utf-8"))
-        captured["timeout"] = timeout
-        return FakeResponse()
+    monkeypatch.setattr(httpx, "AsyncClient", client)
+    return captured
 
-    monkeypatch.setattr(factory.request, "urlopen", fake_urlopen)
+
+def test_openai_compatible_completion_client_uses_judge_token_floor(captured_request) -> None:
+    captured = captured_request
     client = factory._OpenAICompatibleCompletionClient(
         SimpleNamespace(
             base_url="http://localhost:12345/v1",
@@ -46,28 +49,9 @@ def test_openai_compatible_completion_client_uses_judge_token_floor(monkeypatch)
 
 
 def test_openai_compatible_completion_client_can_target_gpt_4o_mini_api(
-    monkeypatch,
+    captured_request,
 ) -> None:
-    captured: dict[str, object] = {}
-
-    class FakeResponse:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, traceback) -> None:
-            return None
-
-        def read(self) -> bytes:
-            return b'{"choices":[{"message":{"content":"{}"}}]}'
-
-    def fake_urlopen(req, timeout):
-        captured["url"] = req.full_url
-        captured["headers"] = {name.lower(): value for name, value in req.header_items()}
-        captured["body"] = json.loads(req.data.decode("utf-8"))
-        captured["timeout"] = timeout
-        return FakeResponse()
-
-    monkeypatch.setattr(factory.request, "urlopen", fake_urlopen)
+    captured = captured_request
     client = factory._OpenAICompatibleCompletionClient(
         SimpleNamespace(
             base_url="https://api.openai.com/v1",
@@ -90,26 +74,9 @@ def test_openai_compatible_completion_client_can_target_gpt_4o_mini_api(
 
 
 def test_openai_compatible_completion_client_sends_multimodal_image_url(
-    monkeypatch,
+    captured_request,
 ) -> None:
-    captured: dict[str, object] = {}
-
-    class FakeResponse:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, traceback) -> None:
-            return None
-
-        def read(self) -> bytes:
-            return b'{"choices":[{"message":{"content":"{}"}}]}'
-
-    def fake_urlopen(req, timeout):
-        captured["body"] = json.loads(req.data.decode("utf-8"))
-        captured["timeout"] = timeout
-        return FakeResponse()
-
-    monkeypatch.setattr(factory.request, "urlopen", fake_urlopen)
+    captured = captured_request
     client = factory._OpenAICompatibleCompletionClient(
         SimpleNamespace(
             base_url="http://localhost:12345/v1",
@@ -134,11 +101,18 @@ def test_openai_compatible_completion_client_sends_multimodal_image_url(
 def test_openai_compatible_completion_client_enforces_hard_timeout(
     monkeypatch,
 ) -> None:
-    def slow_urlopen(_req, timeout):
-        time.sleep(1.0)
-        raise AssertionError("hard timeout did not interrupt urlopen")
+    cancelled = []
 
-    monkeypatch.setattr(factory.request, "urlopen", slow_urlopen)
+    async def slow_request(req):
+        try:
+            await asyncio.sleep(1)
+        finally:
+            cancelled.append(True)
+        raise AssertionError("request deadline did not cancel the transport")
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: real_client(
+        **kwargs, transport=httpx.MockTransport(slow_request), trust_env=False))
     client = factory._OpenAICompatibleCompletionClient(
         SimpleNamespace(
             base_url="http://localhost:12345/v1",
@@ -154,3 +128,4 @@ def test_openai_compatible_completion_client_enforces_hard_timeout(
     with pytest.raises(TimeoutError, match="ranking judge request timed out"):
         client.complete("prompt")
     assert time.monotonic() - started < 0.5
+    assert cancelled

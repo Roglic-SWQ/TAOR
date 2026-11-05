@@ -158,7 +158,8 @@ def test_worker_http_preserves_model_headers_and_payload(monkeypatch):
     assert body["messages"][1]["content"] == "Test prompt"
 
 
-def test_worker_total_deadline_cancels_a_slow_drip_response(monkeypatch):
+@pytest.mark.parametrize("worker", [False, True], ids=["main-thread", "worker-thread"])
+def test_total_deadline_cancels_a_slow_drip_response(monkeypatch, worker):
     closed = []
 
     class SlowBody(httpx.AsyncByteStream):
@@ -177,9 +178,13 @@ def test_worker_total_deadline_cancels_a_slow_drip_response(monkeypatch):
     client = _OpenAICompatibleCompletionClient(QwenConfig(
         "gpt-4o-mini", "http://test.invalid/v1", "private-test-key",
     ), timeout_seconds=0.07)
-    with ThreadPoolExecutor(max_workers=1) as executor:
+    if worker:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            with pytest.raises(TimeoutError, match="request timed out"):
+                executor.submit(client.complete, "Test prompt").result(timeout=2)
+    else:
         with pytest.raises(TimeoutError, match="request timed out"):
-            executor.submit(client.complete, "Test prompt").result(timeout=2)
+            client.complete("Test prompt")
     assert closed
 
 

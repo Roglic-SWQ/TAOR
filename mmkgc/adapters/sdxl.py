@@ -55,6 +55,11 @@ def _candidate_seed(base_seed: int, candidate_id: str) -> int:
     match = re.search(r"(\d+)$", str(candidate_id or ""))
     if match:
         offset = int(match.group(1))
+        if "_safe_" in str(candidate_id):
+            # A repair of image_001 must not reuse image_001's random state.
+            # Keep initial candidate seeds unchanged and repairs reproducible.
+            digest = hashlib.sha256(str(candidate_id).encode("utf-8")).hexdigest()
+            offset += 1 + int(digest[:8], 16)
     else:
         digest = hashlib.sha256(str(candidate_id).encode("utf-8")).hexdigest()
         offset = int(digest[:8], 16)

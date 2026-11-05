@@ -7,7 +7,7 @@ import re
 import unicodedata
 import json
 
-IMAGE_PRESENTATION_POLICY = "grounded_image_focus_v3"
+IMAGE_PRESENTATION_POLICY = "grounded_image_focus_v4"
 MAX_PRESENTATION_REWRITES = 2
 IMAGE_REQUESTS_PER_CANDIDATE = 6
 MIN_IMAGE_CANDIDATE_REQUESTS = 3
@@ -17,7 +17,8 @@ class ImageFocusValidationError(ValueError):
     """A proposed focus or its realized prompt failed the diversity contract."""
 
 
-def _focus_terms(text):
+def _presentation_text(text):
+    """Normalize common rendering paraphrases, without claiming semantic equivalence."""
     text = unicodedata.normalize('NFKC', text).casefold()
     aliases = {
         'monochrome': r'black[ -]and[ -]white|gr[ae]yscale|monochromatic',
@@ -29,9 +30,18 @@ def _focus_terms(text):
         'backlit': r'back[ -]lit|back[ -]lighting|rim[ -]lit|rim[ -]lighting',
         'soft': r'diffuse|diffused|gentle',
         'glamorous': r'glamour|glamorous|stylish|elegant|fashionable',
+        'centered': r'centrally (?:positioned|placed)|centred|central(?= subject)',
     }
     for term, pattern in aliases.items():
         text = re.sub(r'\b(?:' + pattern + r')\b', term, text)
+    # Saying "not a close-up" does not specify a new shot. Ignore common
+    # negated rendering labels instead of counting their keywords as novelty.
+    return re.sub(r'\b(?:not|no|without)\s+(?:(?:a|an|the)\s+)?'
+                  r'(?:close|wide|medium|centered|photo|illustration|side|backlit|soft)\b', '', text)
+
+
+def _focus_terms(text):
+    text = _presentation_text(text)
     filler = set(('a an the of and or in on with for to from by as same new different alternative '
                   'focus emphasis view image depiction subject rendering presentation framing '
                   'composition style lighting choice neutral unknown unspecified appropriate '
@@ -64,15 +74,16 @@ def validate_image_focus(plan, facts, previous):
     for prior in previous:
         old = prior.get('focus_plan', prior)
         old_focus = _focus_terms(old.get('visual_focus', ''))
-        focus_change = len(current - old_focus) >= 2 and len(old_focus - current) >= 2
+        focus_change = len(current - old_focus) >= 2
         altered = {axis: sorted(_focus_terms(rendering[axis]) - _focus_terms(old.get('rendering', {}).get(axis, '')))
                    for axis in axes}
         altered = {axis: terms for axis, terms in altered.items() if terms}
-        if not altered:
-            raise ImageFocusValidationError('All five rendering dimensions repeat an accepted plan. '
-                'Changing biographical focus, synonyms or difference_from_previous does not change the image. '
-                'Choose a new concrete value for framing, viewpoint, subject_placement, style or lighting. '
-                'You may keep the same supported subject and facts.')
+        if not focus_change and not altered:
+            raise ImageFocusValidationError('The plan repeats an accepted visual emphasis and rendering. '
+                'Choose a different supported visual emphasis OR a meaningful rendering change. '
+                'A new visual emphasis may keep all five rendering values unchanged; '
+                'a rendering change may keep the same supported focus. '
+                'Synonyms or difference_from_previous alone do not establish a change.')
         changes.append({'focus_changed': focus_change, 'changed_axes': altered,
                         'new_focus_terms': sorted(current - old_focus)})
     return {'changes_from_previous': changes, 'fact_ids_checked': sorted(set(refs))}
@@ -87,7 +98,10 @@ def validate_focus_realization(text, plan, audit, previous_texts):
         prior_terms = _focus_terms(previous_texts[index]) if index < len(previous_texts) else set()
         newly_expressed = terms - prior_terms
         rendering_realized = any(set(values) & newly_expressed for values in change['changed_axes'].values())
-        focus_realized = change['focus_changed'] and len(set(change['new_focus_terms']) & newly_expressed) >= 2
+        # A feature can become the new emphasis even if an earlier prompt
+        # already mentioned it in passing. Exact and near copies are checked
+        # above; do not require the feature itself to be new factual content.
+        focus_realized = change['focus_changed'] and len(set(change['new_focus_terms']) & terms) >= 2
         if not rendering_realized and not focus_realized:
             raise ImageFocusValidationError('Actual output omits the planned difference. Express the chosen '
                 'new focus or rendering in the image text: ' + json.dumps(change, ensure_ascii=False))
@@ -101,17 +115,17 @@ def _words(prompt: str) -> list[str]:
 
 
 def _rendering_tags(prompt: str) -> set[str]:
-    text = " ".join(_words(prompt))
+    text = " ".join(_words(_presentation_text(prompt)))
     patterns = {
-        "close": r"\b(close up|closeup|close framing|tight(?:er)? (?:crop|framing)|fills? the frame)\b",
-        "wide": r"\b(wide(?:r)? (?:view|shot|framing|composition)|distant view)\b",
+        "close": r"\b(close|tight(?:er)? (?:crop|framing)|fills? the frame)\b",
+        "wide": r"\b(wide|wider (?:view|shot|framing|composition)|distant view)\b",
         "medium": r"\b(medium (?:shot|framing|composition)|mid shot)\b",
         "off_center": r"\b(off cent(?:er|re)|rule of thirds|subject on the (?:left|right))\b",
         "left": r"\b(subject on the left|left aligned|left side of (?:the )?frame)\b",
         "right": r"\b(subject on the right|right aligned|right side of (?:the )?frame)\b",
         "center": r"\b(centered|centred|central subject|symmetrical)\b",
         "negative_space": r"\b(negative space|empty space)\b",
-        "photo": r"\b(photograph|photographic|photorealistic)\b",
+        "photo": r"\bphoto\b",
         "illustration": r"\b(illustration|illustrated|drawing|sketch)\b",
     }
     return {tag for tag, pattern in patterns.items() if re.search(pattern, text)}
@@ -124,10 +138,10 @@ def image_presentation_signature(prompt: str) -> list[str]:
 
 def duplicate_image_prompt(prompt: str, previous: list[str]) -> tuple[int, str] | None:
     """Catch copies, reordered words and very close copies without rejecting a changed framing."""
-    words = _words(prompt)
+    words = _words(_presentation_text(prompt))
     counts = Counter(words)
     for index, earlier in enumerate(previous):
-        other = _words(earlier)
+        other = _words(_presentation_text(earlier))
         if words == other or (counts == Counter(other)
                               and _rendering_tags(prompt) == _rendering_tags(earlier)):
             return index, "same_words"

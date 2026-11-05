@@ -200,8 +200,7 @@ def test_cli_rejects_positive_limit_when_no_records_selected(tmp_path):
                 str(output_root),
                 "--run-name",
                 "empty_selection",
-                "--stage4-ranker",
-                "legacy",
+                "--skip-stage4",
             ]
         )
     except ValueError as exc:

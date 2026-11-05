@@ -265,18 +265,39 @@ def test_shared_selection_and_seed_variants_resume_original_image_bytes(tmp_path
         c['metadata']['image_candidate_kind'] for c in resumed_candidates]
 
 
-def test_repair_keeps_shared_facts_without_running_multiview_planning_again():
-    knowledge, selection, reasoning, _, _ = generated()
+@pytest.mark.parametrize("route", ["edit_prompt", "resample"])
+def test_repair_keeps_shared_facts_without_running_multiview_planning_again(route):
+    knowledge, selection, reasoning, _, initial = generated()
     generator = Views()
+    original = initial['relation_alternation_generation']['image_candidates'][1]
+    fact = next(item for item in original['verification_targets'] if item['fact_id'] == 'rf:2')
     feedback = {'schema_version': 'candidate_fact_repair_v1', 'candidate_feedback': [{
-        'candidate_id': 'image_002', 'operations': [], 'repair_actions': ['remove unsupported detail'],
-        'previous_prompt': 'Museum with unsupported detail'}]}
+        'candidate_id': 'image_002', 'repair_route': route,
+        'operations': [{'action': 'replace', 'check_id': fact['check_id'], 'fact_id': fact['fact_id'],
+            'expected': fact['claim'], 'observed': 'blue brick facade',
+            'evidence_refs': fact['evidence_refs'], 'evidence': ['pixel: blue facade']}],
+        'previous_candidate': original, 'previous_prompt': original['positive_prompt']}]}
     repaired = safer_relation_alternation_generation(target(), 'image', knowledge, reasoning, selection,
         None, generator, Images(), candidate_budget=3, failed_ranking={}, stage3_feedback=feedback)
     items = repaired['relation_alternation_generation']['image_candidates']
     assert [item['source_candidate_id'] for item in items] == ['image_002']
     assert items[0]['source_fact_refs'] == ['rf:2', 'rf:3']
-    assert 'presentation_context' not in generator.calls[0]
+    if route == 'edit_prompt':
+        assert 'presentation_context' not in generator.calls[0]
+    else:
+        assert generator.calls == []
+        assert items[0]['positive_prompt'] == original['positive_prompt']
+
+
+def test_freeform_feedback_without_a_fact_operation_does_not_generate_a_repair():
+    knowledge, selection, reasoning = selected()
+    generator = Views()
+    feedback = {'schema_version': 'candidate_fact_repair_v1', 'candidate_feedback': [{
+        'candidate_id': 'image_002', 'operations': [], 'repair_actions': ['make it better']}]}
+    repaired = safer_relation_alternation_generation(target(), 'image', knowledge, reasoning, selection,
+        None, generator, Images(), candidate_budget=3, failed_ranking={}, stage3_feedback=feedback)
+    assert repaired['relation_alternation_generation']['image_candidates'] == []
+    assert generator.calls == []
 
 
 def test_previous_presentations_are_task_context_and_not_new_source_facts():

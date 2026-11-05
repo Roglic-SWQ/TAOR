@@ -65,12 +65,12 @@ class FakeJudgeMultimodalClient(FakeJudgeClient):
 
 def test_gpt4omini_prompt_builders_use_prompt_payload_and_generated_value_only() -> None:
     context = _build_context()
+    image_context = _build_context("image")
     text_candidate = dict(context.text_candidates[0])
-    image_candidate = dict(context.image_candidates[0])
-    prompt_payload_text = json.dumps(context.to_prompt_payload(), sort_keys=True)
+    image_candidate = dict(image_context.image_candidates[0])
 
     text_prompt = build_text_judge_prompt(context, text_candidate)
-    image_prompt = build_image_judge_prompt(context, image_candidate)
+    image_prompt = build_image_judge_prompt(image_context, image_candidate)
     pair_prompt = build_pair_judge_prompt(context, text_candidate, image_candidate)
 
     assert "Example Film is a generated caption." in text_prompt
@@ -80,11 +80,11 @@ def test_gpt4omini_prompt_builders_use_prompt_payload_and_generated_value_only()
     assert "Example Film is a generated caption." in pair_prompt
     assert "image_artifact_001" in pair_prompt
 
-    for prompt in (text_prompt, image_prompt, pair_prompt):
+    for prompt, prompt_context in ((text_prompt, context), (image_prompt, image_context), (pair_prompt, context)):
         assert "Return exactly one JSON object" in prompt
         assert "Evidence strings must cite candidate or context facts" in prompt
         assert "Keep evidence strings and reason concise" in prompt
-        assert prompt_payload_text in prompt
+        assert json.dumps(prompt_context.to_prompt_payload(), sort_keys=True) in prompt
         assert GROUND_TRUTH_SENTINEL not in prompt
         assert INSTRUCTION_SENTINEL not in prompt
         assert CONSENSUS_SENTINEL not in prompt
@@ -198,7 +198,7 @@ def test_visual_graph_extraction_repairs_non_string_attributes() -> None:
 
 
 def test_gpt4omini_prompt_builder_does_not_leak_generated_content_image_path() -> None:
-    context = _build_context()
+    context = _build_context("image")
     image_candidate = {
         "candidate_id": "image_raw",
         "target_modality": "image",
@@ -213,7 +213,7 @@ def test_gpt4omini_prompt_builder_does_not_leak_generated_content_image_path() -
     image_prompt = build_image_judge_prompt(context, image_candidate)
     pair_prompt = build_pair_judge_prompt(
         context,
-        dict(context.text_candidates[0]),
+        dict(_build_context().text_candidates[0]),
         image_candidate,
     )
 
@@ -226,9 +226,9 @@ def test_gpt4omini_prompt_builder_does_not_leak_generated_content_image_path() -
 
 
 def test_gpt4omini_image_and_pair_prompts_explain_textual_image_payloads() -> None:
-    context = _build_context()
+    context = _build_context("image")
     image_candidate = dict(context.image_candidates[0])
-    text_candidate = dict(context.text_candidates[0])
+    text_candidate = dict(_build_context().text_candidates[0])
 
     image_prompt = build_image_judge_prompt(context, image_candidate)
     pair_prompt = build_pair_judge_prompt(context, text_candidate, image_candidate)
@@ -244,9 +244,9 @@ def test_gpt4omini_image_and_pair_prompts_explain_textual_image_payloads() -> No
 
 
 def test_gpt4omini_image_and_pair_prompts_require_visual_evidence_sources() -> None:
-    context = _build_context()
+    context = _build_context("image")
     image_candidate = dict(context.image_candidates[0])
-    text_candidate = dict(context.text_candidates[0])
+    text_candidate = dict(_build_context().text_candidates[0])
     image_input = ImageInput.from_bytes(
         entity_key=context.entity_key,
         candidate_id="image_001",
@@ -285,13 +285,14 @@ def test_gpt4omini_ranking_judge_calls_once_per_candidate_or_pair() -> None:
     )
     judge = GPT4OMiniRankingJudge(client=client, model_name="gpt4omini-test")
     context = _build_context()
+    image_context = _build_context("image")
 
     text_result = judge.judge_text(context, dict(context.text_candidates[0]))
-    image_result = judge.judge_image(context, dict(context.image_candidates[0]))
+    image_result = judge.judge_image(image_context, dict(image_context.image_candidates[0]))
     pair_result = judge.judge_pair(
         context,
         dict(context.text_candidates[0]),
-        dict(context.image_candidates[0]),
+        dict(image_context.image_candidates[0]),
     )
 
     assert len(client.prompts) == 3
@@ -362,7 +363,7 @@ def test_gpt4omini_image_and_pair_judge_send_real_png_data_url() -> None:
         ]
     )
     judge = GPT4OMiniRankingJudge(client=client, model_name="gpt4omini-test")
-    context = _build_context()
+    context = _build_context("image")
     image_input = ImageInput.from_bytes(
         entity_key=context.entity_key,
         candidate_id="image_001",
@@ -376,7 +377,7 @@ def test_gpt4omini_image_and_pair_judge_send_real_png_data_url() -> None:
     )
     pair_result = judge.judge_pair(
         context,
-        dict(context.text_candidates[0]),
+        dict(_build_context().text_candidates[0]),
         dict(context.image_candidates[0]),
         image_input=image_input,
     )
@@ -458,7 +459,7 @@ def test_gpt4omini_ranking_judge_locally_salvages_truncated_judgment_json() -> N
     result = judge.judge_pair(
         _build_context(),
         dict(_build_context().text_candidates[0]),
-        dict(_build_context().image_candidates[0]),
+        dict(_build_context("image").image_candidates[0]),
     )
 
     assert result.score.raw_score == 60.0
@@ -660,7 +661,7 @@ def _png_bytes() -> bytes:
     )
 
 
-def _build_context():
+def _build_context(mode="text"):
     text_candidate = {
         "candidate_id": "text_001",
         "target_modality": "text",
@@ -688,7 +689,7 @@ def _build_context():
     return build_ranking_context(
         entity_key="Q42",
         entity_label="Example Film",
-        missing_mode="both",
+        missing_mode=mode,
         existing_modalities={"text": None, "image": None},
         knowledge={
             "entity_profile": {

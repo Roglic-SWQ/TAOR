@@ -25,7 +25,8 @@ from mmkgc.stages.semantic import StageSemanticPlanner
 from mmkgc.adapters.evidence_reranker import score_knowledge_evidence, rerank_knowledge_relevance
 from mmkgc.stages.triples import TRIPLE_SCHEMAS
 from mmkgc.stages.plan_context import compile_plan_context, ranking_knowledge
-from mmkgc.observation import observation_priority, repair_is_eligible
+from mmkgc.observation import observation_priority, repair_is_eligible, repair_outcomes, REFLECTION_POLICY
+from mmkgc.stages.generation import route_image_repairs
 
 
 @dataclass(frozen=True)
@@ -187,10 +188,20 @@ class MMKGCPipeline:
             existing_image_input=_existing_image_input(record, missing_mode, self.dataset_root),
         )
         ranking = self.ranking_engine.rank(context)
+        ranking["reflection_policy"] = REFLECTION_POLICY
         ranking_model_calls = list(ranking.get("ranking_model_calls", []))
         stage3_feedback = build_stage3_feedback(
             ranking, attempt=1, generation=generation["relation_alternation_generation"],
         )
+        if stage3_feedback.get("schema_version") == "candidate_fact_repair_v1":
+            reviewer = getattr(self.ranking_engine, "review_image_prompt", None)
+            stage3_feedback, prompt_calls = route_image_repairs(stage3_feedback,
+                (lambda candidate, operations: reviewer(context, candidate, operations)) if callable(reviewer) else None)
+            ranking_model_calls.extend(prompt_calls)
+            ranking["ranking_model_calls"] = ranking_model_calls
+            if stage3_feedback.get("skipped_repairs") and not stage3_feedback["repair_needed"]:
+                ranking["stage3_regeneration"] = {"attempted": False, "attempts": 0, "status": "skipped",
+                                                  "feedback": stage3_feedback}
         if _needs_stage4_regeneration(ranking, stage3_feedback):
             original_ranking = ranking
             original_generation = generation["relation_alternation_generation"]
@@ -351,6 +362,7 @@ def _needs_stage4_regeneration(
 def _merge_reflection_ranking(original: dict[str, Any], repaired: dict[str, Any]) -> dict[str, Any]:
     """Keep all observed candidates; a failed or worse repair cannot replace a better original."""
     result = {**repaired}
+    result["reflection_policy"] = REFLECTION_POLICY
     has_valid = False
     for mode in ("text", "image"):
         key = f"{mode}_ranking"
@@ -363,10 +375,12 @@ def _merge_reflection_ranking(original: dict[str, Any], repaired: dict[str, Any]
             parent_id = item.get("source_candidate_id")
             parent = originals.get(parent_id)
             if parent is None:
-                selected.add(item["candidate_id"])
+                item.update(repair_eligible=False, repair_outcomes=[], repair_skip_reason="source_candidate_missing")
                 continue
             winner = parent
-            if repair_is_eligible(parent, item):
+            item["repair_outcomes"] = repair_outcomes(parent, item)
+            item["repair_eligible"] = repair_is_eligible(parent, item)
+            if item["repair_eligible"]:
                 winner = min((parent, item), key=lambda value: (observation_priority(value), -float(value.get("final_score", 0))))
             selected.discard(parent_id)
             selected.add(winner["candidate_id"])

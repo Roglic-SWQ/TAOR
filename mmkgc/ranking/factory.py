@@ -6,8 +6,6 @@ import base64
 import asyncio
 from io import BytesIO
 import json
-import signal
-import threading
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 from urllib import error, request
@@ -102,6 +100,7 @@ def _build_scorers(
         model_name=judge_config.model_name,
         max_retries=profile.gpt4omini_judge.max_retries,
         retry_backoff_seconds=profile.gpt4omini_judge.retry_backoff_seconds,
+        use_rubrics=True,
     )
     return scorers
 
@@ -232,42 +231,15 @@ class _OpenAICompatibleCompletionClient:
         return str(content)
 
     def _open_json_with_timeout(self, req: request.Request) -> dict[str, Any]:
-        if threading.current_thread() is not threading.main_thread():
-            # SIGALRM is unavailable in worker threads. Async cancellation keeps
-            # a total request deadline, including a response that trickles data.
-            return asyncio.run(self._open_json_async(req))
-        previous_timer: tuple[float, float] | None = None
-        previous_handler: Any | None = None
-        use_hard_timeout = threading.current_thread() is threading.main_thread()
-
-        def _raise_timeout(_signum: int, _frame: Any) -> None:
-            raise TimeoutError("ranking judge request timed out")
-
-        if use_hard_timeout:
-            previous_handler = signal.getsignal(signal.SIGALRM)
-            previous_timer = signal.setitimer(
-                signal.ITIMER_REAL,
-                float(self.timeout_seconds),
-            )
-            signal.signal(signal.SIGALRM, _raise_timeout)
-        try:
-            with request.urlopen(req, timeout=self.timeout_seconds) as response:
-                return json.loads(response.read().decode("utf-8"))
-        finally:
-            if use_hard_timeout:
-                signal.setitimer(
-                    signal.ITIMER_REAL,
-                    previous_timer[0] if previous_timer is not None else 0.0,
-                    previous_timer[1] if previous_timer is not None else 0.0,
-                )
-                if previous_handler is not None:
-                    signal.signal(signal.SIGALRM, previous_handler)
+        # Use the same cancellable request deadline on Windows, POSIX, and
+        # worker threads, including when the server keeps trickling response data.
+        return asyncio.run(self._open_json_async(req))
 
     async def _open_json_async(self, req: request.Request) -> dict[str, Any]:
         try:
             import httpx
         except ImportError as exc:
-            raise RuntimeError("Concurrent GPT requests require httpx; install requirements.txt") from exc
+            raise RuntimeError("GPT requests require httpx; install requirements.txt") from exc
 
         async def fetch():
             try:

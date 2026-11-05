@@ -52,7 +52,7 @@ def test_judge_preserves_existing_jpeg_or_remote_url(monkeypatch):
         QwenConfig("gpt-4o-mini", "http://localhost/v1", "test-key"), timeout_seconds=1,
     )
     captured = []
-    monkeypatch.setattr(client, "_chat_completion", lambda messages: captured.append(messages) or "ok")
+    monkeypatch.setattr(client, "_chat_completion", lambda messages, **kwargs: captured.append(messages) or "ok")
     for url in ["https://example.test/image.png", "data:image/jpeg;base64,dGVzdA=="]:
         client.complete_multimodal("Inspect.", url)
         assert captured[-1][1]["content"][1]["image_url"]["url"] == url

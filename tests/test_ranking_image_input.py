@@ -269,7 +269,12 @@ def test_image_input_rejects_symlink_escape(tmp_path: Path) -> None:
     outside = tmp_path / "outside.png"
     _write_png(outside)
     link = entity_dir / "escape.png"
-    link.symlink_to(outside)
+    try:
+        link.symlink_to(outside)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Creating symlinks requires Windows Developer Mode or the symlink privilege")
+        raise
 
     with pytest.raises(ImageInputError, match="inside entity directory"):
         ImageInput.from_entity_path(

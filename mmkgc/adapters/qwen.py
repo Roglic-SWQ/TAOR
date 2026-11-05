@@ -634,7 +634,9 @@ class QwenLocalImagePromptGenerator(_CandidateCallLog):
             request_body['messages'][0]['content'] = (
                 'Select a concrete visual focus and rendering for this entity before writing its description. '
                 'Choose independently of candidate number; no fixed shot-size sequence. Use supplied fact IDs. '
-                'A new plan must differ concretely from previous plans. Return the four requested JSON fields only. '
+                'A new plan may change the supported visual emphasis OR a meaningful rendering choice; '
+                'both are not required. Prefer useful entity details over cosmetic variation. '
+                'Return the four requested JSON fields only. '
                 'rendering is an OBJECT with framing, viewpoint, subject_placement, style, lighting; '
                 'never return rendering as a string.')
         if payload.get('generation_step') == 'describe' and presentation.get('policy_version') == IMAGE_PRESENTATION_POLICY:

@@ -7,11 +7,13 @@ from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 import hashlib
 import json
+import time
 from typing import Any
 
 from mmkgc.adapters import GeneratedImageArtifact, ImageGenerator, ImagePromptGenerator, TextGenerator
 from mmkgc.generation_prompts import PROMPT_VERSION, QWEN_PROMPT_VERSION
-from mmkgc.observation import REPAIR_CONFIDENCE, observation_priority, repair_operations
+from mmkgc.observation import (REPAIR_CONFIDENCE, REFLECTION_POLICY, observation_priority,
+                               repair_operations, removal_targets)
 from mmkgc.stages.candidate_planning import PLAN_SCHEMA, PLAN_SCHEMAS, LEGACY_PLAN_SCHEMA
 from mmkgc.plan_schema import FACT_SELECTION_SCHEMA
 from mmkgc.stages.triples import TRIPLE_SCHEMAS
@@ -481,6 +483,7 @@ def _model_generation_context(
         "regeneration_feedback": {key: deepcopy(feedback[key]) for key in (
             "repair_actions", "preserve", "hard_violations", "soft_violations",
             "operations", "observation", "previous_content", "previous_prompt", "source_candidate_id",
+            "repair_route", "prompt_review",
         ) if key in feedback},
     }
 
@@ -756,6 +759,19 @@ def _generate_modality_candidates(
         source_candidate_id = f"{modality}_{index + 1:03d}"
         feedback = repair_by_id.get(source_candidate_id, regeneration_feedback)
         candidate_calls = []
+        if modality == "image" and feedback and feedback.get("operations"):
+            route = feedback.get("repair_route")
+            if route not in {"edit_prompt", "resample"}:
+                raise ValueError("image repair requires an explicit prompt review route")
+            if route == "resample":
+                base = deepcopy(feedback["previous_candidate"])
+                base.update(candidate_id=f"{modality}_safe_{index + 1:03d}", source_candidate_id=source_candidate_id,
+                            positive_prompt=feedback["previous_prompt"],
+                            repair_targets=removal_targets(feedback["operations"]))
+                base["generated_content"] = {"type": "image_prompt", "value": base["positive_prompt"]}
+                base.setdefault("metadata", {}).update(_regeneration_candidate_metadata(regeneration_feedback),
+                    repair_route="resample", reflection_policy=REFLECTION_POLICY)
+                return base, []
         if relation_item.get("plan_schema_version") in {PLAN_SCHEMA, FACT_SELECTION_SCHEMA}:
             base_angle = "Choose an appropriate presentation of this candidate's selected facts."
             diversity_axis = "Stage 3 chooses composition and wording from the selected facts."
@@ -805,6 +821,9 @@ def _generate_modality_candidates(
                     "supporting": ["global_profile"],
                 }
             base["metadata"].update(_regeneration_candidate_metadata(regeneration_feedback))
+            if feedback and feedback.get("operations"):
+                base["repair_targets"] = removal_targets(feedback["operations"])
+                base["metadata"].update(repair_route=feedback["repair_route"], reflection_policy=REFLECTION_POLICY)
         relation = str(relation_item.get("relation", "global_profile"))
         structured_generate = getattr(generator, "generate_with_context", None)
         if (knowledge.get("schema_version") not in TRIPLE_SCHEMAS
@@ -911,7 +930,8 @@ def _generate_modality_candidates(
 
     entries = list(enumerate(sequence))
     if regeneration_feedback and regeneration_feedback.get("schema_version") == "candidate_fact_repair_v1":
-        entries = [(index, item) for index, item in entries if f"{modality}_{index + 1:03d}" in repair_by_id]
+        entries = [(index, item) for index, item in entries
+                   if repair_by_id.get(f"{modality}_{index + 1:03d}", {}).get("operations")]
     if shared and not safe_variant:
         prepared = []
         seen_presentations = {}
@@ -1322,17 +1342,58 @@ def _fact_stage3_feedback(ranking: Mapping[str, Any], attempt: int, generation: 
             "candidate_id": candidate_id, "source_candidate_id": candidate_id, "modality": modality,
             "observation": deepcopy(observation), "operations": operations,
             "previous_content": deepcopy(original.get("generated_content", {})),
+            "previous_candidate": deepcopy(original),
             "previous_prompt": original.get("positive_prompt") or original.get("prompt_or_instruction", ""),
+            "repair_route": "review_prompt" if modality == "image" else "edit_text",
             "repair_actions": actions, "preserve": [*_STAGE3_PRESERVE, *preserve],
             "hard_violations": ["unsupported_claim"] if any(item["action"] == "remove" for item in operations) else [],
             "soft_violations": ["fact_repair_required"],
         })
     return {
         "schema_version": "candidate_fact_repair_v1", "attempt": max(1, int(attempt)),
+        "reflection_policy": REFLECTION_POLICY,
         "target_modality": _feedback_modality(tasks), "candidate_feedback": tasks,
         "repair_needed": bool(tasks), "repair_actions": [],
         "hard_violations": [], "soft_violations": [], "preserve": list(_STAGE3_PRESERVE),
     }
+
+
+def route_image_repairs(feedback: Mapping[str, Any], reviewer) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Review only selected image repairs; ambiguous or unavailable reviews abstain."""
+    result = deepcopy(dict(feedback))
+    tasks, skipped, calls = [], [], []
+    for task in result.get("candidate_feedback", []):
+        if task["modality"] != "image":
+            tasks.append(task)
+            continue
+        started = time.perf_counter()
+        call = {"scorer": "gpt4omini_judge", "kind": "image_prompt_review", "candidate_id": task["candidate_id"],
+                "raw_score": None, "normalized_score": None}
+        try:
+            if not callable(reviewer):
+                raise RuntimeError("image prompt reviewer unavailable")
+            review = reviewer(task["previous_candidate"], task["operations"])
+            expected = {item.get("check_id", item.get("claim_id")) for item in task["operations"]}
+            checks = review["observation"]["fact_checks"]
+            if len(checks) != len(expected) or {item["check_id"] for item in checks} != expected:
+                raise ValueError("prompt review must cover the same repair issues")
+            decisive = all(item["confidence"] >= REPAIR_CONFIDENCE and item["verification_mode"] == "direct"
+                           and item["status"] in {"supported", "contradicted", "missing"} for item in checks)
+            route = ("resample" if all(item["status"] == "supported" for item in checks) else "edit_prompt") if decisive else "skip"
+            task.update(repair_route=route, prompt_review=review["observation"])
+            call.update(status="observed", model_name=review.get("model_name"), details=review)
+            if route == "skip":
+                task["skip_reason"] = "prompt_assessment_uncertain"
+        except Exception as exc:
+            task.update(repair_route="skip", skip_reason="prompt_review_failed",
+                        review_error_type=type(exc).__name__, review_error=str(exc))
+            call.update(status="failed", details={"error_type": type(exc).__name__, "error": str(exc),
+                        **getattr(exc, "details", {})})
+        call["latency_ms"] = round((time.perf_counter() - started) * 1000)
+        calls.append(call)
+        (skipped if task["repair_route"] == "skip" else tasks).append(task)
+    result.update(candidate_feedback=tasks, skipped_repairs=skipped, repair_needed=bool(tasks))
+    return result, calls
 
 
 def _stage3_repairable_codes(values: Any) -> list[str]:

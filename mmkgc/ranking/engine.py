@@ -41,7 +41,7 @@ from mmkgc.ranking.scorers.gpt4omini_judge import GPT4OMiniJudgeParseError
 from mmkgc.observation import OBSERVATION_VERSION
 
 
-SCORE_VERSION = "stage4_image_fusion_v4_no_visual_graph"
+SCORE_VERSION = "stage4_rubric_fusion_v5"
 RANKER_NAME = "model_fusion"
 _JUDGE_SCORER_KEY = "gpt4omini_judge"
 JUDGE_OUTPUT_SCORER_NAME = "gpt4omini_judge"
@@ -144,6 +144,12 @@ class ModelFusionRankingEngine:
         ]
         if missing:
             raise RequiredScorerError(f"missing required scorer: {missing[0]}")
+
+    def review_image_prompt(self, context, candidate, operations):
+        reviewer = getattr(self.scorers.get(_JUDGE_SCORER_KEY), "review_image_prompt", None)
+        if not callable(reviewer):
+            raise RuntimeError("configured judge cannot review an image repair prompt")
+        return reviewer(candidate_ranking_context(context, candidate), candidate, operations)
 
     def _optional_scorers_for_context(
         self,
@@ -385,6 +391,9 @@ class ModelFusionRankingEngine:
             items[index]["soft_violations"] = list(gate.soft_violations)
             items[index]["ranking_reason"] = gate.reason
             observation = getattr(result, "observation", None)
+            if result.score.details.get("rubric_version"):
+                items[index]["judge_rubrics"] = _plain({key: result.score.details[key] for key in (
+                    "rubric_version", "rubric_scores", "rubric_aggregation", "unverified_additions", "repair_suggestions")})
             if observation is not None:
                 items[index]["observation"] = _plain(observation)
             model_calls.append(
@@ -678,6 +687,12 @@ class ModelFusionRankingEngine:
                 blip=blip,
                 judge=judge,
             )
+        rubric = item.get("judge_rubrics")
+        if rubric:
+            # Neither semantic embeddings nor polish may undo an evidence-bound
+            # entity/fact cap. Null factual scores are not replaced with 0 or 4.
+            caps = rubric["rubric_aggregation"]["caps"]
+            final = min(final, *caps.values())
         item["model_scores"]["candidate_score"] = final
         item["candidate_score"] = final
         item["fused_score"] = final

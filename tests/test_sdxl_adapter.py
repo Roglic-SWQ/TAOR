@@ -1,3 +1,4 @@
+import re
 import pytest
 from PIL import Image
 
@@ -113,6 +114,19 @@ def test_sdxl_generator_uses_stable_candidate_specific_seeds(tmp_path):
         assert fake_pipeline.calls[1]["generator"].initial_seed() == 20260710
 
 
+def test_sdxl_repair_uses_a_different_reproducible_seed(tmp_path):
+    fake_pipeline = FakePipeline()
+    generator = SDXLImageGenerator(SDXLConfig(model_dir=tmp_path, width=32, height=32, seed=42, device="cpu"),
+                                   pipeline_factory=lambda _: fake_pipeline)
+    def run(candidate_id):
+        return generator.generate("Q1", candidate_id, "same correct prompt", "")
+    original, repaired, repeated = run("image_001"), run("image_safe_001"), run("image_safe_001")
+    assert original.metadata["seed"] == 43
+    assert repaired.metadata["seed"] != original.metadata["seed"]
+    assert repeated.metadata["seed"] == repaired.metadata["seed"]
+    assert {call["prompt"] for call in fake_pipeline.calls} == {"same correct prompt"}
+
+
 def test_sdxl_candidate_generation_exception_fails_mainline(tmp_path):
     config = SDXLConfig(model_dir=tmp_path, width=32, height=32, device="cpu")
     generator = SDXLImageGenerator(config, pipeline_factory=lambda _: FailingPipeline())
@@ -132,7 +146,7 @@ def test_sdxl_candidate_generation_exception_fails_mainline(tmp_path):
 def test_sdxl_default_factory_raises_when_model_dir_is_missing(tmp_path):
     missing_model_dir = tmp_path / "missing-sdxl"
 
-    with pytest.raises(FileNotFoundError, match=str(missing_model_dir)):
+    with pytest.raises(FileNotFoundError, match=re.escape(str(missing_model_dir))):
         _load_diffusers_pipeline(SDXLConfig(model_dir=missing_model_dir))
 
 
