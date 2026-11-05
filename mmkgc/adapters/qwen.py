@@ -1183,11 +1183,13 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
                 request_body["max_tokens"] = min(request_body["max_tokens"], max(512, 256 + 256 * count))
         if "qwen" in self.config.model_name.lower():
             from mmkgc.adapters.json_contract import local_semantic_json_schema, semantic_output_token_cap
+            from mmkgc.stages.visual_evidence import VISUAL_FACT_POLICY
             request_body["repetition_penalty"] = 1.05
             targeted_token_cap = semantic_output_token_cap(prompt)
             if targeted_token_cap is not None:
                 request_body["max_tokens"] = min(request_body["max_tokens"], targeted_token_cap)
-            if not source_bound and ("VALIDATION_FEEDBACK_JSON:" in prompt or "Previous parse error:" in prompt
+            if not source_bound and (prompt_payload.get("visual_fact_policy") == VISUAL_FACT_POLICY
+                    or "VALIDATION_FEEDBACK_JSON:" in prompt or "Previous parse error:" in prompt
                     or "stage1_targeted_repair_v1" in prompt):
                 request_body.update(guided_json=local_semantic_json_schema(prompt),
                                     guided_decoding_backend="lm-format-enforcer")

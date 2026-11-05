@@ -34,3 +34,7 @@
 首次单卡尝试 `taor-visual-policy-1106-r1`：真实 Qwen 初次输出缺少新增字段，触发合同修复；vLLM 0.11 默认 auto backend 未按请求中的旧 guided_decoding_backend 字段选用 LM Format Enforcer，语法编译以 `Unimplemented keys: uniqueItems` 返回 400。该次保留为失败，停止的仅是本次诊断作业。新的单卡入口显式指定服务端 `structured-outputs-config.backend=lm-format-enforcer`；完整 schema 与 Python 校验均保持，未删除去重约束或给缺失元数据补默认高置信度。
 
 第二次尝试 `r2`：固定旧描述控制成功执行，但发现模型直接复制可见的图谱 mouse deer，把来源误标为 image direct/confidence=1，并未保留旧描述中的相关猜测。这不算来源语义保留成功。文本全流程结果已保存，随后仅停止本诊断作业，保留所有产物。由此增加输入隔离：新视觉策略的 perception payload 不展示图谱实例、关系计数和图谱证据内容；实体 profile 同样不能引用未展示图谱。完整图谱继续由程序保留、合并，未丢弃。明确要求将有意义的未决源猜测写入 uncertain_aspects，即使不作为抽取三元组。该改动避免照抄图谱后再伪装成视觉证据，不保证消除由实体名称或模型记忆产生的推断。
+
+同时复核 `r2` 已完成的文本结果，发现 Stage 3 将整段原描述中的 rodent／marsupial／bandicoot 和背景细节重新写入，绕过仅含 mouse deer 的精选事实；因此只隔离 Stage 2 仍不够。新策略下，Stage 3 仍收到所选事实、逐源判断和来源 ID，但不再收到完整机器图片描述的 content。原描述只在 Stage 1 完整保留；图谱和其他原始来源的内容策略保持。新增回归确认未选猜测不会从原描述绕回生成 payload。
+
+`r3` 固定描述控制达到原脚本默认的 60 秒单请求上限而被服务中止，不算语义成功或失败。控制脚本单请求预算改为与完整 CLI 一致的 120 秒，Stage 1 总预算仍为 180 秒，原生输出 token 预算不变。新视觉合同从第一条本地 Qwen 抽取请求即采用完整 JSON schema，减少先遗漏元数据、再重做整段抽取的额外调用；源描述请求仍是自然语言输出。最终针对性回归 183 passed，1 skipped；已另在真实服务环境验证完整 LM Format Enforcer grammar。

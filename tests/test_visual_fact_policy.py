@@ -14,6 +14,8 @@ from mmkgc.ranking.context import build_ranking_context
 from mmkgc.stages.candidate_planning import apply_fact_selection, fact_selection_prompt, planning_facts
 from mmkgc.stages.modeling import build_knowledge_input, apply_knowledge_response, KnowledgeResponseValidationError
 from mmkgc.stages.plan_context import compile_plan_context, ranking_knowledge
+from mmkgc.stages.generation import _model_generation_context
+from mmkgc.generation_prompts import generation_payload
 from mmkgc.stages.relation_planning import RelationPlanValidationError
 from mmkgc.stages.triples import triple_response_schema, build_triple_prompt, model_input_view
 from mmkgc.stages.visual_evidence import VISUAL_FACT_POLICY
@@ -65,6 +67,24 @@ def test_graph_answers_are_withheld_from_perception_but_preserved_in_merged_cata
     value["entity_profile"]["evidence_refs"] = ["evidence:kg:0001"]
     with pytest.raises(KnowledgeResponseValidationError):
         apply_knowledge_response(data, value)
+
+
+def test_unselected_caption_guesses_cannot_bypass_fact_selection_into_generation():
+    _, data = inputs()
+    before = deepcopy(data)
+    knowledge = apply_knowledge_response(data, reply([row()]))
+    color = next(f for f in knowledge["relation_facts"] if f["relation"] == "color")
+    selection, reasoning = compile_plan_context(knowledge, apply_fact_selection(knowledge,
+        {"status": "ready", "selected_fact_ids": [color["fact_id"]]}, "text", 8), "text")
+    plan = selection["fine_grained_relation_selection"]["candidates"][0]
+    context = _model_generation_context(knowledge, plan, reasoning, "text", "", "")
+    payload = generation_payload("water deer", "entity", "color", "", [], context)
+    assert "rodent or marsupial" not in json.dumps(payload)
+    assert payload["source_facts"][0]["object"] == "brown"
+    assert payload["source_facts"][0]["source_weight"] == 0.95
+    assert DESCRIPTION_REF in {item["evidence_id"] for item in payload["source_evidence"]}
+    assert "rodent or marsupial" in json.dumps(knowledge["evidence_catalog"])
+    assert data == before
 
 
 def test_source_alternatives_and_uncertainty_survive_without_becoming_assertive_requirements():

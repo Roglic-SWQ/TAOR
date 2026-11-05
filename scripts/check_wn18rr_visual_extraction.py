@@ -35,7 +35,7 @@ def main():
     inputs = with_image_description(build_knowledge_input(record, 'text', prepared.coarse),
         saved['description'], metadata, saved['description_model_call_ref'])
     planner = QwenLocalSemanticStagePlanner(load_qwen_config('configs/qwen7b-stage1.yaml'),
-        dataset_root=dataset, knowledge_stage_timeout_seconds=180)
+        dataset_root=dataset, timeout_seconds=120, knowledge_stage_timeout_seconds=180)
     # Bind the SAME frozen image to every extraction/contract-repair request.
     # This is an extraction-only control, not a new image description or a whole-loop quality claim.
     token = KNOWLEDGE_REQUEST_CONTEXT.set({'deadline': time.perf_counter() + 180,

@@ -76,6 +76,7 @@ def test_describe_then_extract_both_receive_the_original_image_and_save_both_sou
     client = planner(tmp_path)
     result = client.build_knowledge(target, "text", coarse_relation_filtering(target, "text", catalogue_only=True))
     assert len(requests) == 2 and target.existing_modalities == original
+    assert "guided_json" not in requests[0]
     first, first_image = text_and_image(requests[0])
     second, second_image = text_and_image(requests[1])
     assert first == DESCRIPTION_PROMPT
@@ -111,6 +112,18 @@ def test_description_errors_can_be_corrected_and_missing_description_details_add
     assert "correct its errors" in prompt and "recover useful visible details" in prompt
     assert result["relation_facts"][0]["object"] == "a blue circle"
     assert result["relation_facts"][0]["evidence_refs"] == [IMAGE_REF]
+
+
+def test_qwen_visual_extraction_requires_source_metadata_in_the_first_decode(tmp_path, monkeypatch):
+    target, _ = fixture(tmp_path)
+    requests = transport(monkeypatch, ["A blue circle.", json.dumps(extraction())])
+    client = QwenLocalSemanticStagePlanner(QwenConfig("Qwen/Qwen2-VL-7B-Instruct", "http://localhost/v1", "EMPTY"),
+                                         dataset_root=tmp_path)
+    client.build_knowledge(target, "text", coarse_relation_filtering(target, "text", catalogue_only=True))
+    assert "guided_json" not in requests[0]
+    schema = requests[1]["guided_json"]["properties"]["extracted_triples"]["items"]
+    assert "visual_support" in schema["required"]
+    assert requests[1]["guided_decoding_backend"] == "lm-format-enforcer"
 
 
 def test_contract_repairs_keep_image_attached_and_require_original_image_citations(tmp_path, monkeypatch):

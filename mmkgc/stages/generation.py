@@ -456,9 +456,16 @@ def _model_generation_context(
     evidence = []
     for ref, value in catalog.items():
         if ref in selected_refs | identity_refs | context_refs:
+            # The full machine caption can reintroduce unselected guesses and
+            # scene inventory. Selected visual assertions carry their own source
+            # assessments; retain the raw caption only in Stage 1 audit artifacts.
+            scoped_visual = (knowledge.get("stage1_v3", {}).get("visual_fact_policy")
+                             and value.get("modality") == "image"
+                             and value.get("processing") == "model_generated_description")
             evidence.append({
                 **{key: deepcopy(value[key]) for key in ("evidence_id", "source", "content", "modality",
-                                                        "locator", "derived_from_modalities") if key in value},
+                                                        "locator", "derived_from_modalities")
+                   if key in value and not (scoped_visual and key == "content")},
                 "usage": "candidate_fact" if ref in selected_refs else "identity_only" if ref in identity_refs else "context_only",
             })
     visual = knowledge.get("stage1_v3", {}).get("text_visual_profile", knowledge.get("text_visual_profile", {}))
