@@ -9,8 +9,11 @@ import argparse
 import asyncio
 import hashlib
 from datetime import datetime, timezone
+from dataclasses import replace
 import json
 import os
+import re
+import shlex
 import threading
 import time
 from pathlib import Path
@@ -26,6 +29,7 @@ from mmkgc.adapters.qwen import (
     _coerce_qwen_config,
 )
 from mmkgc.adapters.relation_planner import OpenAICompatibleRelationPlanner
+from mmkgc.adapters.image_knowledge import load_source_images, image_modeling_entries
 from mmkgc.data import build_dataset_store
 from mmkgc.io.resume import load_saved_run
 from mmkgc.io.writer import RunWriter, _safe_output
@@ -40,8 +44,31 @@ from mmkgc.stages.coarse import coarse_relation_filtering
 from mmkgc.stages.generation import _model_generation_context
 from mmkgc.stages.plan_context import compile_plan_context, ranking_knowledge
 from mmkgc.stages.triples import fact_text
+from mmkgc.stages.modeling import build_knowledge_input
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def load_proxy_exports(path):
+    """Read literal proxy exports only; do not execute shell startup commands."""
+    found = {}
+    for line in Path(path).read_text().splitlines():
+        match = re.match(r'^\s*export\s+((?:https?|all)_proxy|(?:HTTPS?|ALL)_PROXY)=(.*)$', line)
+        if not match:
+            continue
+        parts = shlex.split(match[2])
+        if not parts:
+            continue
+        url = urlsplit(parts[0])
+        if url.scheme not in ('http', 'https', 'socks5', 'socks5h') or not url.hostname:
+            raise ValueError('Proxy export must be a literal URL')
+        found[match[1]] = parts[0]
+    if not found:
+        raise ValueError('No proxy exports found in supplied file')
+    os.environ.update(found)
+    # These tests target one API service; localhost traffic stays local.
+    os.environ['NO_PROXY'] = os.environ['no_proxy'] = '127.0.0.1,localhost'
+    return found
 
 
 def pace_api_requests(host, interval_ms):
@@ -107,20 +134,31 @@ def api_ranker(config, timeout):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--env-file', type=Path)
+    parser.add_argument('--proxy-from-bashrc', type=Path, help='Read proxy exports without executing shell code')
     parser.add_argument('--model-config', type=Path, default=ROOT/'configs/gpt4omini-mainline.yaml')
     parser.add_argument('--model', help='Override model name without writing credentials to config')
+    parser.add_argument('--api-response-format', choices=('json_schema','json_object'),
+                        help='Explicit provider format; Python semantic validation stays strict')
     parser.add_argument('--check-only', action='store_true', help='Check configuration; make no API calls')
     parser.add_argument('--output-root', type=Path)
     parser.add_argument('--dataset-dir', type=Path, default=ROOT/'datasets/wn18rr-import-20261106/WN18RR')
     parser.add_argument('--source-root', type=Path,
         default=ROOT/'outputs/wn18rr-visual-policy-20261106/attempt-r4/runs')
     parser.add_argument('--entity-key', default='02436645')
+    parser.add_argument('--reuse-text-knowledge', type=Path, help='Reuse a successful Stage 1 after checking current source identity')
     parser.add_argument('--timeout', type=float, default=120)
     args = parser.parse_args()
     load_dotenv(ROOT/'.env', override=False)
     if args.env_file:
         load_dotenv(args.env_file, override=False)
+    proxies = load_proxy_exports(args.proxy_from_bashrc) if args.proxy_from_bashrc else {}
     config, status = resolve_configuration(args.model_config, args.model or os.environ.get('OPENAI_MODEL'))
+    if config is not None and args.api_response_format:
+        config = replace(config, api_response_format=args.api_response_format)
+    if config is not None:
+        status['response_format'] = config.api_response_format
+    if proxies:
+        status['proxy_host'] = urlsplit(next(iter(proxies.values()))).hostname
     print(json.dumps(status), flush=True)
     if config is None:
         raise SystemExit(2)
@@ -136,6 +174,11 @@ def main():
         text = json.dumps(_safe_output(value), ensure_ascii=False, indent=2)
         if config.api_key:
             text = text.replace(config.api_key, '<redacted>')
+        for proxy in proxies.values():
+            text = text.replace(proxy, '<redacted-proxy-url>')
+            password = urlsplit(proxy).password
+            if password and len(password) >= 6:
+                text = text.replace(password, '<redacted>')
         (output/name).write_text(text)
     save('execution-sha256.json', {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
         for folder in ('mmkgc', 'scripts') for p in sorted((ROOT/folder).rglob('*'))
@@ -152,7 +195,25 @@ def main():
     try:
         record = store.build_record(store.entity_uri_to_id[args.entity_key], 'text')
         coarse = coarse_relation_filtering(record, 'text', catalogue_only=True)
-        knowledge = planner.build_knowledge(record, 'text', coarse)
+        if args.reuse_text_knowledge:
+            knowledge = json.loads(args.reuse_text_knowledge.read_text())
+            current = build_knowledge_input(record, 'text', coarse)
+            assert knowledge['entity'] == current['entity'], 'Saved knowledge belongs to another entity'
+            assert knowledge['source_inputs'] == current['existing_modalities'], 'Source modalities changed'
+            saved_images = {item['original_image_ref']: item['original_image']['sha256']
+                for item in image_modeling_entries(knowledge.get('image_modeling', {}))}
+            current_images = {metadata['evidence_id']: metadata['sha256']
+                              for _, metadata in load_source_images(record, args.dataset_dir)}
+            assert saved_images == current_images, 'Source image bytes changed'
+            graph_refs = {item['evidence_id'] for item in knowledge['evidence_catalog'] if item['source']=='stage0_kg'}
+            saved_graph = {tuple(fact[key] for key in ('subject','relation','object'))
+                for fact in knowledge['relation_facts'] if graph_refs.intersection(fact['evidence_refs'])}
+            assert saved_graph == {tuple(fact[key] for key in ('subject','relation','object'))
+                                   for fact in current['fact_candidates']}, 'Source graph changed'
+            summary['reused_text_knowledge'] = {'path': str(args.reuse_text_knowledge),
+                'sha256': hashlib.sha256(args.reuse_text_knowledge.read_bytes()).hexdigest()}
+        else:
+            knowledge = planner.build_knowledge(record, 'text', coarse)
         save('text-knowledge.json', knowledge)
         selected = selector.plan(record, 'text', knowledge, 1)
         selected, reasoning = compile_plan_context(knowledge, selected, 'text')

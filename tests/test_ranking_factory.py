@@ -87,6 +87,14 @@ def test_local_wire_compatibility_preserves_remote_schema_and_source_contract(ca
         assert wire == schema
 
 
+def test_explicit_json_object_provider_mode_does_not_send_unsupported_schema(captured_request):
+    client = factory._OpenAICompatibleCompletionClient(SimpleNamespace(
+        base_url='https://api.example.test/v1', model_name='api-model', api_key='', temperature=0,
+        max_token=4096, api_response_format='json_object'), timeout_seconds=10)
+    assert client.complete_structured('Full business contract in prompt', {'type':'object'}) == '{}'
+    assert captured_request['body']['response_format'] == {'type':'json_object'}
+
+
 def test_openai_compatible_completion_client_can_target_gpt_4o_mini_api(
     captured_request,
 ) -> None:

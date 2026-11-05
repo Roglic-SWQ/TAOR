@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
+from urllib.error import HTTPError
 
 import httpx
 import pytest
@@ -121,6 +122,41 @@ def test_default_planner_selects_one_set_independent_of_generation_budget(monkey
     assert planner.calls[0]['response_schema_version'] == FACT_SELECTION_SCHEMA
     assert planner.calls[0]['max_selected_facts'] == 8
     assert 'private-key' not in json.dumps(planner.calls)
+
+
+def test_json_object_provider_still_rejects_an_invalid_fact_id(monkeypatch):
+    sent = []
+    responses = iter([reply(['not-a-real-fact']), reply()])
+    async def handle(request):
+        body = json.loads(request.content)
+        sent.append(body)
+        return httpx.Response(200, json={'choices':[{'finish_reason':'stop',
+            'message':{'content':json.dumps(next(responses))}}]})
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: real_client(
+        **kwargs, transport=httpx.MockTransport(handle), trust_env=False))
+    planner = OpenAICompatibleRelationPlanner(QwenConfig('api-model', 'https://api.example.test/v1',
+        'private-key', api_response_format='json_object'), max_selected_facts=8)
+    result = planner.plan(target(), 'image', source(), 1)
+    assert result['fine_grained_relation_selection']['selected_fact_ids'] == ['rf:2','rf:3']
+    assert len(sent) == 2
+    assert all(body['response_format'] == {'type':'json_object'} for body in sent)
+
+
+def test_provider_format_error_is_recorded_without_credentials(monkeypatch):
+    async def handle(request):
+        return httpx.Response(400, json={'error':{'type':'invalid_request_error',
+            'message':'Unsupported schema private-test-key'}})
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: real_client(
+        **kwargs, transport=httpx.MockTransport(handle), trust_env=False))
+    planner = OpenAICompatibleRelationPlanner(QwenConfig('api-model', 'https://api.example.test/v1',
+        'private-test-key'), max_selected_facts=8)
+    with pytest.raises(HTTPError):
+        planner.plan(target(), 'image', source(), 1)
+    event = planner.calls[0]['network_attempts'][0]
+    assert event['provider_error']['type'] == 'invalid_request_error'
+    assert 'private-test-key' not in json.dumps(planner.calls)
 
 
 def test_new_local_wire_only_guides_repairs_and_preserves_selection_limit(monkeypatch):

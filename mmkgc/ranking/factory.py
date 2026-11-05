@@ -226,6 +226,8 @@ class _OpenAICompatibleCompletionClient:
             payload["response_format"] = {"type": "json_schema", "json_schema": {
                 "name": "stage4_judgment", "strict": True, "schema": response_schema,
             }}
+            if getattr(self.config, 'api_response_format', 'json_schema') == 'json_object':
+                payload['response_format'] = {'type': 'json_object'}
         body = json.dumps(payload).encode("utf-8")
         headers = {"Content-Type": "application/json"}
         if self.config.api_key:

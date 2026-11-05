@@ -63,3 +63,6 @@ Stage 4 的混合整数/null enum 改为等价 anyOf，仍仅允许 0～4 或 nu
 ## 后续改为 API 优先
 
 用户随后要求先用 API 联调，稳定后再申请卡。本轮自己的 GPU 诊断作业均已结束，后续流程见 `docs/api-preflight.zh.md`。r6 固定原图／旧描述控制完成，但文本 Stage 4 因缺少 fact check reason、只返回部分检查并重复输出多个 JSON 而失败；未计为闭环成功。之后仅做 CPU grammar 回放及 API 传输修复：本地解码使用语法视图、Python 保留语义验收，远程 API 继续接收完整 schema；空响应与截断也在解析前分类。相关回归更新为 232 passed、3 skipped。
+
+
+后续 API 实测已完成，包含原始真实坏文本的一次 Reflect 和固定旧错误描述的来源控制；结果与局限见 `docs/evaluation/2026-11-06-api-closure.zh.md`。本地 7B 的历史问题未被 API 成功结果掩盖，迁移回归仍是独立检查。

@@ -27,6 +27,13 @@ class SemanticStageParseError(ValueError):
     """Raised when a semantic stage response violates the JSON contract."""
 
 
+class Stage1CompletionError(RuntimeError):
+    """Incomplete provider content must not enter JSON format repair."""
+    def __init__(self, code):
+        self.code = code
+        super().__init__('Stage 1 completion failed: ' + code)
+
+
 class SourceExtractionRetryNeeded(SemanticStageParseError):
     """A source chunk must be re-extracted in smaller, complete requests."""
 
@@ -421,6 +428,14 @@ class StrictJsonStagePlanner:
                     call["contract_repair_stopped_reason"] = "stage_time_budget_exhausted"
                     raise TimeoutError("Stage 1 total time budget exhausted")
                 call["response_text"] = response_text
+                if source_task is None:
+                    finish = (call.get('network_attempts') or [{}])[-1].get('finish_reason')
+                    failure = ('output_token_limit' if finish == 'length' else
+                               'empty_response' if not isinstance(response_text, str) or not response_text.strip() else None)
+                    if failure:
+                        call['completion_failure'] = failure
+                        call['contract_repair_stopped_reason'] = failure
+                        raise Stage1CompletionError(failure)
                 try:
                     if source_task is not None and repair_task is None:
                         from mmkgc.adapters.source_text_triples import source_response_recovery_reason

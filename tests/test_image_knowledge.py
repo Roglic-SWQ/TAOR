@@ -149,6 +149,21 @@ def test_failed_or_truncated_description_stops_before_extraction(tmp_path, monke
     assert KNOWLEDGE_REQUEST_CONTEXT.get() is None
 
 
+@pytest.mark.parametrize('reply,code', [('', 'empty_response'),
+    (('{"entity_profile":', 'length'), 'output_token_limit')])
+def test_incomplete_image_extraction_is_not_retried_as_a_json_format_error(tmp_path, monkeypatch, reply, code):
+    from mmkgc.stages.semantic import Stage1CompletionError
+    target, _ = fixture(tmp_path)
+    requests = transport(monkeypatch, ['A blue circle.', reply])
+    client = planner(tmp_path)
+    with pytest.raises(Stage1CompletionError) as error:
+        client.build_knowledge(target, 'text', coarse_relation_filtering(target, 'text', catalogue_only=True))
+    assert error.value.code == code
+    assert len(requests) == 2
+    assert client.calls[-1]['completion_failure'] == code
+    assert client.calls[-1]['contract_repair_retries'] == 0
+
+
 def test_description_and_extraction_share_one_total_deadline(tmp_path, monkeypatch):
     target, _ = fixture(tmp_path)
     now = {"value": 0.0}

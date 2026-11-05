@@ -176,6 +176,8 @@ class OpenAICompatibleRelationPlanner:
                 "schema": schema,
             }},
         }
+        if getattr(self.config, 'api_response_format', 'json_schema') == 'json_object':
+            payload['response_format'] = {'type': 'json_object'}
         if self.uses_local_qwen:
             # Use the same normal generation path as Stage 0/1; this vLLM's constrained decoder is slow.
             payload.pop('response_format')
@@ -226,6 +228,15 @@ class OpenAICompatibleRelationPlanner:
                     event['http_status'] = response.status_code
                     event['server_request_id'] = response.headers.get('x-request-id') or response.headers.get('request-id')
                     if response.status_code >= 400:
+                        try:
+                            body = response.json()
+                            detail = body.get('error', body) if isinstance(body, dict) else {}
+                            detail = detail if isinstance(detail, dict) else {'message': str(detail)}
+                            event['provider_error'] = {key: str(detail[key]).replace(self.config.api_key, '<redacted>')[:2000]
+                                if self.config.api_key else str(detail[key])[:2000]
+                                for key in ('type', 'code', 'param', 'message') if key in detail}
+                        except (ValueError, TypeError):
+                            event['provider_error'] = {'format': 'non_json_error_body'}
                         raise HTTPError(str(response.url), response.status_code, 'Stage 2 API error', response.headers, None)
                     return response.json()
             except httpx.TimeoutException as exc:

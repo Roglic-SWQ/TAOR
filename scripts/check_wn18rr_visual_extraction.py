@@ -2,10 +2,14 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
 import time
+import os
+from urllib.parse import urlsplit
+from dotenv import load_dotenv
 
 from mmkgc.adapters.image_knowledge import load_source_images, with_image_description
 from mmkgc.adapters.media_knowledge import SourceMedia
@@ -20,6 +24,10 @@ from mmkgc.stages.semantic import KNOWLEDGE_REQUEST_CONTEXT
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output-root', type=Path, required=True)
+    parser.add_argument('--model-config', default='configs/qwen7b-stage1.yaml')
+    parser.add_argument('--model')
+    parser.add_argument('--env-file', type=Path)
+    parser.add_argument('--proxy-from-bashrc', type=Path)
     args = parser.parse_args()
     args.output_root.mkdir(parents=True, exist_ok=False)
     dataset = Path('datasets/wn18rr-import-20261106/WN18RR')
@@ -34,7 +42,25 @@ def main():
     assert metadata['sha256'] == saved['original_image']['sha256']
     inputs = with_image_description(build_knowledge_input(record, 'text', prepared.coarse),
         saved['description'], metadata, saved['description_model_call_ref'])
-    planner = QwenLocalSemanticStagePlanner(load_qwen_config('configs/qwen7b-stage1.yaml'),
+    proxies = {}
+    if args.env_file:
+        load_dotenv(args.env_file, override=False)
+    if args.proxy_from_bashrc:
+        from scripts.run_wn18rr_api_preflight import load_proxy_exports
+        proxies = load_proxy_exports(args.proxy_from_bashrc)
+    config = load_qwen_config(args.model_config)
+    if args.model:
+        config = replace(config, model_name=args.model)
+    from scripts.run_wn18rr_api_preflight import pace_api_requests
+    restore = pace_api_requests(urlsplit(config.base_url).hostname, os.environ.get('OPENAI_MIN_REQUEST_INTERVAL_MS','0'))
+    def dump(value):
+        text = json.dumps(_safe_output(value), indent=2)
+        if config.api_key:
+            text = text.replace(config.api_key, '<redacted>')
+        for proxy in proxies.values():
+            text = text.replace(proxy, '<redacted-proxy-url>')
+        return text
+    planner = QwenLocalSemanticStagePlanner(config,
         dataset_root=dataset, timeout_seconds=120, knowledge_stage_timeout_seconds=180)
     # Bind the SAME frozen image to every extraction/contract-repair request.
     # This is an extraction-only control, not a new image description or a whole-loop quality claim.
@@ -47,9 +73,10 @@ def main():
                                 lambda response: apply_knowledge_response(inputs, response))
     finally:
         KNOWLEDGE_REQUEST_CONTEXT.reset(token)
-        (args.output_root/'model-calls.json').write_text(json.dumps(_safe_output(planner.calls), indent=2))
+        restore()
+        (args.output_root/'model-calls.json').write_text(dump(planner.calls))
     (args.output_root/'knowledge.json').write_text(json.dumps(_stage_artifact('knowledge_modeling', result), indent=2))
-    summary = {'control': 'same_original_image_and_original_caption_new_extraction_policy',
+    summary = {'control': 'same_original_image_and_original_caption_new_extraction_policy', 'model': config.model_name,
         'image_sha256': metadata['sha256'], 'caption': saved['description'],
         'source_stage1_sha256': hashlib.sha256((original/'1_knowledge_modeling.json').read_bytes()).hexdigest(),
         'facts': [{key: fact[key] for key in ('fact_id', 'subject', 'relation', 'object',

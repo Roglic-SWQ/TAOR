@@ -66,8 +66,11 @@ class QwenConfig:
     stage1_image_batch_size: int = 4
     image_prompt_temperature: float | None = None
     image_prompt_top_p: float = 0.9
+    api_response_format: str = "json_schema"
 
     def __post_init__(self) -> None:
+        if self.api_response_format not in {"json_schema", "json_object"}:
+            raise ValueError("api_response_format must be json_schema or json_object")
         if (self.image_prompt_temperature is not None and (
                 isinstance(self.image_prompt_temperature, bool)
                 or not isinstance(self.image_prompt_temperature, (int, float))
@@ -120,6 +123,7 @@ def _coerce_qwen_config(data: dict, source_path: str | Path) -> QwenConfig:
         stage1_image_batch_size=inference.get("stage1_image_batch_size", 4),
         image_prompt_temperature=inference.get("image_prompt_temperature"),
         image_prompt_top_p=inference.get("image_prompt_top_p", 0.9),
+        api_response_format=inference.get("api_response_format", "json_schema"),
     )
 
 

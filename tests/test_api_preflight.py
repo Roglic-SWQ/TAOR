@@ -61,3 +61,16 @@ def test_service_interval_paces_real_transport_wrapper_without_changing_payloads
         restore()
     assert [entry[0] for entry in seen] == [0,0,1]
     assert all(entry[2] == {'timeout':12} for entry in seen)
+
+
+def test_proxy_startup_file_is_read_without_executing_commands(tmp_path, monkeypatch):
+    path = tmp_path/'bashrc'
+    marker = tmp_path/'must-not-exist'
+    path.write_text(f'touch {marker}\nexport HTTPS_PROXY="http://test-user:test-password@proxy.example.test:8888/"\n')
+    monkeypatch.setenv('HTTPS_PROXY', 'http://old.invalid:1')
+    monkeypatch.setenv('NO_PROXY', '*')
+    monkeypatch.setenv('no_proxy', '*')
+    found = api.load_proxy_exports(path)
+    assert found['HTTPS_PROXY'] == 'http://test-user:test-password@proxy.example.test:8888/'
+    assert not marker.exists()
+    assert api.os.environ['NO_PROXY'] == '127.0.0.1,localhost'

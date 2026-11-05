@@ -8,11 +8,13 @@
 cd /medisco/linjiashi/Code/TAOR
 PYTHONPATH=. /medisco/linjiashi/venvs/taor-inference/bin/python \
   scripts/run_wn18rr_api_preflight.py \
-  --env-file /medisco/linjiashi/Code/.env.standardization.local --check-only
+  --env-file /medisco/linjiashi/Code/.env.standardization.local \
+  --proxy-from-bashrc /root/.bashrc --api-response-format json_object --check-only
 
 PYTHONPATH=. /medisco/linjiashi/venvs/taor-inference/bin/python \
   scripts/run_wn18rr_api_preflight.py \
   --env-file /medisco/linjiashi/Code/.env.standardization.local \
+  --proxy-from-bashrc /root/.bashrc --api-response-format json_object \
   --output-root outputs/api-preflight-new-attempt
 ```
 
@@ -22,6 +24,11 @@ PYTHONPATH=. /medisco/linjiashi/venvs/taor-inference/bin/python \
 
 每次新建输出目录，分阶段保存结果、错误和源码 SHA256；后续步骤失败时，保留已完成文本结果。`contract_checks_completed_requires_quality_review` 表示结构调用完成，仍需逐项核对来源蕴含、相关性、主客体／限定语、不确定性和候选新增内容。API 质量检查通过后才考虑申请卡，不以降低阈值、改标签或换候选制造通过。
 
-Stage 4 客户端现在在 JSON 解析前区分 output_token_limit、empty_response 和 provider_refusal，保留 finish_reason、usage 与响应文本。业务 schema、来源 ID、证据前缀、逐检查 reason 和检查数量保持严格；仅为本地 Qwen 解码提供去除 regex／uniqueItems 的语法视图，远程 API 仍收到完整 schema。对 r6 真实错误回复的 CPU grammar 回放确认，原 pattern grammar 接受了缺必填字段对象的字节作为未完前缀，新的语法视图会拒绝；不把该离线检查当成新的模型纠错结果。
+Stage 4 客户端现在在 JSON 解析前区分 output_token_limit、empty_response 和 provider_refusal，保留 finish_reason、usage 与响应文本。业务 schema、来源 ID、证据前缀、逐检查 reason 和检查数量保持严格；仅为本地 Qwen 解码提供去除 regex／uniqueItems 的语法视图，远程 json_schema 模式保留完整 wire schema；本服务显式使用 json_object 时，合同提示和 Python 验收仍保持。对 r6 真实错误回复的 CPU grammar 回放确认，原 pattern grammar 接受了缺必填字段对象的字节作为未完前缀，新的语法视图会拒绝；不把该离线检查当成新的模型纠错结果。
 
 截至入口实现时，针对性回归 232 passed、3 skipped。真实 API 首次调用在开发容器被既有 closeai-proxy 以 Tunnel connection failed: 403 Forbidden 拦截；该容器直连同一端点也 ConnectTimeout。属于连接失败，尚未获得模型响应，不是凭据已判无效或模型质量失败。为排查网络位置差异，提交 0 GPU 的 CPU 作业，入口 `scripts/run_wn18rr_api_cpu_cluster.sh`。详细尝试记录与最终状态以 `outputs/wn18rr-api-preflight-20261106/` 为准。
+
+
+用户补充代理后，已验证 `/root/.bashrc` 中的认证代理可达，并完成真实 API 调用。`--proxy-from-bashrc` 只读取 proxy exports，不执行文件里的其他命令；只在本测试进程配置环境。API 端点当前对 json_schema 请求返回 invalid_request_format，显式 json_object 模式已验证，默认模式未偷偷更改。可用 --reuse-text-knowledge 指向成功的 text-knowledge.json，源身份、原图和图谱验证通过后复用 Stage 1，避免重复生成掩盖下游失败。
+
+当前真实结果：新文本流程完成；历史坏文本触发一次实际 Reflect 并通过复评；固定旧描述的不确定性得到保留；已有真实 SDXL 图片的地理／比较／精确身份不再被当成已核实。详细证据、触发原因和限制见 `docs/evaluation/2026-11-06-api-closure.zh.md`。针对性回归 两组相关回归分别为 238 passed、3 skipped 与 109 passed（合计 347 passed、3 skipped），API 产物在 `outputs/wn18rr-api-preflight-20261106/`。
