@@ -42,3 +42,5 @@
 `r4`：固定旧描述与完整文本／真实 SDXL 均完成生成，原 rodent／marsupial／bandicoot 未进入精选事实或最终文本，8 条事实中选择 6 条，未选岩石地形和围栏。但模型仍普遍自评 1，且 uncertain_aspects=[]；仅能确认危险猜测未被升级，不能宣称已可靠结构化所有来源不确定性。固定描述控制中还出现 has body→dirt ground、has body→standing on 等关系表达不佳，说明单有权重并不能保证三元组语义正确，原始记录保留以供后续核验。
 
 该轮 Stage 4 在 LM Format Enforcer 下提前终止 JSON，真实 ranking_status=evaluation_failed；CLI 返回 0 不代表评审成功。为冒烟入口增加 final.json 的严格状态断言。定位到混合整数／null enum 不被该后端支持，将评分改为等价 anyOf，合法值仍仅为 0～4 或 null；证据前缀 regex 改写成能整串匹配任意非空后文的等价表达，避免只允许前缀加单个字符。严格语义解析和来源验收不变。实际服务环境对 r4 真实检查目标的文本／图片完整 grammar（含事实评分 null）均通过。下一轮只复评 r4 冻结候选，避免重新生成掩盖失败。
+
+LMFE 的 grammar 测试通过后，r5 真实长评审仍进入很长的生成／修复，未计为成功，停止的仍仅为本诊断作业。最终传输兼容方案恢复服务默认 auto 后端：Stage 1 的仅供解码 schema 移除 auto 后端不支持的 uniqueItems，完整业务 schema 和 Python 来源去重校验保持；重复引用仍被拒绝，不能靠重复引用加权。Stage 4 保留等价 nullable 分支与完整证据后文表达。已在实际服务环境编译 Stage 1 及 r4 真实 text/image 检查的 xgrammar，均通过；针对性回归 216 passed、3 skipped。r6 将先在默认后端验证固定旧描述，再独立复评 r4 冻结候选；控制实验失败也不阻断无依赖的 Stage 4 复评。

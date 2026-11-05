@@ -19,7 +19,6 @@ nvidia-smi
   --served-model-name Qwen/Qwen2-VL-7B-Instruct \
   --host 127.0.0.1 --port 12345 --dtype bfloat16 \
   --middleware mmkgc.adapters.request_deadline.RequestDeadlineMiddleware \
-  --structured-outputs-config '{"backend":"lm-format-enforcer"}' \
   --gpu-memory-utilization 0.45 --max-model-len 24576 \
   --limit-mm-per-prompt '{"image":4}' --max-num-seqs 2 --enforce-eager \
   >"${LOG_DIR}/server.log" 2>&1 &
@@ -31,6 +30,10 @@ for ((attempt=0; attempt<180; attempt++)); do
   if ((attempt == 179)); then echo 'Qwen startup timed out'; exit 3; fi
   sleep 5
 done
+CONTROL_FAILED=0
+if [[ "${TAOR_STAGE4_VISUAL_CONTROL:-0}" == 1 ]]; then
+  timeout 240 "${PY}" scripts/check_wn18rr_visual_extraction.py --output-root "${LOG_DIR}/fixed-caption-control" || CONTROL_FAILED=1
+fi
 "${PY}" -m mmkgc.doctor --dataset-type wn18rr \
   --dataset-dir datasets/wn18rr-import-20261106/WN18RR --graph-split train --missing-mode image \
   --stage1-reranker-model-dir /medisco/linjiashi/models/Qwen/Qwen3-Reranker-4B \
@@ -41,3 +44,4 @@ timeout 2400 "${PY}" scripts/run_wn18rr_reflection.py \
   --dataset-dir datasets/wn18rr-import-20261106/WN18RR \
   --stage4-config configs/stage4-qwen7b-local.yaml --output-root "${LOG_DIR}/closure"
 nvidia-smi
+exit "${CONTROL_FAILED}"

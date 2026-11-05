@@ -8,6 +8,7 @@ import pytest
 from mmkgc.adapters.evidence_reranker import rerank_knowledge_relevance
 from mmkgc.adapters.image_batches import merge_image_batches
 from mmkgc.adapters.image_knowledge import with_image_description, IMAGE_REF, DESCRIPTION_REF
+from mmkgc.adapters.json_contract import local_semantic_json_schema
 from mmkgc.data import EntityRecord
 from mmkgc.io.writer import _stage_artifact
 from mmkgc.ranking.context import build_ranking_context
@@ -67,6 +68,19 @@ def test_graph_answers_are_withheld_from_perception_but_preserved_in_merged_cata
     value["entity_profile"]["evidence_refs"] = ["evidence:kg:0001"]
     with pytest.raises(KnowledgeResponseValidationError):
         apply_knowledge_response(data, value)
+
+
+def test_decoder_compatibility_does_not_relax_source_reference_uniqueness():
+    _, data = inputs()
+    full = triple_response_schema(data)['properties']['extracted_triples']['items']['properties']
+    wire = local_semantic_json_schema(build_triple_prompt(data))['properties']['extracted_triples']['items']['properties']
+    assert full['evidence_refs']['uniqueItems'] is True
+    assert 'uniqueItems' not in wire['evidence_refs']
+    assert 'visual_support' in wire
+    triple = row()
+    triple['evidence_refs'] = [IMAGE_REF, IMAGE_REF]
+    with pytest.raises(KnowledgeResponseValidationError):
+        apply_knowledge_response(data, reply([triple]))
 
 
 def test_unselected_caption_guesses_cannot_bypass_fact_selection_into_generation():

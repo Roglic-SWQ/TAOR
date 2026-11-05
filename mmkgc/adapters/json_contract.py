@@ -66,6 +66,9 @@ def local_semantic_json_schema(prompt: str) -> dict[str, Any]:
         # in the application; the local decoder only constrains syntax/types.
         def syntax_only_strings(node):
             if isinstance(node, dict):
+                # vLLM 0.11 auto backends reject uniqueItems. Python's source
+                # validator remains authoritative for distinct reference IDs.
+                node.pop("uniqueItems", None)
                 if node.get("type") == "string":
                     node.pop("pattern", None)
                 for child in node.values():
