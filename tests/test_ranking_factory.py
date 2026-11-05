@@ -48,6 +48,45 @@ def test_openai_compatible_completion_client_uses_judge_token_floor(captured_req
     assert "response_format" not in captured["body"]
 
 
+@pytest.mark.parametrize('content,finish,code', [
+    ('{}', 'length', 'output_token_limit'), ('', 'length', 'output_token_limit'),
+    ('', 'stop', 'empty_response'), (None, 'stop', 'empty_response'),
+    ('   ', 'stop', 'empty_response'), ('', 'content_filter', 'provider_refusal'),
+])
+def test_incomplete_provider_reply_never_becomes_a_json_parse_failure(monkeypatch, content, finish, code):
+    client = factory._OpenAICompatibleCompletionClient(SimpleNamespace(
+        base_url='https://example.test/v1', model_name='api-model', api_key='', temperature=0,
+        max_token=4096), timeout_seconds=10)
+    monkeypatch.setattr(client, '_open_json_with_timeout', lambda req:
+        {'choices': [{'finish_reason': finish, 'message': {'content': content}}]})
+    with pytest.raises(factory.CompletionResponseError) as error:
+        client.complete('prompt')
+    assert error.value.code == code
+    assert error.value.details['finish_reason'] == finish
+
+
+@pytest.mark.parametrize('local', [True, False])
+def test_local_wire_compatibility_preserves_remote_schema_and_source_contract(captured_request, local):
+    from copy import deepcopy
+    schema = {'type': 'object', 'additionalProperties': False, 'properties': {
+        'evidence': {'type': 'array', 'uniqueItems': True, 'items': {
+            'type': 'string', 'pattern': '^text:'}}}, 'required': ['evidence']}
+    before = deepcopy(schema)
+    client = factory._OpenAICompatibleCompletionClient(SimpleNamespace(
+        base_url='http://localhost/v1' if local else 'https://example.test/v1',
+        model_name='Qwen/test' if local else 'api-model', api_key='', temperature=0,
+        max_token=4096), timeout_seconds=10)
+    assert client.complete_structured('prompt', schema) == '{}'
+    wire = captured_request['body']['response_format']['json_schema']['schema']
+    assert schema == before
+    if local:
+        assert 'pattern' not in wire['properties']['evidence']['items']
+        assert 'uniqueItems' not in wire['properties']['evidence']
+        assert wire['required'] == ['evidence'] and wire['additionalProperties'] is False
+    else:
+        assert wire == schema
+
+
 def test_openai_compatible_completion_client_can_target_gpt_4o_mini_api(
     captured_request,
 ) -> None:

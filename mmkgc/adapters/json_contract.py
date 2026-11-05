@@ -2,7 +2,26 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from typing import Any
+
+
+def decoder_safe_json_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Local decoder grammar only; business validators retain source constraints."""
+    result = deepcopy(schema)
+    def visit(node):
+        if isinstance(node, dict):
+            node.pop("uniqueItems", None)
+            # Local regex engines disagree about full matches and JSON escaping.
+            # Keep prefix/nonblank/source semantics in the application validator.
+            node.pop("pattern", None)
+            for child in node.values():
+                visit(child)
+        elif isinstance(node, list):
+            for child in node:
+                visit(child)
+    visit(result)
+    return result
 
 
 def _payload_from_prompt(prompt: str) -> dict[str, Any] | None:
@@ -60,24 +79,7 @@ def local_semantic_json_schema(prompt: str) -> dict[str, Any]:
     payload = _payload_from_prompt(prompt)
     if isinstance(payload, dict) and payload.get("schema") in {"grounded_triples_v1", "grounded_triples_v2"}:
         from mmkgc.stages.triples import triple_response_schema
-        schema = triple_response_schema(payload)
-        # This LM Format Enforcer cannot combine string patterns with lengths,
-        # and treats patterns as full matches. Keep nonblank/source validation
-        # in the application; the local decoder only constrains syntax/types.
-        def syntax_only_strings(node):
-            if isinstance(node, dict):
-                # vLLM 0.11 auto backends reject uniqueItems. Python's source
-                # validator remains authoritative for distinct reference IDs.
-                node.pop("uniqueItems", None)
-                if node.get("type") == "string":
-                    node.pop("pattern", None)
-                for child in node.values():
-                    syntax_only_strings(child)
-            elif isinstance(node, list):
-                for child in node:
-                    syntax_only_strings(child)
-        syntax_only_strings(schema)
-        return schema
+        return decoder_safe_json_schema(triple_response_schema(payload))
     if isinstance(payload, dict) and payload.get("repair_kind") == "stage1_targeted_repair_v1":
         return payload["response_schema"]
     if not all(f'"{key}"' in prompt for key in ('entity_profile', 'text_visual_profile', 'relation_facts')):

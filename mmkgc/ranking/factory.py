@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 from urllib import error, request
+from urllib.parse import urlsplit
 
 from mmkgc.ranking.profiles import (
     LocalScorerConfig,
@@ -145,6 +146,18 @@ def _compact_judge_image_url(image_data_url: str) -> str:
     return "data:image/jpeg;base64," + base64.b64encode(compact).decode("ascii")
 
 
+class CompletionResponseError(RuntimeError):
+    """Provider completion failure, distinct from parsing a complete judgment."""
+    def __init__(self, code, choice, payload):
+        super().__init__("ranking judge completion failed: " + code)
+        self.code = code
+        message = choice.get("message")
+        message = message if isinstance(message, dict) else {}
+        self.details = {"completion_failure": code, "finish_reason": choice.get("finish_reason"),
+                        "response_text": message.get("content"),
+                        "usage": payload.get("usage", {})}
+
+
 class _OpenAICompatibleCompletionClient:
     """Minimal GPT-4o mini judge client that never exposes API keys in outputs."""
 
@@ -206,6 +219,10 @@ class _OpenAICompatibleCompletionClient:
                 "max_tokens": self.max_tokens,
         }
         if response_schema is not None:
+            if ("qwen" in self.config.model_name.lower()
+                    and urlsplit(self.config.base_url).hostname in {"127.0.0.1", "localhost", "::1"}):
+                from mmkgc.adapters.json_contract import decoder_safe_json_schema
+                response_schema = decoder_safe_json_schema(response_schema)
             payload["response_format"] = {"type": "json_schema", "json_schema": {
                 "name": "stage4_judgment", "strict": True, "schema": response_schema,
             }}
@@ -223,12 +240,23 @@ class _OpenAICompatibleCompletionClient:
                     exc.headers, None,
                 ) from exc
             raise RuntimeError(f"GPT-4o mini ranking judge HTTP error: {exc.code}") from exc
-        content = (
-            payload.get("choices", [{}])[0]
-            .get("message", {})
-            .get("content", "")
-        )
-        return str(content)
+        if not isinstance(payload, dict):
+            raise CompletionResponseError("invalid_provider_response", {}, {})
+        choices = payload.get("choices")
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            raise CompletionResponseError("invalid_provider_response", {}, payload)
+        choice = choices[0]
+        if choice.get("finish_reason") == "length":
+            raise CompletionResponseError("output_token_limit", choice, payload)
+        message = choice.get("message")
+        if not isinstance(message, dict):
+            raise CompletionResponseError("invalid_provider_response", {}, payload)
+        if message.get("refusal") or choice.get("finish_reason") == "content_filter":
+            raise CompletionResponseError("provider_refusal", choice, payload)
+        content = message.get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise CompletionResponseError("empty_response", choice, payload)
+        return content
 
     def _open_json_with_timeout(self, req: request.Request) -> dict[str, Any]:
         # Use the same cancellable request deadline on Windows, POSIX, and
