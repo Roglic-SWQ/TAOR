@@ -28,6 +28,7 @@ PY
   --served-model-name Qwen/Qwen2-VL-7B-Instruct \
   --host 127.0.0.1 --port 12345 --dtype bfloat16 \
   --middleware mmkgc.adapters.request_deadline.RequestDeadlineMiddleware \
+  --structured-outputs-config '{"backend":"lm-format-enforcer"}' \
   --gpu-memory-utilization 0.45 --max-model-len 24576 \
   --limit-mm-per-prompt '{"image":4}' --max-num-seqs 2 --enforce-eager \
   >"${LOG_DIR}/server.log" 2>&1 &

@@ -30,3 +30,5 @@
 实际单卡入口：`scripts/run_wn18rr_visual_policy_cluster.sh`。它新建 attempt，先固定旧失败描述和同一原图，只重做 Stage 1 抽取，再运行单实体 Qwen 文本全流程以及真实 SDXL＋Stage 4。固定描述控制用于区分“描述变好了”和“抽取保留了不确定性”，不能单独作为全闭环质量改善证明。
 
 自动回归：图片／多图／音视频／三元组／共享选择／相关性／事实反思和新增策略测试 180 passed，1 skipped（当前推理环境未装 lm-format-enforcer）。另查 ranking context、Judge 和候选计划相关 266 项：当前与修改前 `2116d0b` 均为 202 passed、64 failed，逐项失败集合完全相同，无新增失败。63 项旧 context 测试主要仍使用已被主线移除的 missing_mode=both，另 1 项旧 Qwen Judge 摘要预期不匹配。保留该现状，不以修改旧测试预期掩盖失败。基线与当前 JUnit／日志在 `outputs/wn18rr-visual-policy-20261106/verification/`。
+
+首次单卡尝试 `taor-visual-policy-1106-r1`：真实 Qwen 初次输出缺少新增字段，触发合同修复；vLLM 0.11 默认 auto backend 未按请求中的旧 guided_decoding_backend 字段选用 LM Format Enforcer，语法编译以 `Unimplemented keys: uniqueItems` 返回 400。该次保留为失败，停止的仅是本次诊断作业。新的单卡入口显式指定服务端 `structured-outputs-config.backend=lm-format-enforcer`；完整 schema 与 Python 校验均保持，未删除去重约束或给缺失元数据补默认高置信度。
