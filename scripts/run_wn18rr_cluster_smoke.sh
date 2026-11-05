@@ -4,9 +4,13 @@ set -euo pipefail
 PROJECT_ROOT="/medisco/linjiashi/Code/TAOR"
 ART="${PROJECT_ROOT}/outputs/wn18rr-onboarding-20261106"
 PY="/medisco/linjiashi/venvs/taor-inference/bin/python"
-SERVER_PY="/medisco/linjiashi/miniforge3/envs/skillrl/bin/python"
+SERVER_PY="/medisco/linjiashi/venvs/taor-qwen7b/bin/python"
 mkdir -p "${ART}"
-exec >"${ART}/gpu-smoke.log" 2>&1
+ATTEMPT="${TAOR_SMOKE_ATTEMPT:-$(date -u +%Y%m%dT%H%M%S)}"
+LOG_DIR="${ART}/attempt-${ATTEMPT}"
+mkdir "${LOG_DIR}"
+export TAOR_SMOKE_LOG_DIR="${LOG_DIR}"
+exec >"${LOG_DIR}/gpu-smoke.log" 2>&1
 cd "${PROJECT_ROOT}"
 export PYTHONPATH="${PROJECT_ROOT}"
 export NO_PROXY=127.0.0.1,localhost
@@ -25,9 +29,10 @@ done
     --model /medisco/linjiashi/models/Qwen/Qwen2-VL-7B-Instruct \
     --served-model-name Qwen/Qwen2-VL-7B-Instruct \
     --host 127.0.0.1 --port 12345 --dtype bfloat16 \
+    --middleware mmkgc.adapters.request_deadline.RequestDeadlineMiddleware \
     --gpu-memory-utilization 0.45 --max-model-len 12288 \
     --limit-mm-per-prompt '{"image":4}' --max-num-seqs 2 --enforce-eager \
-    >"${ART}/qwen-server.log" 2>&1 &
+    >"${LOG_DIR}/qwen-server.log" 2>&1 &
 SERVER_PID=$!
 trap 'kill "${SERVER_PID}" 2>/dev/null || true; wait "${SERVER_PID}" 2>/dev/null || true' EXIT
 for ((attempt=0; attempt<180; attempt++)); do
@@ -40,8 +45,8 @@ COMMON=(--dataset-type wn18rr --dataset-dir datasets/wn18rr-import-20261106/WN18
     --graph-split train --entity-manifest "${ART}/one-entity.json" --limit 1
     --stage1-reranker-model-dir /medisco/linjiashi/models/Qwen/Qwen3-Reranker-4B
     --stage1-reranker-device cuda:0 --sdxl-device cuda:0 --candidate-budget 1
-    --model-call-timeout-seconds 120 --skip-stage4 --output-root "${ART}/runs")
-"${PY}" -m mmkgc.doctor "${COMMON[@]}" --missing-mode image >"${ART}/doctor-gpu.json"
+    --model-call-timeout-seconds 120 --skip-stage4 --output-root "${LOG_DIR}/runs")
+"${PY}" -m mmkgc.doctor "${COMMON[@]}" --missing-mode image >"${LOG_DIR}/doctor-gpu.json"
 timeout 1200 "${PY}" -m mmkgc.run "${COMMON[@]}" --missing-mode text --run-name text-qwen7b
 # Real SDXL pipeline call; a prompt-only result does not satisfy this check.
 timeout 1200 "${PY}" -m mmkgc.run "${COMMON[@]}" --missing-mode image --run-name image-qwen7b-sdxl \
@@ -49,9 +54,9 @@ timeout 1200 "${PY}" -m mmkgc.run "${COMMON[@]}" --missing-mode image --run-name
     --sdxl-width 1024 --sdxl-height 1024 --sdxl-steps 20 --sdxl-seed 20260708
 "${PY}" - <<'PY'
 from pathlib import Path
-import json
+import json, os
 from PIL import Image
-root=Path('outputs/wn18rr-onboarding-20261106')
+root=Path(os.environ['TAOR_SMOKE_LOG_DIR'])
 images=list((root/'runs/image-qwen7b-sdxl').glob('entities/**/generated_images/*.png'))
 if not images:
     images=list((root/'runs/image-qwen7b-sdxl').glob('entities/**/*.png'))
