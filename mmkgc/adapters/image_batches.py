@@ -37,10 +37,18 @@ def merge_image_batches(inputs: dict[str, Any], batches: list[dict[str, Any]]) -
     profile = deepcopy(batches[0]["stage1_v3"]["entity_profile"])
     for batch in batches:
         for fact in batch["relation_facts"]:
-            refs = [ref for ref in fact["evidence_refs"] if ref in source_refs]
+            observations = fact.get("visual_observations", [])
+            observed_refs = {ref for item in observations for ref in item["evidence_refs"]}
+            for observation in observations:
+                triples.append({**{key: fact[key] for key in ("subject", "relation", "object")},
+                    "evidence_refs": list(observation["evidence_refs"]),
+                    "visual_support": {key: deepcopy(value) for key, value in observation.items()
+                                       if key != "evidence_refs"}})
+            refs = [ref for ref in fact["evidence_refs"] if ref in source_refs and ref not in observed_refs]
             if refs:
                 triples.append({**{key: fact[key] for key in ("subject", "relation", "object")},
-                                "evidence_refs": refs})
+                                "evidence_refs": refs,
+                                **({"visual_support": None} if inputs.get("visual_fact_policy") else {})})
         for gap in batch["uncertainties"]:
             key = json.dumps(gap, sort_keys=True, ensure_ascii=False)
             if key not in seen_gaps:

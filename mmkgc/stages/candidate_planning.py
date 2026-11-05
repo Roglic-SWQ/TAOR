@@ -8,6 +8,7 @@ from typing import Any
 
 from mmkgc.stages.modeling import entity_context
 from mmkgc.stages.triples import TRIPLE_SCHEMAS
+from mmkgc.stages.visual_evidence import generation_eligible
 from mmkgc.stages.relation_planning import RelationPlanValidationError
 from mmkgc.plan_schema import (
     CANDIDATE_PLAN_SCHEMA as PLAN_SCHEMA, LEGACY_CANDIDATE_PLAN_SCHEMA as LEGACY_PLAN_SCHEMA,
@@ -16,19 +17,19 @@ from mmkgc.plan_schema import (
 )
 
 SELECTION_SOURCE = "stage2_candidate_plan"
-FACT_SELECTION_PROMPT_VERSION = "entity_semantics_fact_selection_v2"
+FACT_SELECTION_PROMPT_VERSION = "entity_semantics_fact_selection_v3"
 
 
 def planning_facts(knowledge: dict[str, Any]) -> list[dict[str, Any]]:
     """A bounded retrieval view, never a replacement for the full fact catalogue."""
     selection = knowledge.get("relevance_selection")
     if selection is None:
-        return knowledge["relation_facts"]
+        return [fact for fact in knowledge["relation_facts"] if generation_eligible(fact)]
     facts = {fact["fact_id"]: fact for fact in knowledge["relation_facts"]}
     ids = selection["selected_fact_ids"]
     if len(ids) != len(set(ids)) or any(ref not in facts for ref in ids):
         raise ValueError("invalid relevance retrieval fact references")
-    return [facts[ref] for ref in ids]
+    return [facts[ref] for ref in ids if generation_eligible(facts[ref])]
 
 
 def candidate_plan_schema(knowledge: dict[str, Any], budget: int) -> dict[str, Any]:
@@ -81,6 +82,7 @@ def candidate_plan_prompt(label: str, mode: str, knowledge: dict[str, Any], budg
         ("triples" if knowledge.get("schema_version") in TRIPLE_SCHEMAS else "relation_facts"): [{key: deepcopy(fact[key]) for key in (
             "fact_id", "subject", "relation", "object", "direction", "claim", "evidence_refs",
             "source_modalities", "relevance_score", "relevance_rank", "relevance_status",
+            "visual_observations", "source_weight", "selection_score", "generation_eligible",
             "evidence_match_score", "scoring_status") if key in fact}
             for fact in facts],
         "evidence_catalog": [item for item in knowledge.get("evidence_catalog", []) if item["evidence_id"] in refs],
@@ -160,6 +162,11 @@ def fact_selection_prompt(label: str, mode: str, knowledge: dict[str, Any],
         "may be useful for images, but do not establish appearance, people or settings. "
         "Preserve subject/relation/object, direction, attribution and qualifications. "
         "Relevance scores indicate task usefulness, not truth. Select only supplied fact IDs with "
+        "source evidence. source_weight is a conservative source policy weight, not a calibrated "
+        "truth probability; selection_score combines it with relevance. Prefer distinguishing target "
+        "details to incidental scene inventory. Read visual_observations and preserve their scope "
+        "and qualifications; an image or its generated description does not establish invisible taxonomy. "
+        "Uncertain/inferred image observations are retained upstream but are not selectable facts. Select only IDs with "
         "source evidence. selected_fact_ids may contain ONLY exact values from allowed_fact_ids, "
         "which are the fact_id fields in the supplied triples or relation_facts. "
         "evidence_refs and evidence_catalog contain source references, NOT selectable fact IDs: "

@@ -301,6 +301,7 @@ def _compact_stage1_modeling(payload: dict[str, Any]) -> dict[str, Any]:
             "uncertain_aspects": v3.get("uncertain_aspects", []),
             "evidence_catalog": payload["evidence_catalog"],
             "modality_state": v3["modality_state"],
+            **({"visual_fact_policy": v3["visual_fact_policy"]} if "visual_fact_policy" in v3 else {}),
             **({"relevance_selection": payload["relevance_selection"]} if "relevance_selection" in payload else {}),
             **{key: payload[key] for key in ("image_modeling", "media_modeling", "source_inputs", "source_extraction") if key in payload},
             **({"evidence_selection": v3["evidence_selection"]} if "evidence_selection" in v3 else {}),

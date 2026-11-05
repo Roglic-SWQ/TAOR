@@ -8,6 +8,7 @@ from typing import Any
 from mmkgc.observation import compile_verification_targets
 from mmkgc.stages.candidate_planning import PLAN_SCHEMAS, SELECTION_SOURCE as CANDIDATE_SOURCE
 from mmkgc.stages.triples import fact_text
+from mmkgc.stages.visual_evidence import generation_eligible
 from mmkgc.plan_schema import FACT_SELECTION_SCHEMA
 
 SELECTION_SOURCE = "stage2_fact_plan"
@@ -127,6 +128,8 @@ def _compile_candidate_context(knowledge, selection, modality):
     for candidate in payload["candidates"]:
         candidate["plan_schema_version"] = payload["schema_version"]
         sources = [deepcopy(facts[ref]) for ref in candidate["fact_ids"]]
+        if any(not generation_eligible(fact) for fact in sources):
+            raise ValueError("uncertain or incidental image observations cannot become generation requirements")
         for fact in sources:
             selected[fact["fact_id"]] = {
                 **fact, "fact": fact_text(fact),

@@ -266,6 +266,7 @@ def rerank_knowledge_relevance(knowledge: dict[str, Any], scorer: Any, target_mo
         raise ValueError("unknown target modality")
     if any(type(value) is not int or value <= 0 for value in (fact_budget, batch_size)):
         raise ValueError("fact_budget and batch_size must be positive integers")
+    from mmkgc.stages.visual_evidence import generation_eligible, selection_priority
     result = deepcopy(knowledge)
     entity = result.get("entity", {})
     profile = result.get("stage1_v3", {}).get("entity_profile", result.get("entity_profile", {}))
@@ -298,6 +299,7 @@ def rerank_knowledge_relevance(knowledge: dict[str, Any], scorer: Any, target_mo
             if isinstance(score, bool) or not isinstance(score, (int, float)) or not math.isfinite(score) or not 0 <= score <= 1:
                 raise ValueError("reranker must return a finite relevance score in [0, 1]")
             fact.update(relevance_score=float(score), relevance_status="scored")
+            fact["selection_score"] = float(score) * fact.get("source_weight", 1.0)
             if isinstance(calls, list) and start + index < len(calls):
                 ref = f"stage1_relevance_reranker:{start + index + 1:04d}"
                 calls[start + index].pop("evidence_match_score", None)
@@ -305,7 +307,7 @@ def rerank_knowledge_relevance(knowledge: dict[str, Any], scorer: Any, target_mo
                     fact_id=fact["fact_id"], model_call_ref=ref, score_semantics="task_relevance_not_truth",
                     prompt_version=RELEVANCE_PROMPT_VERSION)
                 fact["model_call_ref"] = ref
-    ranked = sorted(facts, key=lambda fact: (-fact["relevance_score"], fact["fact_id"]))
+    ranked = sorted(facts, key=lambda fact: (-selection_priority(fact), fact["fact_id"]))
     relations = {}
     for rank, fact in enumerate(ranked, 1):
         fact["relevance_rank"] = rank
@@ -318,7 +320,9 @@ def rerank_knowledge_relevance(knowledge: dict[str, Any], scorer: Any, target_mo
         "schema_version": "task_relevance_retrieval_v1", "target_modality": target_modality,
         "prompt_version": RELEVANCE_PROMPT_VERSION,
         "query": query, "fact_budget": fact_budget, "catalog_fact_count": len(facts),
-        "selected_fact_ids": [fact["fact_id"] for fact in ranked[:fact_budget]],
+        "selected_fact_ids": [fact["fact_id"] for fact in ranked if generation_eligible(fact)][:fact_budget],
+        "ineligible_fact_ids": [fact["fact_id"] for fact in ranked if not generation_eligible(fact)],
+        "selection_semantics": "task_relevance_times_source_policy_weight",
         "relations": list(relations.values()), "score_semantics": "task_relevance_not_truth",
     }
     return result

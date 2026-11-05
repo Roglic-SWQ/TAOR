@@ -35,6 +35,7 @@ def fixture(tmp_path):
 def extraction(refs=None):
     return {"entity_profile": {"primary_type": "drawing", "core_identity": "Scene", "evidence_refs": [IMAGE_REF]},
         "extracted_triples": [{"subject": "Scene", "relation": "contains", "object": "a blue circle",
+                               "visual_support": {"basis": "direct", "scope": "target", "confidence": 0.95, "uncertainty": ""},
                                "evidence_refs": refs if refs is not None else [DESCRIPTION_REF, IMAGE_REF]}],
         "uncertain_aspects": []}
 

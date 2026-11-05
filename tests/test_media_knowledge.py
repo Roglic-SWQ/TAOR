@@ -163,7 +163,9 @@ def test_silent_video_has_frames_without_inventing_audio(media_files, tmp_path, 
 
 def test_image_video_audio_have_separate_descriptions_then_one_joint_extraction(media_files, monkeypatch):
     target = record(media_files, ("image", "video", "audio"))
-    requests, _ = transport(monkeypatch, ["An image.", "Video timeline.", "Audio timeline.", json.dumps(extraction())])
+    audio_extraction = extraction()
+    audio_extraction["extracted_triples"][0]["visual_support"] = None
+    requests, _ = transport(monkeypatch, ["An image.", "Video timeline.", "Audio timeline.", json.dumps(audio_extraction)])
     client = planner(media_files)
     result = run(client, target)
     assert [call["stage"] for call in client.calls] == ["stage1_image_description", "stage1_video_description",

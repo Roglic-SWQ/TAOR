@@ -36,6 +36,8 @@ TEXT_RULES = (
     "Preserve who did what to whom: read subject/relation/object as supplied; direction marks "
     "the target's position and does not reverse the triple. Keep names, values, negation, "
     "uncertainty, attribution and temporal or spatial qualifiers accurate. Keep attributes "
+    "Source weights are selection policy, not truth probabilities. Respect visual_observations: "
+    "visible appearance does not establish taxonomy or other non-visible identity claims. "
     "attached to the entity they describe. Leave unresolved details qualified or omit them "
     "rather than guess.\n\n"
     "Keep the target entity central. Combine related facts into coherent prose with clear "

@@ -4,6 +4,10 @@ from __future__ import annotations
 from copy import deepcopy
 import json
 from typing import Any, Mapping
+from mmkgc.stages.visual_evidence import (
+    VISUAL_FACT_POLICY, visual_support_schema, valid_visual_support,
+    bind_visual_observations, MIN_VISUAL_CONFIDENCE,
+)
 
 TRIPLE_SCHEMA = "grounded_triples_v2"
 TRIPLE_SCHEMAS = {"grounded_triples_v1", TRIPLE_SCHEMA}
@@ -81,9 +85,12 @@ def triple_response_schema(inputs: Mapping[str, Any]) -> dict[str, Any]:
         if required:
             result["minItems"] = 1
         return result
-    triples = {"type": "array", "items": obj({
+    triple_fields = {
         "subject": text, "relation": text, "object": text,
-        "evidence_refs": refs(source_refs, required=True)})}
+        "evidence_refs": refs(source_refs, required=True)}
+    if inputs.get("visual_fact_policy") == VISUAL_FACT_POLICY:
+        triple_fields["visual_support"] = {"anyOf": [visual_support_schema(), {"type": "null"}]}
+    triples = {"type": "array", "items": obj(triple_fields)}
     if not source_refs:
         triples["maxItems"] = 0
     return obj({
@@ -157,8 +164,9 @@ def build_triple_prompt(inputs: dict[str, Any], errors: list[dict[str, Any]] | N
             "spatial information as the target's composition or attributes rather than unrelated component "
             "triples. Use the exact target as subject; relation names such as contains, left-side object, "
             "right-side object, has layout or background color may describe the actual observed detail "
-            "in the object. Do not drop supported colors, shapes, layout or background merely to satisfy "
-            "target anchoring. Do not invent details to fill those relation types. "
+            "in the object. Keep distinguishing target colors, shapes and layout; include scene "
+            "context only when needed to understand the target. Do not inventory incidental background "
+            "details. Do not invent details to fill those relation types. "
             "For every extracted triple based on an image source, cite existing:image:original; also cite "
             "existing:image_summary when using the generated description. Keep textual or graph context "
             "separate from what is visually established. Return the usual full extraction response."
@@ -193,14 +201,38 @@ def build_triple_prompt(inputs: dict[str, Any], errors: list[dict[str, Any]] | N
             "EVERY audio-derived triple, including absence of sounds and timing/duration facts, MUST "
             "cite existing:audio:original, even when a description already states the same detail."
         )
+    if inputs.get("visual_fact_policy") == VISUAL_FACT_POLICY:
+        parts.append(
+            "VISUAL SUPPORT: Each extracted item also has visual_support. For image-derived items "
+            "return {basis: direct or inferred, scope: target or context or background, confidence: "
+            "a number in [0,1], uncertainty: a string}. Use null for items with no image evidence. "
+            "direct means the whole assertion is visibly established, not merely plausible. "
+            "Exact taxonomy, origin and other non-visible claims are inferred unless independently "
+            "established; graph context does not turn an image guess into direct observation. "
+            "target means a distinguishing property or action of the target; context means a scene "
+            "detail necessary to understand it; omit incidental background when possible. "
+            "Preserve source hedges, alternatives, conflicts and qualifications in uncertainty. "
+            "Never split 'possibly A or B' into certain A and B. Keep the unresolved alternative "
+            "together as an inferred observation with a nonempty uncertainty explanation. "
+            "An original image may correct a caption; explain unresolved disagreement rather than "
+            "silently upgrading a guess. Confidence is your uncalibrated assessment, not truth. "
+            "Inferred, uncertain, incidental or low-confidence observations are retained for audit "
+            "and excluded from assertive generation. No need to fill a quota."
+            " The entity_profile must not promote inferred or uncertain image claims into identity; "
+            "use graph-backed identity or direct eligible observations, otherwise use entity and the target label."
+        )
     if errors is not None:
         parts.extend(["Return a COMPLETE corrected response from the original sources; prior replies are not evidence.",
                       "VALIDATION_FEEDBACK_JSON:\n" + json.dumps(errors, ensure_ascii=False)])
     if extraction_key(inputs) == "text_triples":
         parts[0] = parts[0].replace("extracted_triples", "text_triples")
-    parts.append("Each " + extraction_key(inputs) + " item has exactly this shape: " + json.dumps({
+    example = {
         "subject": "original subject", "relation": "original relation", "object": "original object",
-        "evidence_refs": ["existing modality evidence ID"]}))
+        "evidence_refs": ["existing modality evidence ID"]}
+    if inputs.get("visual_fact_policy") == VISUAL_FACT_POLICY:
+        example["visual_support"] = {"basis": "inferred", "scope": "target", "confidence": 0.5,
+                                     "uncertainty": "Preserve the source's unresolved qualification here"}
+    parts.append("Each " + extraction_key(inputs) + " item has exactly this shape: " + json.dumps(example))
     parts.extend(["Response JSON shape:\n" + json.dumps({
         "entity_profile": {"primary_type": "", "core_identity": "", "evidence_refs": []},
         extraction_key(inputs): [], "uncertain_aspects": []}, ensure_ascii=False),
@@ -241,8 +273,12 @@ def triple_response_errors(inputs: dict[str, Any], response: Any) -> list[dict[s
     else:
         for index, triple in enumerate(triples):
             path = f"/{extracted_field}/{index}"
-            if not isinstance(triple, dict) or set(triple) != {"subject", "relation", "object", "evidence_refs"}:
-                add("invalid_triple_fields", path, "provide subject, relation, object and evidence_refs")
+            fields = {"subject", "relation", "object", "evidence_refs"}
+            visual_policy = inputs.get("visual_fact_policy") == VISUAL_FACT_POLICY
+            if visual_policy:
+                fields.add("visual_support")
+            if not isinstance(triple, dict) or set(triple) != fields:
+                add("invalid_triple_fields", path, "provide exactly " + ", ".join(sorted(fields)))
                 continue
             for key in ("subject", "relation", "object"):
                 if not nonempty(triple[key]):
@@ -252,6 +288,13 @@ def triple_response_errors(inputs: dict[str, Any], response: Any) -> list[dict[s
             refs(triple["evidence_refs"], path + "/evidence_refs", allowed_sources, required=True)
             if isinstance(triple["evidence_refs"], list):
                 cited = [catalog.get(ref, {}) for ref in triple["evidence_refs"] if isinstance(ref, str)]
+                if visual_policy:
+                    image_derived = any(item.get("modality") == "image" for item in cited)
+                    support = triple["visual_support"]
+                    if (image_derived and not valid_visual_support(support)) or (not image_derived and support is not None):
+                        add("invalid_visual_support", path + "/visual_support",
+                            "image facts need basis, scope, finite confidence in [0,1] and uncertainty; "
+                            "inferred facts need nonempty uncertainty; non-image facts use null")
                 processed = set(inputs.get("media_modeling", {}))
                 if inputs.get("image_modeling"):
                     processed.add("image")
@@ -298,6 +341,7 @@ def apply_triple_response(inputs: dict[str, Any], response: dict[str, Any]) -> d
     extracted = sorted(response[extraction_key(inputs)], key=lambda item: tuple(item[name].strip()
                        for name in ("subject", "relation", "object")))
     next_id = 1
+    observations = {}
     for triple in extracted:
         key = tuple(triple[name].strip() for name in ("subject", "relation", "object"))
         if key not in facts:
@@ -308,17 +352,32 @@ def apply_triple_response(inputs: dict[str, Any], response: dict[str, Any]) -> d
                           "evidence_refs": []}
             next_id += 1
         facts[key]["evidence_refs"] = sorted(set(facts[key]["evidence_refs"] + triple["evidence_refs"]))
-    for fact in facts.values():
+        if triple.get("visual_support") is not None:
+            observations.setdefault(key, []).append({**deepcopy(triple["visual_support"]),
+                                                     "evidence_refs": list(triple["evidence_refs"])})
+    gaps = deepcopy(response["uncertain_aspects"])
+    for key, fact in facts.items():
+        if inputs.get("visual_fact_policy") == VISUAL_FACT_POLICY:
+            bind_visual_observations(fact, observations.get(key, []), catalog)
+            if not fact["generation_eligible"]:
+                gap = {"aspect": fact_text(fact), "reason": "; ".join(dict.fromkeys(
+                    item["uncertainty"].strip() or "Incidental background or insufficient direct visual confidence"
+                    for item in fact["visual_observations"]))}
+                if gap not in gaps:
+                    gaps.append(gap)
         fact["evidence_bundle"] = [deepcopy(catalog[ref]) for ref in fact["evidence_refs"]]
         fact["evidence_triples"] = [fact_text(fact)]
         fact["fact_type"] = "source_triple"
         fact["source_modalities"] = sorted({catalog[ref].get("modality", "graph") for ref in fact["evidence_refs"]})
         fact["relevance_status"], fact["relevance_score"] = "pending", None
     profile = deepcopy(response["entity_profile"])
-    gaps = deepcopy(response["uncertain_aspects"])
     schema = inputs.get("schema", TRIPLE_SCHEMA)
     v3 = {"schema_version": schema, "entity_profile": profile, "uncertain_aspects": gaps,
           "modality_state": {"targets": [inputs["target_modality"]], "existing": deepcopy(inputs["existing_modalities"])}}
+    if inputs.get("visual_fact_policy") == VISUAL_FACT_POLICY:
+        v3["visual_fact_policy"] = {"schema_version": VISUAL_FACT_POLICY,
+            "min_direct_confidence": MIN_VISUAL_CONFIDENCE, "context_multiplier": 0.5,
+            "weight_semantics": "conservative_selection_policy_not_truth_probability"}
     if "evidence_selection" in inputs:
         v3["evidence_selection"] = deepcopy(inputs["evidence_selection"])
     return {"schema_version": schema, "entity": deepcopy(inputs["entity"]), "stage1_v3": v3,

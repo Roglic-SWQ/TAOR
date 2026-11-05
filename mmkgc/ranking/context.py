@@ -39,6 +39,7 @@ _PROFILE_FIELDS = (
 )
 _KEY_ATTRIBUTE_FIELDS = frozenset({"attribute", "attribute_type", "source", "evidence"})
 _RELATION_FACT_FIELDS = (
+    "visual_observations", "source_weight", "selection_score",
     "fact_id", "source_fact_refs", "evidence_refs", "evidence_match_score", "source_modalities",
     "selection_source", "selected_role", "source_plan_id",
     "relation",
@@ -81,6 +82,7 @@ _RELATION_FACT_FIELDS = (
     "uncertain",
 )
 _SUPPORTED_FACT_FIELDS = (
+    "visual_observations", "source_weight", "selection_score",
     "fact_id", "source_fact_refs", "evidence_refs", "evidence_match_score", "source_modalities",
     "selection_source", "selected_role", "source_plan_id",
     "fact",
@@ -416,7 +418,26 @@ def _sanitize_flat_fact(
         if key not in value:
             continue
         item = value.get(key)
-        if key == "source_relations":
+        if key == "visual_observations":
+            from mmkgc.stages.visual_evidence import valid_visual_support
+            if not isinstance(item, (list, tuple)):
+                return {}
+            observations = []
+            for observation in item:
+                if not isinstance(observation, Mapping) or set(observation) != {
+                        "basis", "scope", "confidence", "uncertainty", "evidence_refs"}:
+                    return {}
+                support = {name: observation[name] for name in ("basis", "scope", "confidence", "uncertainty")}
+                refs = _strict_provenance_sequence(observation["evidence_refs"])
+                if not valid_visual_support(support) or not refs:
+                    return {}
+                observations.append({**support, "evidence_refs": refs})
+            result[key] = observations
+        elif key in {"source_weight", "selection_score"}:
+            if type(item) not in (int, float) or not math.isfinite(item) or not 0 <= item <= 1:
+                return {}
+            result[key] = item
+        elif key == "source_relations":
             sequence = _strict_provenance_sequence(
                 item,
             )

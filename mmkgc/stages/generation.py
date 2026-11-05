@@ -425,7 +425,8 @@ def _model_generation_context(
     if item.get("fact_ids"):
         selected_facts = item["source_facts"]
         source_facts = [{key: deepcopy(fact[key]) for key in (
-            "fact_id", "claim", "subject", "relation", "object", "direction", "evidence_refs") if key in fact}
+            "fact_id", "claim", "subject", "relation", "object", "direction", "evidence_refs",
+            "visual_observations", "source_weight", "selection_score") if key in fact}
             for fact in selected_facts]
     elif item.get("fact_id"):
         for fact_id in dict.fromkeys([item["fact_id"], *item.get("supporting_fact_ids", [])]):
@@ -434,6 +435,7 @@ def _model_generation_context(
                 raise ValueError(f"generation source fact missing: {fact_id}")
             source_facts.append({key: deepcopy(fact[key]) for key in (
                 "fact_id", "claim", "subject", "relation", "object", "direction", "evidence_refs",
+                "visual_observations", "source_weight", "selection_score",
             ) if key in fact})
     else:
         source_facts = [{"claim": fact} for fact in _facts_for_relation(item, knowledge, reasoning, modality)]

@@ -47,8 +47,13 @@ def response(indices, *, descriptions=False, gaps=None):
     return {"entity_profile": {"primary_type": "building", "core_identity": "Scene",
                               "evidence_refs": [original_ref(indices[0])]},
         "extracted_triples": [{"subject": "Scene", "relation": "wall material", "object": "red brick",
+            "visual_support": direct(),
             "evidence_refs": [original_ref(index)] + ([description_ref(index)] if descriptions else [])}
             for index in indices], "uncertain_aspects": gaps or []}
+
+
+def direct():
+    return {"basis": "direct", "scope": "target", "confidence": 0.95, "uncertainty": ""}
 
 
 def transport(monkeypatch, replies, on_request=None):
@@ -89,6 +94,7 @@ def test_three_images_are_described_separately_then_jointly_extracted_and_dedupl
     original = [path.read_bytes() for path in paths]
     extraction = response([1, 2, 3], descriptions=True)
     extraction["extracted_triples"].append({"subject": "Scene", "relation": "entrance shape", "object": "arch",
+                                           "visual_support": direct(),
                                            "evidence_refs": [original_ref(3)]})
     requests, _ = transport(monkeypatch, ["View one.", "View two.", "View three.", extraction])
     client = planner(tmp_path)
@@ -178,6 +184,7 @@ def test_multiple_images_and_original_audio_share_one_extraction(tmp_path, monke
     target.existing_modalities["audio"] = "source.wav"
     extraction = response([1, 2])
     extraction["extracted_triples"].append({"subject": "Scene", "relation": "audio contains sound",
+        "visual_support": None,
         "object": "silence", "evidence_refs": ["existing:audio:original", "existing:audio_summary"]})
     requests, _ = transport(monkeypatch, ["First image.", "Second image.", "Silent audio.", extraction])
     result = run(planner(tmp_path), target)
@@ -192,8 +199,8 @@ def test_view_specific_details_and_reported_conflicts_are_not_erased(tmp_path, m
     gap = {"aspect": "front door color", "reason": "The originals disagree; exact color is uncertain."}
     extraction = response([1, 2], gaps=[gap])
     extraction["extracted_triples"] += [
-        {"subject": "Scene", "relation": "left facade material", "object": "stone", "evidence_refs": [original_ref(1)]},
-        {"subject": "Scene", "relation": "right facade material", "object": "brick", "evidence_refs": [original_ref(2)]}]
+        {"subject": "Scene", "relation": "left facade material", "object": "stone", "evidence_refs": [original_ref(1)], "visual_support": direct()},
+        {"subject": "Scene", "relation": "right facade material", "object": "brick", "evidence_refs": [original_ref(2)], "visual_support": direct()}]
     transport(monkeypatch, ["First view.", "Second view.", extraction])
     result = run(planner(tmp_path), target)
     assert result["uncertainties"] == [gap]

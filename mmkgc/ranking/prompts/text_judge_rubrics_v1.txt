@@ -12,6 +12,7 @@ EVIDENCE RULES
 5. Only supported information can earn coverage credit. Unverified additions receive neither factual-error penalties nor extra coverage credit merely for being detailed. Report them separately, so a high consistency score is not presented as verification of the entire description.
 6. Use supported, contradicted, missing, uncertain, or unverifiable for each CHECK_TARGET. Use missing only for a relevant, expressible fact whose absence can actually be established. Distinguish “this source does not support the statement” from “reliable evidence contradicts the statement.”
 7. If supplied sources conflict or their time qualifications differ, preserve the uncertainty instead of inventing a resolution. Do not treat a valid past state as an unqualified current fact.
+8. visual_observations record source-specific basis, scope, confidence and uncertainty. Respect these qualifications; an inferred alternative is not a confirmed classification. source_weight and selection_score are selection policy signals, not verified truth probabilities. A generated image description and its original image share one source, not independent confirmation.
 
 RUBRICS
 Score each dimension independently with an integer from 0 to 4. Give a concise reason and concrete text evidence. Do not reward length, elaborate prose, confident tone, or repetition. Do not infer downstream model performance from writing quality.
