@@ -32,3 +32,5 @@
 自动回归：图片／多图／音视频／三元组／共享选择／相关性／事实反思和新增策略测试 180 passed，1 skipped（当前推理环境未装 lm-format-enforcer）。另查 ranking context、Judge 和候选计划相关 266 项：当前与修改前 `2116d0b` 均为 202 passed、64 failed，逐项失败集合完全相同，无新增失败。63 项旧 context 测试主要仍使用已被主线移除的 missing_mode=both，另 1 项旧 Qwen Judge 摘要预期不匹配。保留该现状，不以修改旧测试预期掩盖失败。基线与当前 JUnit／日志在 `outputs/wn18rr-visual-policy-20261106/verification/`。
 
 首次单卡尝试 `taor-visual-policy-1106-r1`：真实 Qwen 初次输出缺少新增字段，触发合同修复；vLLM 0.11 默认 auto backend 未按请求中的旧 guided_decoding_backend 字段选用 LM Format Enforcer，语法编译以 `Unimplemented keys: uniqueItems` 返回 400。该次保留为失败，停止的仅是本次诊断作业。新的单卡入口显式指定服务端 `structured-outputs-config.backend=lm-format-enforcer`；完整 schema 与 Python 校验均保持，未删除去重约束或给缺失元数据补默认高置信度。
+
+第二次尝试 `r2`：固定旧描述控制成功执行，但发现模型直接复制可见的图谱 mouse deer，把来源误标为 image direct/confidence=1，并未保留旧描述中的相关猜测。这不算来源语义保留成功。文本全流程结果已保存，随后仅停止本诊断作业，保留所有产物。由此增加输入隔离：新视觉策略的 perception payload 不展示图谱实例、关系计数和图谱证据内容；实体 profile 同样不能引用未展示图谱。完整图谱继续由程序保留、合并，未丢弃。明确要求将有意义的未决源猜测写入 uncertain_aspects，即使不作为抽取三元组。该改动避免照抄图谱后再伪装成视觉证据，不保证消除由实体名称或模型记忆产生的推断。

@@ -32,6 +32,9 @@ def model_input_view(inputs: dict[str, Any], limit: int = 32) -> dict[str, Any]:
                 examples.append(groups[key][index])
         if len(examples) >= limit:
             break
+    source_only = inputs.get("visual_fact_policy") == VISUAL_FACT_POLICY
+    if source_only:
+        examples = []
     refs = {ref for fact in examples for ref in fact["evidence_refs"]}
     image_modeling = inputs.get("image_modeling", {})
     image_fields = ("schema_version", "description_evidence_ref", "original_image_ref", "extraction_uses_original_image")
@@ -50,8 +53,10 @@ def model_input_view(inputs: dict[str, Any], limit: int = 32) -> dict[str, Any]:
                 "schema_version", "description_evidence_ref", "original_media_ref", "extraction_uses_original_media", "input_coverage")}
                 for modality, entry in inputs["media_modeling"].items()}} if "media_modeling" in inputs else {}),
             "graph_catalogue_fact_count": len(inputs["fact_candidates"]),
-            "graph_relation_counts": [{"relation": key[0], "direction": key[1], "count": len(groups[key])}
-                                      for key in keys],
+            "graph_relation_counts": ([] if source_only else
+                                      [{"relation": key[0], "direction": key[1], "count": len(groups[key])}
+                                       for key in keys]),
+            **({"graph_facts_withheld_from_perception": True} if source_only else {}),
             "fact_candidates": deepcopy(examples),
             "evidence_catalog": [deepcopy(item) for item in inputs["evidence_catalog"]
                                  if item["evidence_id"] in refs or item.get("source") == "existing_modality"]}
@@ -95,7 +100,7 @@ def triple_response_schema(inputs: Mapping[str, Any]) -> dict[str, Any]:
         triples["maxItems"] = 0
     return obj({
         "entity_profile": obj({"primary_type": text, "core_identity": text,
-                                "evidence_refs": refs(all_refs)}),
+                                "evidence_refs": refs(source_refs if inputs.get("visual_fact_policy") == VISUAL_FACT_POLICY else all_refs)}),
         extraction_key(inputs): triples,
         "uncertain_aspects": {"type": "array", "items": obj({"aspect": text, "reason": text})},
     })
@@ -203,6 +208,10 @@ def build_triple_prompt(inputs: dict[str, Any], errors: list[dict[str, Any]] | N
         )
     if inputs.get("visual_fact_policy") == VISUAL_FACT_POLICY:
         parts.append(
+            "SOURCE ISOLATION: Graph facts are deliberately withheld from this perception request "
+            "and preserved by the program for a later merge. Do not recover graph answers from memory "
+            "or infer visual classification from the target label. Profile references may cite only "
+            "the supplied existing-modality sources. "
             "VISUAL SUPPORT: Each extracted item also has visual_support. For image-derived items "
             "return {basis: direct or inferred, scope: target or context or background, confidence: "
             "a number in [0,1], uncertainty: a string}. Use null for items with no image evidence. "
@@ -219,7 +228,9 @@ def build_triple_prompt(inputs: dict[str, Any], errors: list[dict[str, Any]] | N
             "Inferred, uncertain, incidental or low-confidence observations are retained for audit "
             "and excluded from assertive generation. No need to fill a quota."
             " The entity_profile must not promote inferred or uncertain image claims into identity; "
-            "use graph-backed identity or direct eligible observations, otherwise use entity and the target label."
+            "use direct eligible source observations, otherwise use entity and the target label."
+            " Record meaningful unresolved source guesses in uncertain_aspects even when omitted "
+            "from extracted_triples; preserve alternatives and do not silently resolve them."
         )
     if errors is not None:
         parts.extend(["Return a COMPLETE corrected response from the original sources; prior replies are not evidence.",
@@ -264,6 +275,7 @@ def triple_response_errors(inputs: dict[str, Any], response: Any) -> list[dict[s
             if not nonempty(profile[key]):
                 add("empty_profile_text", f"/entity_profile/{key}", "provide non-empty supported text")
         refs(profile["evidence_refs"], "/entity_profile/evidence_refs",
+             set(extraction_sources(inputs)) if inputs.get("visual_fact_policy") == VISUAL_FACT_POLICY else
              {item["evidence_id"] for item in inputs["evidence_catalog"]})
     triples = response[extracted_field]
     allowed_sources = set(extraction_sources(inputs))

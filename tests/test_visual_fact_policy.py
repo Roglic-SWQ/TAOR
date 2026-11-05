@@ -15,7 +15,7 @@ from mmkgc.stages.candidate_planning import apply_fact_selection, fact_selection
 from mmkgc.stages.modeling import build_knowledge_input, apply_knowledge_response, KnowledgeResponseValidationError
 from mmkgc.stages.plan_context import compile_plan_context, ranking_knowledge
 from mmkgc.stages.relation_planning import RelationPlanValidationError
-from mmkgc.stages.triples import triple_response_schema
+from mmkgc.stages.triples import triple_response_schema, build_triple_prompt, model_input_view
 from mmkgc.stages.visual_evidence import VISUAL_FACT_POLICY
 
 
@@ -47,6 +47,24 @@ def reply(rows):
 class Relevance:
     def score_batch(self, *, documents, **kwargs):
         return [0.99 if 'rodent' in doc else 0.9 for doc in documents]
+
+
+def test_graph_answers_are_withheld_from_perception_but_preserved_in_merged_catalogue():
+    _, data = inputs()
+    original = deepcopy(data)
+    view = model_input_view(data)
+    assert view["fact_candidates"] == [] and view["graph_relation_counts"] == []
+    assert "mouse deer" not in json.dumps(view)
+    assert "rodent or marsupial" in json.dumps(view)  # raw uncertain source is still visible
+    assert all(item["source"] == "existing_modality" for item in view["evidence_catalog"])
+    assert "meaningful unresolved source guesses" in build_triple_prompt(data)
+    result = apply_knowledge_response(data, reply([row()]))
+    assert any(f["object"] == "mouse deer" for f in result["relation_facts"])
+    assert data == original
+    value = reply([])
+    value["entity_profile"]["evidence_refs"] = ["evidence:kg:0001"]
+    with pytest.raises(KnowledgeResponseValidationError):
+        apply_knowledge_response(data, value)
 
 
 def test_source_alternatives_and_uncertainty_survive_without_becoming_assertive_requirements():
