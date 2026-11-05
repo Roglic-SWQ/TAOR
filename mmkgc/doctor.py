@@ -144,7 +144,7 @@ def _check(name: str, status: str, message: str) -> dict[str, str]:
 
 def _check_dataset(args: argparse.Namespace, checks: list[dict[str, Any]]) -> Path | None:
     try:
-        dataset_dir = validate_dataset_dir(args.dataset_dir)
+        dataset_dir = validate_dataset_dir(args.dataset_dir, args.dataset_type)
         store = build_dataset_store(
             args.dataset_type,
             dataset_dir,

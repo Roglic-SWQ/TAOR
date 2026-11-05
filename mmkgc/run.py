@@ -9,11 +9,12 @@ from pathlib import Path
 from typing import Any
 
 from mmkgc.data import DATASET_STORE_TYPES, DatasetStore, build_dataset_store
+from mmkgc.data.factory import DATASET_REQUIRED_FILES
 from mmkgc.defaults import build_default_mainline_runtime
 from mmkgc.io import RunWriter
 
 
-REQUIRED_DATASET_FILES = ("entity2id.txt", "relation2id.txt", "train.txt")
+REQUIRED_DATASET_FILES = DATASET_REQUIRED_FILES["mkgw"]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -88,7 +89,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def validate_dataset_dir(dataset_dir: str | Path) -> Path:
+def validate_dataset_dir(dataset_dir: str | Path, dataset_type: str = "mkgw") -> Path:
     path = Path(dataset_dir)
     if not path.exists():
         raise FileNotFoundError(f"dataset_dir does not exist: {path}")
@@ -96,7 +97,9 @@ def validate_dataset_dir(dataset_dir: str | Path) -> Path:
         raise NotADirectoryError(f"dataset_dir is not a directory: {path}")
 
     invalid_files = []
-    for filename in REQUIRED_DATASET_FILES:
+    if dataset_type not in DATASET_REQUIRED_FILES:
+        raise ValueError(f"Unknown dataset_type: {dataset_type}")
+    for filename in DATASET_REQUIRED_FILES[dataset_type]:
         file_path = path / filename
         if not file_path.exists():
             invalid_files.append(f"{filename} (missing)")
@@ -121,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     run_name = args.run_name or datetime.now().strftime("%Y%m%d_%H%M%S")
-    dataset_dir = validate_dataset_dir(args.dataset_dir)
+    dataset_dir = validate_dataset_dir(args.dataset_dir, args.dataset_type)
     store = build_dataset_store(
         args.dataset_type,
         dataset_dir,
