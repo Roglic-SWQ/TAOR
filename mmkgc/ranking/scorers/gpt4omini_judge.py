@@ -72,7 +72,7 @@ def observation_judgment_schema(targets: Any, modality: str) -> dict[str, Any]:
                 "verification_mode": {"type": "string", "enum": [mode]},
                 "observed": text,
                 "evidence": {"type": "array", "items": {
-                    "type": "string", "pattern": "^" + ("pixel:" if modality == "image" else "text:") + r"\s*\S"}},
+                    "type": "string", "pattern": "^" + ("pixel:" if modality == "image" else "text:") + r"\s*\S[\s\S]*$"}},
                 "confidence": number, "reason": text,
             }))
     return _object_schema({
@@ -86,7 +86,7 @@ def observation_judgment_schema(targets: Any, modality: str) -> dict[str, Any]:
                             "items": {"anyOf": branches} if branches else _object_schema({})},
             "unsupported_claims": {"type": "array", "items": _object_schema({
                 "claim": text, "evidence": {"type": "array", "minItems": 1,
-                    "items": {"type": "string", "pattern": "^" + ("pixel:" if modality == "image" else "text:") + r"\s*\S"}},
+                    "items": {"type": "string", "pattern": "^" + ("pixel:" if modality == "image" else "text:") + r"\s*\S[\s\S]*$"}},
                 "confidence": number, "reason": text})},
         }),
     })
@@ -1032,7 +1032,7 @@ def _add_repair_check_schema(schema, targets, modality):
             "status": {"type": "string", "enum": ["resolved", "unresolved", "uncertain"]},
             "observed": {"type": "string", "minLength": 1},
             "evidence": {"type": "array", "minItems": 1, "items": {"type": "string",
-                "pattern": "^" + ("pixel:" if modality == "image" else "text:") + r"\s*\S"}},
+                "pattern": "^" + ("pixel:" if modality == "image" else "text:") + r"\s*\S[\s\S]*$"}},
             "confidence": {"type": "number", "minimum": 0, "maximum": 1},
             "reason": {"type": "string", "minLength": 1}})}
     schema["required"].append("repair_checks")
@@ -1045,7 +1045,7 @@ def _rubric_response_schema(targets, modality, repair_targets=None):
     # source reference. The legacy binder already accepts both string types.
     prefix = "pixel:" if modality == "image" else "text:"
     observation_schema["properties"]["unsupported_claims"]["items"]["properties"]["evidence"]["items"]["pattern"] = (
-        "^(?:" + prefix + r"|context:)\s*\S")
+        "^(?:" + prefix + r"|context:)\s*\S[\s\S]*$")
     # A judge with no verification targets must return an empty check array.
     if not targets:
         observation_schema["properties"]["fact_checks"]["items"] = _object_schema({})

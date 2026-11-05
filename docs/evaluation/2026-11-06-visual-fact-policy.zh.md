@@ -38,3 +38,7 @@
 同时复核 `r2` 已完成的文本结果，发现 Stage 3 将整段原描述中的 rodent／marsupial／bandicoot 和背景细节重新写入，绕过仅含 mouse deer 的精选事实；因此只隔离 Stage 2 仍不够。新策略下，Stage 3 仍收到所选事实、逐源判断和来源 ID，但不再收到完整机器图片描述的 content。原描述只在 Stage 1 完整保留；图谱和其他原始来源的内容策略保持。新增回归确认未选猜测不会从原描述绕回生成 payload。
 
 `r3` 固定描述控制达到原脚本默认的 60 秒单请求上限而被服务中止，不算语义成功或失败。控制脚本单请求预算改为与完整 CLI 一致的 120 秒，Stage 1 总预算仍为 180 秒，原生输出 token 预算不变。新视觉合同从第一条本地 Qwen 抽取请求即采用完整 JSON schema，减少先遗漏元数据、再重做整段抽取的额外调用；源描述请求仍是自然语言输出。最终针对性回归 183 passed，1 skipped；已另在真实服务环境验证完整 LM Format Enforcer grammar。
+
+`r4`：固定旧描述与完整文本／真实 SDXL 均完成生成，原 rodent／marsupial／bandicoot 未进入精选事实或最终文本，8 条事实中选择 6 条，未选岩石地形和围栏。但模型仍普遍自评 1，且 uncertain_aspects=[]；仅能确认危险猜测未被升级，不能宣称已可靠结构化所有来源不确定性。固定描述控制中还出现 has body→dirt ground、has body→standing on 等关系表达不佳，说明单有权重并不能保证三元组语义正确，原始记录保留以供后续核验。
+
+该轮 Stage 4 在 LM Format Enforcer 下提前终止 JSON，真实 ranking_status=evaluation_failed；CLI 返回 0 不代表评审成功。为冒烟入口增加 final.json 的严格状态断言。定位到混合整数／null enum 不被该后端支持，将评分改为等价 anyOf，合法值仍仅为 0～4 或 null；证据前缀 regex 改写成能整串匹配任意非空后文的等价表达，避免只允许前缀加单个字符。严格语义解析和来源验收不变。实际服务环境对 r4 真实检查目标的文本／图片完整 grammar（含事实评分 null）均通过。下一轮只复评 r4 冻结候选，避免重新生成掩盖失败。

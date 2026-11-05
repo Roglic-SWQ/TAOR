@@ -53,6 +53,26 @@ class Client:
         return json.dumps(next(self.responses))
 
 
+@pytest.mark.parametrize('score', [0, 1, 2, 3, 4, None])
+def test_nullable_score_grammar_preserves_allowed_values(score):
+    schema = _rubric_response_schema([], 'text')['properties']['scores']['properties']['verified_fact_consistency']['properties']['score']
+    validate(score, schema)
+    for invalid in (True, -1, 5, 0.5, '4'):
+        with pytest.raises(ValidationError):
+            validate(invalid, schema)
+
+
+@pytest.mark.parametrize('mode', ['text', 'image'])
+def test_real_local_decoder_accepts_complete_multiword_evidence(mode):
+    parser_type = pytest.importorskip('lmformatenforcer').JsonSchemaParser
+    _, candidate, payload = fixture(mode)
+    parser = parser_type(_rubric_response_schema(candidate['verification_targets'], mode))
+    for index, char in enumerate(json.dumps(payload)):
+        assert char in parser.get_allowed_characters(), index
+        parser = parser.add_character(char)
+    assert parser.can_end()
+
+
 def test_rubric_score_and_trace_survive_actual_adapter_and_writer():
     context, candidate, payload = fixture(values=(3, 4, 4, 4))
     client = Client(payload)

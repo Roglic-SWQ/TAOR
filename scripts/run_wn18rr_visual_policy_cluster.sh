@@ -51,5 +51,13 @@ COMMON=(--dataset-type wn18rr --dataset-dir datasets/wn18rr-import-20261106/WN18
 timeout 1200 "${PY}" -m mmkgc.run "${COMMON[@]}" --missing-mode text --run-name text-qwen7b || FAILED=1
 timeout 1200 "${PY}" -m mmkgc.run "${COMMON[@]}" --missing-mode image --run-name image-qwen7b-sdxl \
   --sdxl-width 1024 --sdxl-height 1024 --sdxl-steps 20 --sdxl-seed 20260708 || FAILED=1
+"${PY}" - <<'PY' || FAILED=1
+import json, os
+from pathlib import Path
+root=Path(os.environ['TAOR_VISUAL_LOG_DIR'])/'runs'
+for mode in ('text-qwen7b', 'image-qwen7b-sdxl'):
+    result=json.loads((root/mode/'entities/02436645/final.json').read_text())
+    assert result['ranking_status']=='completed', (mode, result['ranking_status'])
+PY
 nvidia-smi
 exit "${FAILED}"

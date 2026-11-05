@@ -24,7 +24,9 @@ def _object(properties):
 def response_schema(modality: str, observation_schema: dict[str, Any]) -> dict[str, Any]:
     text = {"type": "string", "minLength": 1}
     strings = {"type": "array", "items": text}
-    dimension = _object({"score": {"type": ["integer", "null"], "enum": [0, 1, 2, 3, 4, None]},
+    # LM Format Enforcer cannot parse a mixed integer/null enum. Keep the same
+    # legal values via separate branches, rather than allowing arbitrary scores.
+    dimension = _object({"score": {"anyOf": [{"type": "integer", "enum": [0, 1, 2, 3, 4]}, {"type": "null"}]},
                          "reason": text, "evidence": strings})
     dimensions = {key: deepcopy(dimension) for key in DIMENSIONS[modality]}
     for key, value in dimensions.items():

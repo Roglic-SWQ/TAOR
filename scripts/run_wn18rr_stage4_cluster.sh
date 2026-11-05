@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 PROJECT_ROOT=/medisco/linjiashi/Code/TAOR
-ART="${PROJECT_ROOT}/outputs/wn18rr-stage4-20261106"
+ART="${TAOR_STAGE4_ARTIFACT_ROOT:-${PROJECT_ROOT}/outputs/wn18rr-stage4-20261106}"
 ATTEMPT="${TAOR_STAGE4_ATTEMPT:-$(date -u +%Y%m%dT%H%M%S)}"
 LOG_DIR="${ART}/attempt-${ATTEMPT}"
 PY=/medisco/linjiashi/venvs/taor-inference/bin/python
 SERVER_PY=/medisco/linjiashi/venvs/taor-qwen7b/bin/python
+mkdir -p "${ART}"
 mkdir "${LOG_DIR}"
 exec >"${LOG_DIR}/cluster.log" 2>&1
 cd "${PROJECT_ROOT}"
@@ -18,6 +19,7 @@ nvidia-smi
   --served-model-name Qwen/Qwen2-VL-7B-Instruct \
   --host 127.0.0.1 --port 12345 --dtype bfloat16 \
   --middleware mmkgc.adapters.request_deadline.RequestDeadlineMiddleware \
+  --structured-outputs-config '{"backend":"lm-format-enforcer"}' \
   --gpu-memory-utilization 0.45 --max-model-len 24576 \
   --limit-mm-per-prompt '{"image":4}' --max-num-seqs 2 --enforce-eager \
   >"${LOG_DIR}/server.log" 2>&1 &
@@ -35,7 +37,7 @@ done
   --stage1-reranker-device cuda:0 --sdxl-device cuda:0 \
   --stage4-config configs/stage4-qwen7b-local.yaml >"${LOG_DIR}/doctor.json"
 timeout 2400 "${PY}" scripts/run_wn18rr_reflection.py \
-  --source-root outputs/wn18rr-onboarding-20261106/attempt-r3/runs \
+  --source-root "${TAOR_STAGE4_SOURCE_ROOT:-outputs/wn18rr-onboarding-20261106/attempt-r3/runs}" \
   --dataset-dir datasets/wn18rr-import-20261106/WN18RR \
   --stage4-config configs/stage4-qwen7b-local.yaml --output-root "${LOG_DIR}/closure"
 nvidia-smi
