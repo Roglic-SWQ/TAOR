@@ -38,7 +38,15 @@ def _validate_saved_media_sources(knowledge: dict[str, Any], record: EntityRecor
 
 
 def load_saved_image_run(entity_dir: str | Path, record: EntityRecord, candidate_budget: int) -> tuple[PreparedEntity, dict[str, Any]]:
-    """Validate saved facts/plan and original candidate bytes, then reuse Stage 3."""
+    """Backward-compatible image-only entry point."""
+    return load_saved_run(entity_dir, record, candidate_budget, missing_mode="image")
+
+
+def load_saved_run(entity_dir: str | Path, record: EntityRecord, candidate_budget: int,
+                   *, missing_mode: str) -> tuple[PreparedEntity, dict[str, Any]]:
+    """Validate saved inputs and reuse Stage 0-3 for text or image evaluation."""
+    if missing_mode not in {"text", "image"}:
+        raise ValueError("missing_mode must be text or image")
     root = Path(entity_dir).resolve(strict=True)
     def read(path):
         return json.loads(path.read_text())
@@ -77,7 +85,7 @@ def load_saved_image_run(entity_dir: str | Path, record: EntityRecord, candidate
         raise ValueError("Current entity text differs from the saved generation inputs")
     if v3.get("schema_version") == "grounded_triples_v2":
         from mmkgc.stages.sources import public_sources
-        if original_sources != public_sources(record, "image")[0]:
+        if original_sources != public_sources(record, missing_mode)[0]:
             raise ValueError("Current source modalities differ from the saved generation inputs")
     old_record_path = root / "entity_description.json"
     if old_record_path.exists():
@@ -91,10 +99,10 @@ def load_saved_image_run(entity_dir: str | Path, record: EntityRecord, candidate
     plan_schema = plans[0].get("response_schema_version")
     shared = plan_schema == FACT_SELECTION_SCHEMA
     simple = shared or plan_schema in PLAN_SCHEMAS
-    selection = (apply_fact_selection(knowledge, response, "image", plans[0]["max_selected_facts"])
-                 if shared else apply_candidate_plans(knowledge, response, "image", candidate_budget, schema_version=plan_schema)
-                 if simple else apply_candidate_slot_plans(knowledge, response, "image", candidate_budget))
-    selection, reasoning = compile_plan_context(knowledge, selection, "image")
+    selection = (apply_fact_selection(knowledge, response, missing_mode, plans[0]["max_selected_facts"])
+                 if shared else apply_candidate_plans(knowledge, response, missing_mode, candidate_budget, schema_version=plan_schema)
+                 if simple else apply_candidate_slot_plans(knowledge, response, missing_mode, candidate_budget))
+    selection, reasoning = compile_plan_context(knowledge, selection, missing_mode)
     payload = selection["fine_grained_relation_selection"]
     by_plan = ({plan["plan_id"]: plan for plan in payload["candidates"]} if simple else
                {plan["plan_id"]: plan for role in ("primary", "secondary", "context", "excluded")
@@ -102,9 +110,28 @@ def load_saved_image_run(entity_dir: str | Path, record: EntityRecord, candidate
     generation = stage("3_relation_alternation_generation.json")
     if generation.get("candidate_budget") != candidate_budget:
         raise ValueError("Saved candidate budget differs from the current run")
+    if generation.get("target_modalities") != [missing_mode]:
+        raise ValueError("Saved generation target modality differs from requested evaluation")
     artifacts = []
     seen = set()
-    for candidate in generation["image_candidates"]:
+    for candidate in generation.get("text_candidates", []):
+        candidate_id = candidate["candidate_id"]
+        if candidate_id in seen:
+            raise ValueError("Duplicate saved text candidate")
+        seen.add(candidate_id)
+        plan = by_plan[candidate["source_plan_id"]]
+        if candidate.get("verification_targets") != plan["verification_targets"]:
+            raise ValueError("Saved candidate checks differ from its original fact plan")
+        content = candidate.get("generated_content", {})
+        if content.get("type") != "text" or not isinstance(content.get("value"), str) or not content["value"].strip():
+            raise ValueError("Saved text candidate has no usable content")
+        context = plan["generation_context"]
+        candidate.update(used_evidence_triples=deepcopy(plan["evidence_triples"]),
+            used_constraints=deepcopy(context["must_include"] + context["should_include"]),
+            generation_context=deepcopy(context), metadata={"status": "generated"})
+        if simple:
+            candidate.update(plan_schema_version=plan_schema, source_fact_refs=list(plan["fact_ids"]))
+    for candidate in generation.get("image_candidates", []):
         candidate_id = candidate["candidate_id"]
         if candidate_id in seen:
             raise ValueError("Duplicate saved image candidate")
@@ -137,14 +164,14 @@ def load_saved_image_run(entity_dir: str | Path, record: EntityRecord, candidate
             f"generated_images/{candidate_id}.png", f"generated_images/{candidate_id}.json",
             image_path.read_bytes(), metadata, {}))
     if shared:
-        initial = [ref for ref in seen if not ref.startswith("image_safe_")]
+        initial = [ref for ref in seen if not ref.startswith(f"{missing_mode}_safe_")]
         if len(initial) > candidate_budget or (payload["status"] == "ready" and not initial):
             raise ValueError("Saved candidates do not match the shared-fact generation budget")
     elif len(seen) < candidate_budget:
         raise ValueError("Saved Stage 3 is missing initial candidate images")
     preparation_stages = {"stage0_coarse", "stage1_image_description", "stage1_video_description", "stage1_audio_description",
                           "stage1_knowledge", "stage1_evidence_reranking", "stage1_relevance_reranking", "stage2_selection"}
-    prepared = PreparedEntity(record, "image", {"stage0_v3": stage("0_coarse_relation_filtering.json")},
+    prepared = PreparedEntity(record, missing_mode, {"stage0_v3": stage("0_coarse_relation_filtering.json")},
         knowledge, selection, reasoning, [call for call in calls if call.get("stage") in preparation_stages])
     image_calls_path = root / "image_model_calls.jsonl"
     image_calls = [json.loads(line) for line in image_calls_path.read_text().splitlines()] if image_calls_path.exists() else []

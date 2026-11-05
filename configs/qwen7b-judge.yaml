@@ -1,0 +1,7 @@
+lmm:
+  model_name: Qwen/Qwen2-VL-7B-Instruct
+  base_url: http://127.0.0.1:12345/v1
+  api_key: EMPTY
+inference:
+  max_token: 4096
+  temperature: 0.0

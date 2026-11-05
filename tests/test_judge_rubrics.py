@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from jsonschema import validate
+from jsonschema import validate, ValidationError
 import pytest
 
 from mmkgc.io.writer import _compact_stage4_candidate
@@ -256,3 +256,47 @@ def test_full_engine_retains_rubrics_and_old_reflection_input(mode):
     assert item["final_score"] <= .25
     assert item["observation"]["violated_facts"]
     assert _needs_stage4_regeneration(result)
+
+
+def test_schema_and_parser_keep_candidate_evidence_rules_strict():
+    from jsonschema import ValidationError
+    _, _, payload = fixture('text')
+    schema = _rubric_response_schema([], 'text')
+    payload['observation']['fact_checks'] = []
+    payload['scores']['entity_semantics']['evidence'] = []
+    with pytest.raises(ValidationError): validate(payload, schema)
+    payload['scores']['entity_semantics']['evidence'] = ['bare candidate quotation']
+    with pytest.raises(ValueError, match='text:'): judge_rubrics.parse_payload(payload, 'text')
+    payload['scores']['entity_semantics']['evidence'] = ['text: candidate quotation']
+    payload['scores']['verified_fact_consistency']['score'] = 4
+    payload['scores']['verified_fact_consistency']['evidence'] = []
+    with pytest.raises(ValueError, match='text:'): judge_rubrics.parse_payload(payload, 'text')
+    payload['scores']['verified_fact_consistency']['score'] = None
+    validate(payload, schema)
+    judge_rubrics.parse_payload(payload, 'text')
+
+
+def test_nonnull_fact_score_missing_evidence_tightens_only_bounded_repair_schema():
+    context, candidate, valid = fixture('text')
+    invalid = deepcopy(valid)
+    invalid['scores']['verified_fact_consistency']['evidence'] = []
+    client = Client(invalid, valid)
+    result = GPT4OMiniRankingJudge(client, use_rubrics=True).judge_text(context, candidate)
+    assert result.score.details['contract_repair_retries'] == 1
+    first = client.calls[0][1]['properties']['scores']['properties']['verified_fact_consistency']
+    second = client.calls[1][1]['properties']['scores']['properties']['verified_fact_consistency']
+    assert first['properties']['evidence'].get('minItems', 0) == 0
+    assert second['properties']['evidence']['minItems'] == 1
+    assert 'EVIDENCE_REPAIR_REQUIRED' in client.calls[1][0]
+    assert 'PREVIOUS_JUDGMENT:' not in client.calls[1][0]
+    with pytest.raises(ValidationError): validate(invalid, client.calls[1][1])
+    validate(valid, client.calls[1][1])
+
+
+def test_null_fact_score_keeps_empty_evidence_without_forced_repair():
+    context, candidate, valid = fixture(values=(2, None, 1, 4), status="missing")
+    valid['scores']['verified_fact_consistency']['evidence'] = []
+    client = Client(valid)
+    result = GPT4OMiniRankingJudge(client, use_rubrics=True).judge_text(context, candidate)
+    assert result.score.details['contract_repair_retries'] == 0
+    assert len(client.calls) == 1

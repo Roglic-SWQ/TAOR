@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass, replace
 import json
 import math
@@ -810,6 +811,19 @@ class GPT4OMiniRankingJudge:
                         "contract_repair_retries": attempt, "contract_repair_failed": True,
                         "contract_repair_stopped_reason": "repeated_invalid_response" if fingerprint in seen else "repair_limit_reached"}) from exc
                 seen.add(fingerprint)
+                if "verified_fact_consistency.evidence needs actual candidate evidence" in str(exc):
+                    # A non-null fact score was returned without evidence. Tighten
+                    # only this bounded format repair; null-first judgments remain legal.
+                    schema = deepcopy(schema)
+                    schema["properties"]["scores"]["properties"]["verified_fact_consistency"]["properties"]["evidence"]["minItems"] = 1
+                    request_prompt = (prompt + "\nEVIDENCE_REPAIR_REQUIRED: The previous non-null "
+                        "verified_fact_consistency score had no evidence. Generate a fresh COMPLETE "
+                        "judgment from the original candidate and sources, not a copy of the invalid JSON. "
+                        "Every non-null score, including verified_fact_consistency, needs actual candidate "
+                        "evidence. Cite text:<verbatim candidate words> or pixel:<visible content>. "
+                        "Complete every supplied check_id exactly once. Do not invent evidence or change "
+                        "the factual scope. Use null factual consistency only if no assertions are verifiable.")
+                    continue
                 request_prompt = prompt + "\nRUBRIC_VALIDATION_ERROR: " + str(exc) + (
                     "\nReturn a complete corrected judgment with the same evidence and check IDs. "
                     "Do not penalize unresolved additions or missing content as verified errors. "

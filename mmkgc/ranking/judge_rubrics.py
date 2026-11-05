@@ -26,8 +26,14 @@ def response_schema(modality: str, observation_schema: dict[str, Any]) -> dict[s
     strings = {"type": "array", "items": text}
     dimension = _object({"score": {"type": ["integer", "null"], "enum": [0, 1, 2, 3, 4, None]},
                          "reason": text, "evidence": strings})
+    dimensions = {key: deepcopy(dimension) for key in DIMENSIONS[modality]}
+    for key, value in dimensions.items():
+        if key != "verified_fact_consistency":
+            value["properties"]["evidence"]["minItems"] = 1
+    # Prefix and null-dependent evidence rules remain in the strict parser.
+    # Keep the wire schema simple for local structured-decoding backends.
     return _object({
-        "scores": _object({key: deepcopy(dimension) for key in DIMENSIONS[modality]}),
+        "scores": _object(dimensions),
         "observation": deepcopy(observation_schema),
         "unverified_additions": {"type": "array", "items": _object({
             "claim": text, "evidence": strings, "reason": text})},
