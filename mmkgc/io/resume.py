@@ -52,7 +52,7 @@ def load_saved_image_run(entity_dir: str | Path, record: EntityRecord, candidate
     knowledge = {
         "schema_version": v3["schema_version"], "stage1_v3": {
             key: deepcopy(value) for key, value in v3.items()
-            if key not in {"relation_facts", "triples", "evidence_catalog", "entity", "relevance_selection", "image_modeling", "media_modeling", "source_inputs"}},
+            if key not in {"relation_facts", "triples", "evidence_catalog", "entity", "relevance_selection", "image_modeling", "media_modeling", "source_inputs", "source_extraction"}},
         "entity_profile": {"entity_type": profile["primary_type"], "type": profile["primary_type"],
             "secondary_types": profile.get("secondary_types", []), "semantic_domain": profile.get("semantic_domains", []),
             "core_identity": profile["core_identity"], "type_evidence": profile.get("evidence_refs", []),
@@ -68,7 +68,7 @@ def load_saved_image_run(entity_dir: str | Path, record: EntityRecord, candidate
             raise ValueError("Saved triple knowledge belongs to another entity")
     if "relevance_selection" in v3:
         knowledge["relevance_selection"] = deepcopy(v3["relevance_selection"])
-    for key in ("image_modeling", "media_modeling", "source_inputs"):
+    for key in ("image_modeling", "media_modeling", "source_inputs", "source_extraction"):
         if key in v3:
             knowledge[key] = deepcopy(v3[key])
     _validate_saved_media_sources(knowledge, record)

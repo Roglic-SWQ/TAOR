@@ -11,7 +11,6 @@ from mmkgc.pipeline import MMKGCPipeline, PreparedEntity
 from mmkgc.plan_schema import FACT_SELECTION_SCHEMA
 from mmkgc.run import build_parser
 from test_shared_fact_selection import selected, target, Views, Images, reply
-from test_missing_image_completion import batch, make_job
 
 
 def prepared():
@@ -56,6 +55,9 @@ def test_generation_only_skips_judge_initialization_and_preserves_candidates_for
 
 
 def test_batch_checkpoints_all_generated_images_and_resume_checks_their_hashes(tmp_path, monkeypatch):
+    pytest.importorskip("fcntl", reason="This batch checkpoint test requires POSIX file locking")
+    from test_missing_image_completion import batch, make_job
+
     job = make_job(tmp_path, 1)
     job.config.update(skip_stage4=True, entity_pipeline=False)
     item = prepared()

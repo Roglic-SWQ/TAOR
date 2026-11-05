@@ -385,11 +385,14 @@ class StrictJsonStagePlanner:
             "network_attempts": [], "stage_timeout_seconds": self.knowledge_stage_timeout_seconds,
         }
         if source_task is not None:
-            call["prompt_version"] = "source_bound_text_triples_v1"
-            call["knowledge_repair_version"] = "stage1_source_patch_v2"
+            from mmkgc.adapters.source_text_triples import SCHEMA, PATCH_KIND
+            call["prompt_version"] = SCHEMA
+            call["knowledge_repair_version"] = PATCH_KIND
             if "text_extraction_batch" in inputs:
                 call["text_extraction_batch"] = deepcopy(inputs["text_extraction_batch"])
         seen: set[str] = set()
+        source_review = False
+        reviewed_source_items = set()
         request_prompt = prompt
         repair_task = repair_base = None
         started = time.perf_counter()
@@ -435,6 +438,9 @@ class StrictJsonStagePlanner:
                             from mmkgc.adapters.source_text_triples import merge_source_repair
                             response, repair_info = merge_source_repair(repair_base, repair_task, response_text)
                             call.setdefault('source_patch_results', []).append({'attempt': attempt, **repair_info})
+                            if source_review:
+                                from mmkgc.adapters.source_text_triples import source_item_key
+                                reviewed_source_items.update(source_item_key(item) for item in repair_info.get('replacement_items', []))
                             if repair_info.get('normalizations'):
                                 call.setdefault("response_wrappers_removed", []).append(attempt)
                         else:
@@ -480,6 +486,50 @@ class StrictJsonStagePlanner:
                         if initial_task is not None:
                             repair_limit += max(0, math.ceil(len(initial_task.fields) / 3) - 1)
                             call['source_patch_request_limit'] = repair_limit
+                    if source_task is not None and (source_review or fingerprint in seen or attempt == repair_limit):
+                        from mmkgc.adapters.source_text_triples import (
+                            MAX_SOURCE_REVIEWS, partition_source_rows, source_item_key, source_extraction_report, targeted_source_repair,
+                        )
+                        partition = partition_source_rows(source_task, response)
+                        semantic_row_errors = {'unrelated_triple', 'empty_triple_term'}
+                        if (partition is not None and partition[1] and self.max_knowledge_repairs
+                                and (source_review or all(error['code'] in semantic_row_errors for error in errors))):
+                            accepted, rejected = partition
+                            if not source_review:
+                                source_review = True
+                                call['source_review_trigger'] = 'repeated_invalid_response' if fingerprint in seen else 'repair_limit_reached'
+                                call.pop('contract_repair_stopped_reason', None)
+                                # One final decision per unresolved row, sharing the original deadline.
+                                review_count = min(MAX_SOURCE_REVIEWS, len(rejected))
+                                repair_limit = attempt + review_count
+                                call['source_review_request_limit'] = review_count
+                            review_errors = [error for item in rejected for error in item['errors']]
+                            review_task = targeted_source_repair(source_task, response, review_errors, max_fields=1,
+                                review=True, reviewed_items=reviewed_source_items)
+                            if review_task is not None and attempt < repair_limit:
+                                for path in review_task.fields:
+                                    if path.startswith('/extracted_triples/'):
+                                        reviewed_source_items.add(source_item_key(response['extracted_triples'][int(path.rsplit('/', 1)[1])]))
+                                repair_task, repair_base = review_task, deepcopy(response)
+                                request_prompt = review_task.prompt
+                                call.setdefault('targeted_repairs', []).append({'attempt': attempt + 1,
+                                    'fields': list(review_task.fields), 'fact_ids': [], 'prompt': request_prompt,
+                                    'kind': 'source_single_item_review'})
+                                call['contract_repair_prompt'] = request_prompt
+                                continue
+                            if accepted['extracted_triples']:
+                                canonical = source_task.decode(accepted)
+                                refined = apply_response(canonical)
+                                report = source_extraction_report(source_task, accepted, inputs,
+                                    call.get('source_patch_results', []), rejected)
+                                call.update(status='partial', source_extraction=report,
+                                    source_bound_response=deepcopy(accepted), response_text=json.dumps(canonical, ensure_ascii=False),
+                                    contract_repair_stopped_reason='unresolved_rows_preserved_separately')
+                                refined['source_extraction'] = deepcopy(report)
+                                refined['semantic_refinement'] = _refinement_status(self.planner_name,
+                                    'stage1_knowledge', 'partial', None, prompt_version=call['prompt_version'])
+                                return refined
+                            repair_limit = attempt
                     if fingerprint in seen or attempt == repair_limit:
                         call["contract_repair_stopped_reason"] = (
                             'repeated_invalid_response' if fingerprint in seen else 'repair_limit_reached')
@@ -526,6 +576,7 @@ class StrictJsonStagePlanner:
                     call["contract_repair_prompt"] = request_prompt
                     continue
                 call["validation_attempts"].append({"attempt": attempt, "response_text": response_text, "errors": []})
+                call.pop('contract_repair_stopped_reason', None)
                 call.update(status="applied", validation_errors=[])
                 if attempt:
                     call["contract_repair_response_text"] = response_text
@@ -535,6 +586,10 @@ class StrictJsonStagePlanner:
                 if source_task is not None:
                     call["source_bound_response"] = deepcopy(response)
                     call["response_text"] = json.dumps(canonical, ensure_ascii=False)
+                    from mmkgc.adapters.source_text_triples import source_extraction_report
+                    report = source_extraction_report(source_task, response, inputs, call.get('source_patch_results', []))
+                    call['source_extraction'] = deepcopy(report)
+                    refined['source_extraction'] = deepcopy(report)
                 refined["semantic_refinement"] = _refinement_status(
                     self.planner_name, "stage1_knowledge", "applied", None,
                     prompt_version=call["prompt_version"],

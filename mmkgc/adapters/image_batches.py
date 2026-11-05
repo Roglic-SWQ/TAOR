@@ -53,4 +53,14 @@ def merge_image_batches(inputs: dict[str, Any], batches: list[dict[str, Any]]) -
         "extracted_triples": triples, "uncertain_aspects": gaps})
     if "semantic_refinement" in batches[0]:
         result["semantic_refinement"] = deepcopy(batches[0]["semantic_refinement"])
+    reports = [deepcopy(batch['source_extraction']) for batch in batches if 'source_extraction' in batch]
+    if reports:
+        partial = any(report['status'] == 'partial' for report in reports)
+        result['source_extraction'] = {'schema_version': 'source_extraction_report_v1',
+            'status': 'partial' if partial else 'applied', 'batches': reports,
+            'accepted_triple_count': sum(any(ref in source_refs for ref in fact['evidence_refs']) for fact in result['relation_facts']),
+            'rejected_triple_count': sum(report['rejected_triple_count'] for report in reports),
+            'excluded_triples': [item for report in reports for item in report.get('excluded_triples', [])]}
+        if partial and 'semantic_refinement' in result:
+            result['semantic_refinement']['status'] = 'partial'
     return result

@@ -302,12 +302,14 @@ def _compact_stage1_modeling(payload: dict[str, Any]) -> dict[str, Any]:
             "evidence_catalog": payload["evidence_catalog"],
             "modality_state": v3["modality_state"],
             **({"relevance_selection": payload["relevance_selection"]} if "relevance_selection" in payload else {}),
-            **{key: payload[key] for key in ("image_modeling", "media_modeling", "source_inputs") if key in payload},
+            **{key: payload[key] for key in ("image_modeling", "media_modeling", "source_inputs", "source_extraction") if key in payload},
             **({"evidence_selection": v3["evidence_selection"]} if "evidence_selection" in v3 else {}),
         }
     explicit_v3 = payload.get("stage1_v3")
     if isinstance(explicit_v3, dict):
         compact = dict(explicit_v3)
+        if 'source_extraction' in payload:
+            compact['source_extraction'] = payload['source_extraction']
         if payload.get("schema_version") == "qwen_grounded_knowledge_v1":
             compact["relation_facts"] = payload.get("relation_facts", [])
             compact["evidence_catalog"] = payload.get("evidence_catalog", [])

@@ -18,7 +18,11 @@ from mmkgc.adapters.qwen import QwenConfig
 from mmkgc.stages.candidate_planning import (
     PLAN_SCHEMA as CANDIDATE_PLAN_SCHEMA, candidate_plan_prompt, candidate_plan_schema,
     apply_candidate_plans, parse_candidate_response,
-    FACT_SELECTION_SCHEMA, fact_selection_prompt, fact_selection_schema, apply_fact_selection,
+    FACT_SELECTION_SCHEMA, FACT_SELECTION_PROMPT_VERSION,
+    fact_selection_prompt, fact_selection_schema, apply_fact_selection,
+)
+from mmkgc.adapters.fact_selection_repair import (
+    REPAIR_VERSION as FACT_SELECTION_REPAIR_VERSION, build_fact_selection_repair,
 )
 from mmkgc.adapters.qwen_stage2_repair import (
     REPAIR_VERSION as QWEN_REPAIR_VERSION, TASK_MARKER, merge_targeted_response, targeted_repair_tasks,
@@ -307,12 +311,15 @@ class OpenAICompatibleRelationPlanner:
             "stage": "stage2_selection", "provider": self.planner_name,
             "model_name": self.config.model_name, "prompt": prompt, "system_prompt": system,
             "prompt_version": self.prompt_version, "response_schema_version": self.selection_schema,
-            **({"max_selected_facts": self.max_selected_facts} if shared else {}),
+            **({"max_selected_facts": self.max_selected_facts,
+                "selection_prompt_version": FACT_SELECTION_PROMPT_VERSION,
+                "selection_repair_version": FACT_SELECTION_REPAIR_VERSION} if shared else {}),
             "ground_truth_used": False, "network_attempts": [], "transport_retries": 0,
             "stage_timeout_seconds": self.stage_timeout_seconds, "validation_attempts": [],
         }
         started = time.perf_counter()
         seen = set()
+        previous_legal_choices = []
         request_messages = messages
         try:
             for attempt in range(self.max_contract_repairs + 1):
@@ -320,6 +327,7 @@ class OpenAICompatibleRelationPlanner:
                 response = self._complete_with_retries(
                     request_messages, schema, call, attempt, started + self.stage_timeout_seconds)
                 call["response_text"] = response
+                parsed = None
                 try:
                     parsed = parse_candidate_response(response)
                 except (ValueError, TypeError) as exc:
@@ -343,11 +351,19 @@ class OpenAICompatibleRelationPlanner:
                         "repeated_invalid_response" if fingerprint in seen else "repair_limit_reached")
                     raise RelationPlanValidationError(errors)
                 seen.add(fingerprint)
-                request_messages = [*messages, {"role": "user", "content":
-                    "Correct these validation errors using the original source input. Return the complete "
-                    + ("status/selected_fact_ids" if shared else "status/candidates") +
-                    " object only. Do not add facts or change evidence.\n" +
-                    json.dumps(errors, ensure_ascii=False)}]
+                if shared:
+                    repair = build_fact_selection_repair(knowledge, parsed, errors,
+                        self.max_selected_facts, previous_legal_choices)
+                    previous_legal_choices = repair["previous_legal_choices"]
+                    request_messages = [*messages, {"role": "user", "content": repair["prompt"]}]
+                    call.setdefault("selection_repairs", []).append({
+                        "attempt": attempt + 1, "error_counts": repair["error_counts"],
+                        "previous_legal_choices": list(previous_legal_choices), "prompt": repair["prompt"]})
+                else:
+                    request_messages = [*messages, {"role": "user", "content":
+                        "Correct these validation errors using the original source input. Return the complete "
+                        "status/candidates object only. Do not add facts or change evidence.\n" +
+                        json.dumps(errors, ensure_ascii=False)}]
         except Exception as exc:
             call.update(status="failed", error_type=type(exc).__name__, error_message=str(exc))
             setattr(exc, "model_call", call)
