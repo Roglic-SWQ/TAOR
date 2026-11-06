@@ -72,7 +72,7 @@ def transport(monkeypatch, replies, on_request=None):
 
 def planner(root, budget=180, audio_input_type="input_audio"):
     return QwenLocalSemanticStagePlanner(QwenConfig("omni-test", "http://localhost/v1", "TEST_SECRET",
-        audio_input_type=audio_input_type), dataset_root=root, knowledge_stage_timeout_seconds=budget)
+        audio_input_type=audio_input_type, stage1_image_policy="visual_observation_policy_v1"), dataset_root=root, knowledge_stage_timeout_seconds=budget)
 
 
 def run(client, target, mode="text"):

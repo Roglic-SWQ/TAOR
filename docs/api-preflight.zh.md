@@ -20,6 +20,8 @@ PYTHONPATH=. /medisco/linjiashi/venvs/taor-inference/bin/python \
 
 实际调用覆盖：原生 WN18RR 单实体的图像描述、来源隔离的视觉抽取、带来源权重的事实选择、文本生成、API Judge 和原生有界 Reflect；另检查缺图模式下的 API 图片提示词组件，以及保存的真实 SDXL 图片的视觉 Judge。新提示词和冻结图片是两个独立组件检查，不冒称二者构成一轮新出图。
 
+新运行默认启用 `entity_visual_features_v2`：每图先匹配检查，compatible 图再独立进行不含目标名称和图谱的原图描述、回看原图抽取样本范围内的实体特征，并单独依据原图复核拟采用的属性。无关、冲突和无法判断的图保留审计而不进入生成；区分属性与身份的不确定性，不再使用模型自评 0.8 门槛或 context 半权。Stage 2 不读取完整机器图片描述。具体合同、旧策略对照和错配控制见 [实体图片与抽象特征](evaluation/2026-11-06-entity-image-features.zh.md)。复用旧 Stage 1 时会检查策略一致性及逐项原图复核完整性，不能用早期实验产物绕过新复核。
+
 本预检不运行本地 Qwen3 reranker、SBERT、CLIP、BLIP 或 SDXL 推理，也不使用 GPU。API 预检画像只要求 API Judge，不加载本地神经模型。其融合分值不能与生产全评分器结果直接比较，主要检查合同、观察结果与路由。SDXL 图片复用自先前实际运行，来源路径明确落盘，不把它计为新的图片生成或本次图片 Reflect。
 
 每次新建输出目录，分阶段保存结果、错误和源码 SHA256；后续步骤失败时，保留已完成文本结果。`contract_checks_completed_requires_quality_review` 表示结构调用完成，仍需逐项核对来源蕴含、相关性、主客体／限定语、不确定性和候选新增内容。API 质量检查通过后才考虑申请卡，不以降低阈值、改标签或换候选制造通过。

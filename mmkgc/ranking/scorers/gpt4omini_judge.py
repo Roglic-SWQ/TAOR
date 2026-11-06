@@ -46,6 +46,12 @@ REQUIRED_RESPONSE_FIELDS = frozenset(
 )
 MAX_REPAIR_RESPONSE_CHARS = 4000
 OBSERVATION_CONTRACT_VERSION = "candidate_observation_contract_v2"
+VISUAL_SCOPE_INSTRUCTIONS = (
+    "\nRespect visual_observations claim_scope: depicted_instance supports only the pictured sample, "
+    "not a universal category property. Compatible image admission is not verified entity identity. "
+    "Check whether candidate wording preserves these limits; class-wide or exact-identity claims "
+    "need their own supplied source support. Preserve source uncertainty rather than resolving it.\n"
+)
 
 
 def _object_schema(properties: dict[str, Any]) -> dict[str, Any]:
@@ -953,6 +959,7 @@ def _build_contract_repair_prompt(response_text: str, error: GPT4OMiniJudgeParse
     previous_response = _truncate_repair_response(_repair_source_text(response_text))
     return (
         JUDGE_RESPONSE_INSTRUCTIONS
+        + VISUAL_SCOPE_INSTRUCTIONS
         + "\n\nRepair the previous judgment JSON so it satisfies the Stage 4 "
         "response contract. Do not re-evaluate the candidate. Preserve existing "
         "score, confidence, evidence, and reason when possible. Use only these "
@@ -1068,7 +1075,7 @@ def _build_rubric_prompt(context, candidate, modality, *, image_input=None):
     else:
         payload["CANDIDATE_IMAGE"] = {"candidate_id": candidate.get("candidate_id", ""),
             "pixels_attached": image_input is not None, **_attached_image_payload(image_input)}
-    return judge_rubrics.instructions(modality) + (_repair_check_instructions() if repair_targets else "") + "\nINPUT_JSON:\n" + json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    return judge_rubrics.instructions(modality) + VISUAL_SCOPE_INSTRUCTIONS + (_repair_check_instructions() if repair_targets else "") + "\nINPUT_JSON:\n" + json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
 
 def _repair_check_instructions():

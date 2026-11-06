@@ -77,7 +77,7 @@ def transport(monkeypatch, replies, on_request=None):
 
 def planner(root, *, batch_size=4, budget=180):
     return QwenLocalSemanticStagePlanner(QwenConfig("vision-test", "http://localhost/v1", "SECRET_KEY",
-        stage1_image_batch_size=batch_size), dataset_root=root, knowledge_stage_timeout_seconds=budget)
+        stage1_image_batch_size=batch_size, stage1_image_policy="visual_observation_policy_v1"), dataset_root=root, knowledge_stage_timeout_seconds=budget)
 
 
 def run(client, target, mode="text"):

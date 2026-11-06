@@ -24,12 +24,22 @@ def image_batch_input(inputs: dict[str, Any], original_refs: set[str]) -> dict[s
         context["image_summaries"] = [entry for entry in context["image_summaries"]
                                       if entry["original_image_ref"] in original_refs]
         context["image_paths"] = [entry["original_image"]["asset"] for entry in modeling["images"]]
+        if context["image_paths"]:
+            context["image"] = context["image_paths"][0]
+        else:
+            context.pop("image", None)
+    elif modeling and modeling["original_image_ref"] not in original_refs:
+        result["image_modeling"] = {}
+        result["existing_modalities"].pop("image_summary", None)
+        result["existing_modalities"].pop("image", None)
+        result["existing_modalities"].pop("image_paths", None)
     return result
 
 
 def merge_image_batches(inputs: dict[str, Any], batches: list[dict[str, Any]]) -> dict[str, Any]:
     """Rebind all batches once, assigning stable fact IDs and unioning exact duplicates."""
-    if len(batches) == 1:
+    from mmkgc.stages.visual_evidence import ENTITY_VISUAL_POLICY
+    if len(batches) == 1 and inputs.get("visual_fact_policy") != ENTITY_VISUAL_POLICY:
         return batches[0]
     source_refs = {item["evidence_id"] for item in inputs["evidence_catalog"]
                    if item.get("source") == "existing_modality"}

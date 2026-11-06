@@ -205,6 +205,15 @@ def main():
             current_images = {metadata['evidence_id']: metadata['sha256']
                               for _, metadata in load_source_images(record, args.dataset_dir)}
             assert saved_images == current_images, 'Source image bytes changed'
+            if saved_images:
+                policy = knowledge.get('stage1_v3', {}).get('visual_fact_policy', {}).get('schema_version')
+                assert policy == config.stage1_image_policy, 'Saved Stage 1 uses a different visual policy; rerun Stage 1'
+                from mmkgc.stages.visual_evidence import ENTITY_VISUAL_POLICY
+                if policy == ENTITY_VISUAL_POLICY:
+                    from mmkgc.adapters.image_feature_check import proposed_features, parse_checks
+                    checks = [check for fact in knowledge['relation_facts']
+                              for check in fact.get('visual_source_checks', [])]
+                    parse_checks(json.dumps({'checks': checks}), proposed_features(knowledge), set(current_images))
             graph_refs = {item['evidence_id'] for item in knowledge['evidence_catalog'] if item['source']=='stage0_kg'}
             saved_graph = {tuple(fact[key] for key in ('subject','relation','object'))
                 for fact in knowledge['relation_facts'] if graph_refs.intersection(fact['evidence_refs'])}

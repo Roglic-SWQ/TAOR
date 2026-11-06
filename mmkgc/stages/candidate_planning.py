@@ -82,7 +82,7 @@ def candidate_plan_prompt(label: str, mode: str, knowledge: dict[str, Any], budg
         ("triples" if knowledge.get("schema_version") in TRIPLE_SCHEMAS else "relation_facts"): [{key: deepcopy(fact[key]) for key in (
             "fact_id", "subject", "relation", "object", "direction", "claim", "evidence_refs",
             "source_modalities", "relevance_score", "relevance_rank", "relevance_status",
-            "visual_observations", "source_weight", "selection_score", "generation_eligible",
+            "visual_observations", "visual_source_checks", "source_weight", "selection_score", "generation_eligible",
             "evidence_match_score", "scoring_status") if key in fact}
             for fact in facts],
         "evidence_catalog": [item for item in knowledge.get("evidence_catalog", []) if item["evidence_id"] in refs],
@@ -92,6 +92,12 @@ def candidate_plan_prompt(label: str, mode: str, knowledge: dict[str, Any], budg
         "output_template": {"status": "ready", "candidates": [
             {"fact_ids": []} for _ in range(budget)]},
     }
+    from mmkgc.stages.visual_evidence import ENTITY_VISUAL_POLICY
+    if knowledge.get("stage1_v3", {}).get("visual_fact_policy", {}).get("schema_version") == ENTITY_VISUAL_POLICY:
+        # Selection consumes source-checked features, not a second unfiltered caption.
+        payload["evidence_catalog"] = [{key: deepcopy(value) for key, value in source.items()
+            if key not in {"content", "entity_match"}} if source.get("modality") == "image" else source
+            for source in payload["evidence_catalog"]]
     return system, json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
@@ -167,6 +173,10 @@ def fact_selection_prompt(label: str, mode: str, knowledge: dict[str, Any],
         "details to incidental scene inventory. Read visual_observations and preserve their scope "
         "and qualifications; an image or its generated description does not establish invisible taxonomy. "
         "Uncertain/inferred image observations are retained upstream but are not selectable facts. Select only IDs with "
+        "property support. In entity_visual_features_v2, uncertainty_scope identity limits attribution, "
+        "not a clearly observed sample property: such features can be selected and described as the "
+        "pictured subject associated with the target label, without asserting exact identity. "
+        "visual_source_checks report an image-only reobservation; preserve their limits. Select only IDs with "
         "source evidence. selected_fact_ids may contain ONLY exact values from allowed_fact_ids, "
         "which are the fact_id fields in the supplied triples or relation_facts. "
         "evidence_refs and evidence_catalog contain source references, NOT selectable fact IDs: "

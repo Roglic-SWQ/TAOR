@@ -59,7 +59,7 @@ def transport(monkeypatch, replies, on_request=None, timeouts=None):
 
 
 def planner(tmp_path, budget=180):
-    return QwenLocalSemanticStagePlanner(QwenConfig("vision-test", "http://localhost/v1", "TEST_SECRET"),
+    return QwenLocalSemanticStagePlanner(QwenConfig("vision-test", "http://localhost/v1", "TEST_SECRET", stage1_image_policy="visual_observation_policy_v1"),
                                         dataset_root=tmp_path, knowledge_stage_timeout_seconds=budget)
 
 
@@ -117,7 +117,8 @@ def test_description_errors_can_be_corrected_and_missing_description_details_add
 def test_qwen_visual_extraction_requires_source_metadata_in_the_first_decode(tmp_path, monkeypatch):
     target, _ = fixture(tmp_path)
     requests = transport(monkeypatch, ["A blue circle.", json.dumps(extraction())])
-    client = QwenLocalSemanticStagePlanner(QwenConfig("Qwen/Qwen2-VL-7B-Instruct", "http://localhost/v1", "EMPTY"),
+    client = QwenLocalSemanticStagePlanner(QwenConfig("Qwen/Qwen2-VL-7B-Instruct", "http://localhost/v1", "EMPTY",
+                                         stage1_image_policy="visual_observation_policy_v1"),
                                          dataset_root=tmp_path)
     client.build_knowledge(target, "text", coarse_relation_filtering(target, "text", catalogue_only=True))
     assert "guided_json" not in requests[0]
