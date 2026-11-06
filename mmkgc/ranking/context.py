@@ -39,6 +39,7 @@ _PROFILE_FIELDS = (
 )
 _KEY_ATTRIBUTE_FIELDS = frozenset({"attribute", "attribute_type", "source", "evidence"})
 _RELATION_FACT_FIELDS = (
+    "relation_meaning",
     "visual_observations", "visual_source_checks", "source_weight", "selection_score",
     "fact_id", "source_fact_refs", "evidence_refs", "evidence_match_score", "source_modalities",
     "selection_source", "selected_role", "source_plan_id",
@@ -82,6 +83,7 @@ _RELATION_FACT_FIELDS = (
     "uncertain",
 )
 _SUPPORTED_FACT_FIELDS = (
+    "relation_meaning",
     "visual_observations", "visual_source_checks", "source_weight", "selection_score",
     "fact_id", "source_fact_refs", "evidence_refs", "evidence_match_score", "source_modalities",
     "selection_source", "selected_role", "source_plan_id",

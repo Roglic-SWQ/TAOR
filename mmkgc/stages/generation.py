@@ -425,7 +425,7 @@ def _model_generation_context(
     if item.get("fact_ids"):
         selected_facts = item["source_facts"]
         source_facts = [{key: deepcopy(fact[key]) for key in (
-            "fact_id", "claim", "subject", "relation", "object", "direction", "evidence_refs",
+            "fact_id", "claim", "subject", "relation", "object", "direction", "relation_meaning", "evidence_refs",
             "visual_observations", "visual_source_checks", "source_weight", "selection_score") if key in fact}
             for fact in selected_facts]
     elif item.get("fact_id"):
@@ -434,11 +434,20 @@ def _model_generation_context(
             if not isinstance(fact, Mapping):
                 raise ValueError(f"generation source fact missing: {fact_id}")
             source_facts.append({key: deepcopy(fact[key]) for key in (
-                "fact_id", "claim", "subject", "relation", "object", "direction", "evidence_refs",
+                "fact_id", "claim", "subject", "relation", "object", "direction", "relation_meaning", "evidence_refs",
                 "visual_observations", "visual_source_checks", "source_weight", "selection_score",
             ) if key in fact})
     else:
         source_facts = [{"claim": fact} for fact in _facts_for_relation(item, knowledge, reasoning, modality)]
+
+    for fact in source_facts:
+        if "visual_source_checks" in fact:
+            # Review prose may mention additional visible details. It is an
+            # audit record, not an extra set of selected generation facts.
+            fact["visual_source_checks"] = [
+                {key: deepcopy(check[key]) for key in ("observation_id", "status", "evidence_refs")}
+                for check in fact["visual_source_checks"]
+            ]
 
     def requirements(bucket: str) -> list[dict[str, Any]]:
         return [{key: deepcopy(value[key]) for key in (
@@ -462,10 +471,11 @@ def _model_generation_context(
             scoped_visual = (knowledge.get("stage1_v3", {}).get("visual_fact_policy")
                              and value.get("modality") == "image"
                              and value.get("processing") == "model_generated_description")
+            scoped_path = value.get('source') == 'stage0_path'
             evidence.append({
                 **{key: deepcopy(value[key]) for key in ("evidence_id", "source", "content", "modality",
                                                         "locator", "derived_from_modalities")
-                   if key in value and not (scoped_visual and key == "content")},
+                   if key in value and not ((scoped_visual or scoped_path) and key == "content")},
                 "usage": "candidate_fact" if ref in selected_refs else "identity_only" if ref in identity_refs else "context_only",
                 **({"image_admission": {key: deepcopy(value["entity_match"][key]) for key in (
                     "status", "identity_verified", "uncertainties")}} if "entity_match" in value else {}),

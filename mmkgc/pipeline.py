@@ -380,6 +380,14 @@ def _merge_reflection_ranking(original: dict[str, Any], repaired: dict[str, Any]
             winner = parent
             item["repair_outcomes"] = repair_outcomes(parent, item)
             item["repair_eligible"] = repair_is_eligible(parent, item)
+            old_text = parent.get("generated_content", {}).get("value")
+            new_text = item.get("generated_content", {}).get("value")
+            if (mode == "text" and isinstance(old_text, str) and isinstance(new_text, str)
+                    and old_text.strip()
+                    and " ".join(old_text.casefold().split()) == " ".join(new_text.casefold().split())):
+                # A fluctuating reviewer cannot make unchanged prose a repair.
+                # Image resampling is different: the same prompt can yield new pixels.
+                item.update(repair_eligible=False, repair_skip_reason="unchanged_text")
             if item["repair_eligible"]:
                 winner = min((parent, item), key=lambda value: (observation_priority(value), -float(value.get("final_score", 0))))
             selected.discard(parent_id)

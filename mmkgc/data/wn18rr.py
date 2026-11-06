@@ -128,4 +128,23 @@ class WN18RRDataStore(MKGWDataStore):
                     mask_self(node.get('neighbors', []))
             mask_self(record.neighbors)
             record = replace(record, description='')
-        return record
+        return replace(record, relation_semantics={
+            self.relation_label(self.relation_uri_to_id[key]): meaning
+            for key, meaning in WN18RR_RELATION_MEANINGS.items() if key in self.relation_uri_to_id})
+
+
+# Direction is always original subject -> original object, independent of the
+# target's in/out flag. WordNet pointer semantics: https://wordnet.princeton.edu/documentation/wninput5wn
+WN18RR_RELATION_MEANINGS = {
+    '_hypernym': 'The subject has the object as its broader category: subject is a kind of object.',
+    '_instance_hypernym': 'The subject is an individual instance of the object category.',
+    '_has_part': 'The subject whole has the object as a part.',
+    '_member_meronym': 'The subject group or whole has the object as a member.',
+    '_synset_domain_topic_of': 'The subject sense belongs to the object topic domain.',
+    '_member_of_domain_usage': 'The subject usage/register domain contains the object term.',
+    '_member_of_domain_region': 'The subject regional domain contains the object term.',
+    '_derivationally_related_form': 'Subject and object word forms have a derivational lexical link.',
+    '_similar_to': 'Subject and object senses are semantically similar; no physical resemblance is asserted.',
+    '_also_see': 'A lexical cross-reference links the subject sense to the object sense.',
+    '_verb_group': 'The subject and object verb senses belong to a semantic verb group.',
+}

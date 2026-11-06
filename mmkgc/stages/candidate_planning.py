@@ -80,7 +80,7 @@ def candidate_plan_prompt(label: str, mode: str, knowledge: dict[str, Any], budg
         "entity_label": label, "target_modality": mode, "candidate_budget": budget,
         **profile,
         ("triples" if knowledge.get("schema_version") in TRIPLE_SCHEMAS else "relation_facts"): [{key: deepcopy(fact[key]) for key in (
-            "fact_id", "subject", "relation", "object", "direction", "claim", "evidence_refs",
+            "fact_id", "subject", "relation", "object", "direction", "relation_meaning", "claim", "evidence_refs",
             "source_modalities", "relevance_score", "relevance_rank", "relevance_status",
             "visual_observations", "visual_source_checks", "source_weight", "selection_score", "generation_eligible",
             "evidence_match_score", "scoring_status") if key in fact}
@@ -167,6 +167,8 @@ def fact_selection_prompt(label: str, mode: str, knowledge: dict[str, Any],
         "information over redundant or generic details. Non-visual identity and background relations "
         "may be useful for images, but do not establish appearance, people or settings. "
         "Preserve subject/relation/object, direction, attribution and qualifications. "
+        "Read relation_meaning when supplied; its subject/object refer to the original triple, "
+        "regardless of whether the target occupies the incoming or outgoing position. "
         "Relevance scores indicate task usefulness, not truth. Select only supplied fact IDs with "
         "source evidence. source_weight is a conservative source policy weight, not a calibrated "
         "truth probability; selection_score combines it with relevance. Prefer distinguishing target "

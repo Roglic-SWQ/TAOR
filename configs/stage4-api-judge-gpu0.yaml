@@ -1,0 +1,26 @@
+profile_name: local_neural_scorers_independent_api_judge_gpu0
+sentence_bert:
+  required: true
+  enabled: true
+  model_dir: Sentence-BERT/all-mpnet-base-v2
+  device: cuda:0
+bertscore:
+  required: false
+  enabled: false
+clip:
+  required: true
+  enabled: true
+  model_dir: CLIP
+  device: cuda:0
+blip_itm:
+  required: true
+  enabled: true
+  model_dir: blip-itm-large-coco
+  device: cuda:0
+gpt4omini_judge:
+  required: true
+  model_config: configs/independent-visual-verifier.yaml
+  timeout_seconds: 120
+  max_retries: 1
+  retry_backoff_seconds: 1.0
+  max_concurrency: 1

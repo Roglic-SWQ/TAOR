@@ -235,6 +235,8 @@ def _build_knowledge_input(
             catalog[item["evidence_id"]] = item
     result = {
         "schema": LEGACY_KNOWLEDGE_SCHEMA if legacy else TRIPLE_SCHEMA,
+        **({'relation_semantics': deepcopy(record.relation_semantics)}
+           if not legacy and record.relation_semantics else {}),
         "entity": {"entity_key": record.entity_key, "label": record.label},
         "target_modality": missing_mode,
         "existing_modalities": existing,

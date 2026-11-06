@@ -73,6 +73,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--relevance-fact-budget", type=int, default=64,
                         help="Facts shown to Stage 2 after relevance ranking; full catalogue is retained.")
     parser.add_argument("--stage1-model-config", default="configs/qwen7b-stage1.yaml")
+    parser.add_argument("--stage1-visual-verifier-config", default=None,
+                        help="Optional separate model for image admission and pixel feature rechecks.")
     parser.add_argument("--stage2-model-config", default="configs/qwen7b-stage2.yaml")
     parser.add_argument("--output-root", default="outputs")
     parser.add_argument("--run-name", default=None)
@@ -155,6 +157,7 @@ def main(argv: list[str] | None = None) -> int:
         stage1_reranker_device=args.stage1_reranker_device,
         stage1_reranker_max_length=args.stage1_reranker_max_length,
         stage1_model_config=args.stage1_model_config,
+        stage1_visual_verifier_config=args.stage1_visual_verifier_config,
         stage2_model_config=args.stage2_model_config,
         model_config=args.model_config,
         model_call_timeout_seconds=args.model_call_timeout_seconds,
@@ -199,6 +202,7 @@ def main(argv: list[str] | None = None) -> int:
         "relevance_fact_budget": args.relevance_fact_budget,
         "reranker_role": "task_relevance_coarse_retrieval",
         "stage1_model_config": args.stage1_model_config,
+        "stage1_visual_verifier_config": args.stage1_visual_verifier_config,
         "stage2_model_config": args.stage2_model_config,
         "output_root": args.output_root,
         "run_name": run_name,

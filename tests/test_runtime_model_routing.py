@@ -18,6 +18,23 @@ from mmkgc.run import build_parser
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_optional_visual_reviewer_does_not_replace_local_generation(monkeypatch,tmp_path):
+    monkeypatch.setenv('TAOR_REVIEW_MODEL','review-only')
+    monkeypatch.setenv('TAOR_REVIEW_URL','https://review.example.test/v1')
+    monkeypatch.setenv('TAOR_REVIEW_KEY','private-review-test-key')
+    config=tmp_path/'review.yaml'
+    config.write_text('lmm:\n  model_name_env: TAOR_REVIEW_MODEL\n  base_url_env: TAOR_REVIEW_URL\n'
+                      '  api_key_env: TAOR_REVIEW_KEY\ninference:\n  api_response_format: json_object\n')
+    monkeypatch.setattr(defaults,'Qwen3EvidenceReranker',lambda *a,**k:object())
+    monkeypatch.setattr(defaults,'MMKGCPipeline',lambda **kw:SimpleNamespace(**kw))
+    runtime=defaults.build_default_mainline_runtime(stage1_visual_verifier_config=config)
+    assert runtime.pipeline.knowledge_planner.visual_verifier.config.model_name=='review-only'
+    for component in (runtime.pipeline.knowledge_planner,runtime.pipeline.text_generator,
+                      runtime.pipeline.relation_planner):
+        assert component.config.model_name=='Qwen/Qwen2-VL-7B-Instruct'
+    assert build_parser().parse_args([]).stage1_visual_verifier_config is None
+
+
 @pytest.mark.parametrize("missing_mode", ["text", "image"])
 @pytest.mark.parametrize("gpt_override", [False, True])
 def test_runtime_routes_local_qwen_and_explicit_gpt_override(monkeypatch, tmp_path, missing_mode, gpt_override):

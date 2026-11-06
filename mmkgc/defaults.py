@@ -61,6 +61,7 @@ def build_default_mainline_runtime(
     stage1_reranker_device: str = "cuda:0",
     stage1_reranker_max_length: int = 8192,
     stage1_model_config: str | Path = "configs/qwen7b-stage1.yaml",
+    stage1_visual_verifier_config: str | Path | None = None,
     stage2_model_config: str | Path = "configs/qwen7b-stage2.yaml",
     model_config: str | Path = "configs/qwen7b-mainline.yaml",
     model_call_timeout_seconds: float = 60.0,
@@ -105,11 +106,18 @@ def build_default_mainline_runtime(
         stage1_config_path = MMKGC_ROOT / stage1_config_path
     if not stage2_config_path.is_absolute() and not stage2_config_path.exists():
         stage2_config_path = MMKGC_ROOT / stage2_config_path
+    verifier_config = None
+    if stage1_visual_verifier_config is not None:
+        verifier_path = Path(stage1_visual_verifier_config)
+        if not verifier_path.is_absolute() and not verifier_path.exists():
+            verifier_path = MMKGC_ROOT / verifier_path
+        verifier_config = load_qwen_config(verifier_path)
     knowledge_planner = QwenLocalSemanticStagePlanner(
         load_qwen_config(stage1_config_path),
         timeout_seconds=model_call_timeout_seconds,
         knowledge_stage_timeout_seconds=knowledge_stage_timeout_seconds,
         dataset_root=resolve_dataset_root(dataset_root),
+        **({'visual_verifier_config': verifier_config} if verifier_config is not None else {}),
     )
     relation_planner = OpenAICompatibleRelationPlanner(
         load_qwen_config(stage2_config_path), timeout_seconds=model_call_timeout_seconds,

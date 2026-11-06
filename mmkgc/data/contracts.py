@@ -28,6 +28,7 @@ class EntityRecord:
     ground_truth_modalities: Dict[str, Optional[str]]
     modality_completion_policy: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     image_paths: List[str] = field(default_factory=list)
+    relation_semantics: Dict[str, str] = field(default_factory=dict)
 
 
 def existing_image_paths(record: EntityRecord) -> list[str]:

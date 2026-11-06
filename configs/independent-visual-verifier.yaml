@@ -1,0 +1,8 @@
+lmm:
+  model_name_env: OPENAI_MODEL
+  base_url_env: OPENAI_BASE_URL
+  api_key_env: OPENAI_API_KEY
+inference:
+  max_token: 4096
+  temperature: 0.0
+  api_response_format: json_object

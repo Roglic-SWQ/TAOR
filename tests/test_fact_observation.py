@@ -366,6 +366,21 @@ def test_higher_quality_cannot_hide_unresolved_repairs_or_lose_correct_facts(reg
     assert merged["image_ranking"]["best_candidate_id"] == "image_001"
 
 
+@pytest.mark.parametrize("repeated_text", ["original candidate", " ORIGINAL   candidate\n", "Original Candidate"])
+def test_unchanged_text_cannot_become_a_successful_repair_when_judge_changes_its_mind(repeated_text):
+    *_, targets = setup('text')
+    original = observed_candidate(targets, mode='text', status='missing', score=0.3)
+    repaired = observed_candidate(targets, mode='text', status='supported',
+                                  candidate_id='text_safe_001', score=0.99)
+    repaired['source_candidate_id'] = 'text_001'
+    repaired['generated_content']['value'] = repeated_text
+    merged = _merge_reflection_ranking(ranked(original), ranked(repaired))
+    assert merged['text_ranking']['best_candidate_id'] == 'text_001'
+    attempt = next(c for c in merged['text_ranking']['ranked_candidates'] if c['candidate_id']=='text_safe_001')
+    assert attempt['repair_eligible'] is False
+    assert attempt['repair_skip_reason'] == 'unchanged_text'
+
+
 def png():
     buffer = BytesIO()
     Image.new("RGB", (8, 8), "red").save(buffer, format="PNG")
@@ -382,7 +397,7 @@ def test_pipeline_performs_one_scoped_repair_and_writes_both_observations(mode, 
         def generate(self, label, entity_type, relation, angle, facts):
             if "safe retry" in angle and failure == "generation":
                 raise TimeoutError("repair service unavailable")
-            return "a red tower"
+            return "a red tower with a clock" if "safe retry" in angle else "a red tower"
 
     class Prompt(Text):
         def generate(self, *args):
@@ -416,6 +431,7 @@ def test_pipeline_performs_one_scoped_repair_and_writes_both_observations(mode, 
                         candidate_id=candidate["candidate_id"], status="supported" if self.calls == 2 else
                             "missing" if mode == "text" else "contradicted",
                         score=0.7 if candidate["candidate_id"].endswith("002") else 0.8)}
+                item['generated_content'] = candidate['generated_content']
                 items.append(item)
             return {"ranking_status": "completed", f"{mode}_ranking": {
                 "ranked_candidates": items, "best_candidate_id": items[0]["candidate_id"], "rejected_candidates": []}}

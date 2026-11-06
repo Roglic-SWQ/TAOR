@@ -2,7 +2,7 @@
 # Execute only in a newly allocated one-GPU job. Never inherit a dev CUDA mask.
 set -euo pipefail
 PROJECT_ROOT=/medisco/linjiashi/Code/TAOR
-ART="${PROJECT_ROOT}/outputs/wn18rr-real-test-20261106"
+ART="${TAOR_REAL_ARTIFACT_ROOT:-${PROJECT_ROOT}/outputs/wn18rr-real-test-20261106}"
 ATTEMPT="${TAOR_REAL_ATTEMPT:-$(date -u +%Y%m%dT%H%M%S)}"
 LOG_DIR="${ART}/attempt-${ATTEMPT}"
 PY=/medisco/linjiashi/venvs/taor-inference/bin/python
@@ -45,22 +45,33 @@ for ((attempt=0; attempt<180; attempt++)); do
   if ((attempt == 179)); then echo 'Qwen startup timed out'; exit 3; fi
   sleep 5
 done
+RUNNER=("${PY}" -m mmkgc.run)
+DOCTOR=("${PY}" -m mmkgc.doctor)
+if [[ -n "${TAOR_REAL_API_ENV_FILE:-}" ]]; then
+  API_WRAPPER=("${PY}" scripts/run_with_cluster_api.py --env-file "${TAOR_REAL_API_ENV_FILE}"
+               --proxy-settings "${TAOR_REAL_PROXY_SETTINGS:?private proxy settings required}")
+  RUNNER=("${API_WRAPPER[@]}" --module mmkgc.run --)
+  DOCTOR=("${API_WRAPPER[@]}" --module mmkgc.doctor --)
+fi
 COMMON=(--dataset-type wn18rr --dataset-dir datasets/wn18rr-import-20261106/WN18RR
   --graph-split train --entity-manifest "${ART}/pilot-entity.json" --limit 1
   --stage1-reranker-model-dir /medisco/linjiashi/models/Qwen/Qwen3-Reranker-4B
   --stage1-reranker-device cuda:0 --sdxl-device cuda:0 --candidate-budget 1
-  --model-call-timeout-seconds 120 --stage4-config configs/stage4-qwen7b-local.yaml
+  --model-call-timeout-seconds 120 --stage4-config "${TAOR_REAL_STAGE4_CONFIG:-configs/stage4-qwen7b-local.yaml}"
   --output-root "${LOG_DIR}/runs")
-"${PY}" -m mmkgc.doctor "${COMMON[@]}" --missing-mode image >"${LOG_DIR}/doctor.json"
+if [[ -n "${TAOR_REAL_VISUAL_VERIFIER_CONFIG:-}" ]]; then
+  COMMON+=(--stage1-visual-verifier-config "${TAOR_REAL_VISUAL_VERIFIER_CONFIG}")
+fi
+"${DOCTOR[@]}" "${COMMON[@]}" --qwen-timeout-seconds 20 --missing-mode image >"${LOG_DIR}/doctor.json"
 if [[ -n "${TAOR_REAL_FROZEN_FAILURE:-}" ]]; then
   timeout 1200 "${PY}" scripts/check_wn18rr_native_contract.py \
     --failure-file "${TAOR_REAL_FROZEN_FAILURE}" --output-root "${LOG_DIR}/frozen-control"
   exit $?
 fi
 set +e
-timeout 1200 "${PY}" -m mmkgc.run "${COMMON[@]}" --missing-mode text --run-name text-qwen7b
+timeout 1200 "${RUNNER[@]}" "${COMMON[@]}" --missing-mode text --run-name text-qwen7b
 TEXT_STATUS=$?
-timeout 1200 "${PY}" -m mmkgc.run "${COMMON[@]}" --missing-mode image --run-name image-qwen7b-sdxl \
+timeout 1200 "${RUNNER[@]}" "${COMMON[@]}" --missing-mode image --run-name image-qwen7b-sdxl \
   --sdxl-model-dir /medisco/linjiashi/models/SDXL/stable-diffusion-xl-base-1.0 \
   --sdxl-width 1024 --sdxl-height 1024 --sdxl-steps 20 --sdxl-seed 20260708
 IMAGE_STATUS=$?

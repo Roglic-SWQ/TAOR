@@ -47,6 +47,8 @@ REQUIRED_RESPONSE_FIELDS = frozenset(
 MAX_REPAIR_RESPONSE_CHARS = 4000
 OBSERVATION_CONTRACT_VERSION = "candidate_observation_contract_v2"
 VISUAL_SCOPE_INSTRUCTIONS = (
+    "\nUse each supplied relation_meaning to interpret original subject/relation/object. "
+    "Matching relation tokens alone do not establish that the candidate paraphrase preserves direction. "
     "\nRespect visual_observations claim_scope: depicted_instance supports only the pictured sample, "
     "not a universal category property. Compatible image admission is not verified entity identity. "
     "Check whether candidate wording preserves these limits; class-wide or exact-identity claims "

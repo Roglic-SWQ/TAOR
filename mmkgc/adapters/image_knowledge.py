@@ -45,10 +45,16 @@ def image_assessment_prompt(inputs, metadata, errors=None):
     # deliberately NOT passed to the subsequent visual feature extractor.
     anchors = [{key: fact[key] for key in ("subject", "relation", "object", "evidence_refs")}
                for fact in inputs["fact_candidates"]]
+    for anchor in anchors:
+        meaning = inputs.get('relation_semantics', {}).get(anchor['relation'])
+        if meaning:
+            anchor['relation_meaning'] = meaning
     return (
         "Check whether this original image can be used as visual evidence for the target entity. "
         "Inspect pixels before comparing the target label and supplied source assertions. "
-        "Source assertions may themselves be wrong; report a conflict without deciding which source is true. "
+        "Use source context only to understand the target sense, using relation_meaning when supplied. "
+        "Do not assess graph correctness here: an unverifiable relation or a source-only disagreement "
+        "belongs in uncertainties and does not justify rejecting a picture. "
         "Keep source subject/relation/object direction unchanged; the intended lexical sense may differ "
         "from the most familiar meaning of the target name. "
         "Return compatible only when visible cues support relevance to the target and no visible conflict is found. "
@@ -56,6 +62,8 @@ def image_assessment_prompt(inputs, metadata, errors=None):
         "caption or broad resemblance alone does not establish a named individual or fine-grained class. "
         "Use unrelated for an unrelated subject, conflicting for an observable clash with target context, "
         "and unresolved for insufficient visibility or unresolved target/subject ambiguity. "
+        "Conflicting requires a concrete VISIBLE property of the pictured subject that clashes with the "
+        "target; disagreement about a non-visible taxonomy direction is not a visible image conflict. "
         "For compatible, provide at least one concrete matching cue and no conflicting cues. "
         "Record every identity limitation and disagreement in uncertainties; do not resolve them by guesswork. "
         "Describe entity-relevant visible morphology, structure, material or configuration at a useful "

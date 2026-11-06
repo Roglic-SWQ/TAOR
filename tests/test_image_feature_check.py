@@ -9,6 +9,10 @@ from mmkgc.adapters.image_feature_check import parse_checks, proposed_features, 
 from mmkgc.adapters.image_knowledge import IMAGE_REF
 from mmkgc.stages.candidate_planning import planning_facts, fact_selection_prompt
 from mmkgc.stages.semantic import Stage1CompletionError, KNOWLEDGE_REQUEST_CONTEXT
+from mmkgc.stages.generation import _model_generation_context
+from mmkgc.stages.plan_context import compile_plan_context
+from mmkgc.stages.candidate_planning import apply_fact_selection
+from mmkgc.stages.triples import fact_text
 
 
 def test_uncertain_pixel_property_is_retained_but_not_selected(tmp_path, monkeypatch):
@@ -101,3 +105,44 @@ def test_decoder_cardinality_still_limits_citations_when_uniqueness_is_not_suppo
         {'observation_id':'mf:0001:visual:0','evidence_refs':[IMAGE_REF]}],{IMAGE_REF}))
     refs=wire['properties']['checks']['items']['properties']['evidence_refs']
     assert 'uniqueItems' not in refs and refs['maxItems']==1
+
+
+def test_instance_scope_survives_selection_and_review_prose_cannot_expand_generation(tmp_path, monkeypatch):
+    target, _ = fixture(tmp_path)
+    reply = json.loads(pixel_reply())
+    reply['checks'][0]['observed'] += ' EXTRA_UNSELECTED_DETAIL'
+    transport(monkeypatch, [json.dumps(assessment()), 'A blue circle.',
+                           json.dumps(response([feature()])), json.dumps(reply)])
+    result = run(planner(tmp_path), target)
+    fact = planning_facts(result)[0]
+    assert fact['subject'] == 'Scene' and fact['object'] == 'blue'
+    assert 'depicted instance only' in fact_text(fact)
+    selection, reasoning = compile_plan_context(result, apply_fact_selection(result,
+        {'status': 'ready', 'selected_fact_ids': [fact['fact_id']]}, 'text', 8), 'text')
+    context = _model_generation_context(result,
+        selection['fine_grained_relation_selection']['candidates'][0], reasoning, 'text', '', '')
+    assert 'depicted instance only' in json.dumps(context)
+    assert 'EXTRA_UNSELECTED_DETAIL' not in json.dumps(context)
+    assert 'EXTRA_UNSELECTED_DETAIL' in json.dumps(result)
+    checked_again = apply_checks(result, proposed_features(result), reply['checks'])
+    assert fact_text(checked_again['relation_facts'][0]) == fact_text(fact)
+
+
+@pytest.mark.parametrize('preserve', ['authored_claim', 'non_image_source'])
+def test_scope_projection_preserves_authored_claims_and_mixed_source_assertions(tmp_path, monkeypatch, preserve):
+    target, _ = fixture(tmp_path)
+    transport(monkeypatch, [json.dumps(assessment()), 'A blue circle.',
+                           json.dumps(response([feature()])), pixel_reply()])
+    result = run(planner(tmp_path), target)
+    fact = result['relation_facts'][0]
+    fact.pop('claim_origin', None)
+    fact.pop('claim', None)
+    if preserve == 'authored_claim':
+        fact['claim'] = 'Authored source claim'
+    else:
+        result['evidence_catalog'].append({'evidence_id': 'graph:1', 'modality': 'graph'})
+        fact['evidence_refs'].append('graph:1')
+    checked = apply_checks(result, proposed_features(result), json.loads(pixel_reply())['checks'])
+    actual = checked['relation_facts'][0]
+    assert actual.get('claim') == fact.get('claim')
+    assert 'claim_origin' not in actual

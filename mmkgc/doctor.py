@@ -68,7 +68,10 @@ def run_doctor(argv: list[str] | None = None) -> dict[str, Any]:
             ok, message = probe_qwen_service(qwen_config, args.qwen_timeout_seconds)
             checks.append(_check("qwen_service", "ok" if ok else "error", message))
 
-    for stage, path in (("stage1", args.stage1_model_config), ("stage2", args.stage2_model_config)):
+    stage_configs = [("stage1", args.stage1_model_config), ("stage2", args.stage2_model_config)]
+    if args.stage1_visual_verifier_config is not None:
+        stage_configs.append(("stage1_visual_verifier", args.stage1_visual_verifier_config))
+    for stage, path in stage_configs:
         try:
             config = load_qwen_config(path)
             checks.append(_check(f"{stage}_model_config", "ok", f"loaded {config.model_name}"))

@@ -1002,7 +1002,8 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
 
     def __init__(self, config: QwenConfig, timeout_seconds: float = 60.0,
                  knowledge_stage_timeout_seconds: float = 180.0,
-                 dataset_root: str | Path | None = None) -> None:
+                 dataset_root: str | Path | None = None,
+                 visual_verifier_config: QwenConfig | None = None) -> None:
         self.config = config
         self.timeout_seconds = timeout_seconds
         self.dataset_root = Path(dataset_root).resolve() if dataset_root is not None else None
@@ -1018,8 +1019,20 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
             source_bound_text_extraction="qwen" in config.model_name.lower(),
             knowledge_stage_timeout_seconds=knowledge_stage_timeout_seconds,
         )
+        self.visual_verifier = (QwenLocalSemanticStagePlanner(
+            visual_verifier_config, timeout_seconds=timeout_seconds,
+            knowledge_stage_timeout_seconds=knowledge_stage_timeout_seconds,
+            dataset_root=dataset_root) if visual_verifier_config is not None else None)
 
     def build_knowledge(self, record, missing_mode, coarse):
+        start = len(self.calls)
+        try:
+            return self._build_knowledge(record, missing_mode, coarse)
+        except Exception as exc:
+            setattr(exc, 'model_calls', deepcopy(self.calls[start:]))
+            raise
+
+    def _build_knowledge(self, record, missing_mode, coarse):
         from mmkgc.data.contracts import existing_image_paths
         image_paths = existing_image_paths(record) if missing_mode != "image" else []
         modalities = [modality for modality in ("image", "video", "audio")
@@ -1098,7 +1111,9 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
             token = KNOWLEDGE_REQUEST_CONTEXT.set({"deadline": deadline, "call": call, "media_inputs": [source]})
             try:
                 for contract_attempt in range(2 if assess_image else 1):
-                    description = self._complete_prompt(prompt).strip()
+                    complete = (self.visual_verifier._complete_prompt
+                                if assess_image and self.visual_verifier is not None else self._complete_prompt)
+                    description = complete(prompt).strip()
                     if time.perf_counter() >= deadline:
                         raise TimeoutError(f"Stage 1 total time budget exhausted during {modality} description")
                     incomplete = ("output_token_limit" if call["network_attempts"] and
@@ -1196,7 +1211,11 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
                     result["uncertainties"].append({"aspect": entry["original_image_ref"],
                                                    "reason": "; ".join(reasons)})
             result["stage1_v3"]["uncertain_aspects"] = deepcopy(result["uncertainties"])
-            result = self._verify_visual_features(result, images, record.entity_key, deadline)
+            try:
+                result = self._verify_visual_features(result, images, record.entity_key, deadline)
+            except Exception as exc:
+                setattr(exc, 'partial_knowledge', deepcopy(result))
+                raise
         if len(image_paths) > 1:
             result["image_modeling"]["extraction_batches"] = batch_records
         return result
@@ -1253,6 +1272,20 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
             KNOWLEDGE_REQUEST_CONTEXT.reset(token)
 
     def _verify_visual_features(self, knowledge, images, entity_key, deadline):
+        if self.visual_verifier is not None:
+            reviewer = self.visual_verifier
+            start = len(reviewer.calls)
+            try:
+                result = reviewer._verify_visual_features(knowledge, images, entity_key, deadline)
+                result['stage1_v3']['visual_fact_policy']['pixel_recheck_reviewer'] = {
+                    'model_name': reviewer.config.model_name,
+                    'endpoint_host': urlsplit(reviewer.config.base_url).hostname,
+                    'separate_from_extractor': (reviewer.config.model_name, reviewer.config.base_url) !=
+                                               (self.config.model_name, self.config.base_url),
+                    'performed': len(reviewer.calls) > start}
+                return result
+            finally:
+                self.calls.extend(deepcopy(reviewer.calls[start:]))
         from mmkgc.adapters.image_feature_check import (proposed_features, check_schema,
                                                        check_prompt, parse_checks, apply_checks)
         from mmkgc.stages.semantic import Stage1CompletionError

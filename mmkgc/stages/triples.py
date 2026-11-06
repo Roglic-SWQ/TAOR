@@ -53,7 +53,8 @@ def model_input_view(inputs: dict[str, Any], limit: int = 32) -> dict[str, Any]:
     selection_view = {key: deepcopy(value) for key, value in inputs.get("evidence_selection", {}).items()
                       if key != "modeled_stage0_fact_ids"}
     return {**{key: deepcopy(value) for key, value in inputs.items()
-               if key not in {"fact_candidates", "evidence_catalog", "source_inputs", "image_modeling", "media_modeling", "evidence_selection"}},
+               if key not in {"fact_candidates", "evidence_catalog", "source_inputs", "image_modeling", "media_modeling", "evidence_selection"}
+               and not (source_only and key == 'relation_semantics')},
             **({"evidence_selection": selection_view} if selection_view else {}),
             **({"image_modeling": image_view} if image_view else {}),
             **({"media_modeling": {modality: {key: entry[key] for key in (
@@ -414,6 +415,9 @@ def apply_triple_response(inputs: dict[str, Any], response: dict[str, Any]) -> d
                                                      "evidence_refs": list(triple["evidence_refs"])})
     gaps = deepcopy(response["uncertain_aspects"])
     for key, fact in facts.items():
+        meaning = inputs.get('relation_semantics', {}).get(fact['relation'])
+        if meaning:
+            fact['relation_meaning'] = meaning
         if inputs.get("visual_fact_policy") in VISUAL_POLICIES:
             bind_visual_observations(fact, observations.get(key, []), catalog, inputs["visual_fact_policy"])
             if not fact["generation_eligible"]:

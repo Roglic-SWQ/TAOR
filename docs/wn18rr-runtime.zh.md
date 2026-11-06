@@ -1,5 +1,7 @@
 # WN18RR 原生接入与 Qwen2-VL-7B／SDXL 冒烟
 
+2026-11-06 后续混合评审入口与实测见 [独立审核报告](evaluation/2026-11-06-wn18rr-hybrid.zh.md)。该入口保留本地 7B 生成和真实 SDXL，显式使用独立 API 做准入、像素复核与 Stage 4 Judge；以下早期冒烟记录仍按当时的配置解读。
+
 ## 数据输入
 
 主 CLI 与 doctor 均支持 `--dataset-type wn18rr`，不需要生成 MKG-W 中间文件。

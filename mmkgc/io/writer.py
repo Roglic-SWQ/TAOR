@@ -159,6 +159,15 @@ class RunWriter:
             failure["model_call"] = _safe_output(model_call)
             if stage is None and isinstance(model_call.get("stage"), str):
                 failure["stage"] = model_call["stage"]
+        model_calls = getattr(error, 'model_calls', None) if error is not None else None
+        if isinstance(model_calls, list):
+            failure['model_calls'] = _safe_output(model_calls)
+        partial_knowledge = getattr(error, 'partial_knowledge', None) if error is not None else None
+        if isinstance(partial_knowledge, dict):
+            failure['partial_knowledge'] = {
+                'source_validation_status': 'not_completed',
+                'data': _safe_output(partial_knowledge),
+            }
         self._failures.append(failure)
 
     def write_summary(self) -> dict[str, Any]:
@@ -952,6 +961,7 @@ def _compact_stage4_candidate(
         "repair_targets": item.get("repair_targets"),
         "repair_outcomes": item.get("repair_outcomes"),
         "repair_eligible": item.get("repair_eligible"),
+        "repair_skip_reason": item.get("repair_skip_reason"),
         "observation": item.get("observation"),
         "judge_rubrics": item.get("judge_rubrics"),
         "candidate_ref": f"stage3:{candidate_id}" if candidate_id else None,
