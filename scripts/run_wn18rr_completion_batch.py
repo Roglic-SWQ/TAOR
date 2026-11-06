@@ -82,16 +82,17 @@ def freeze(root):
                       'real_missing_texts': len(missing_texts), 'root': str(root)}, ensure_ascii=False))
 
 
-def validate(root):
+def validate(root, *, check_sources=True):
     binding = read(root/'binding.json')
     if digest(root/'manifest.json') != binding['manifest_sha256']:
         raise ValueError('Frozen entity manifest changed')
     for path, expected in binding['files'].items():
         if digest(path) != expected:
             raise ValueError(f'Frozen dataset input changed: {Path(path).name}')
-    for path, expected in binding['sources'].items():
-        if digest(ROOT/path) != expected:
-            raise ValueError(f'Frozen implementation changed: {path}')
+    if check_sources:
+        for path, expected in binding['sources'].items():
+            if digest(ROOT/path) != expected:
+                raise ValueError(f'Frozen implementation changed: {path}')
     rows = read(root/'manifest.json')
     for row in rows:
         for image in row['images']:
@@ -156,6 +157,19 @@ def persist_initial(pipeline, prepared, generation, root, name):
         pipeline.skip_stage4 = previous
 
 
+def publication_ready(candidate):
+    """A gate pass alone cannot resolve missing facts or certify an identity."""
+    observation = candidate.get('observation') or {}
+    checks = observation.get('fact_checks')
+    if not isinstance(checks, list) or any(not isinstance(c, dict) for c in checks):
+        return False
+    required = [c for c in checks if c.get('requirement') == 'must_include']
+    return (bool(required) and all(c.get('status') == 'supported' for c in required)
+            and not any(c.get('status') == 'contradicted' for c in checks)
+            and not observation.get('unsupported_claims')
+            and candidate.get('repair_eligible') is not False)
+
+
 def export_best(entity_dir, mode, destination):
     """Export only a persisted Stage 4 pass; leave uncertain results identifiable."""
     final = read(entity_dir/'final.json')
@@ -171,6 +185,8 @@ def export_best(entity_dir, mode, destination):
     if len(candidates) != 1 or candidates[0].get('gate', {}).get('decision') != 'pass':
         raise ValueError('Best candidate did not pass its persisted gate')
     candidate = candidates[0]
+    if not publication_ready(candidate):
+        return None
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.exists():
         raise FileExistsError('Refusing to overwrite a completed export')
@@ -215,6 +231,90 @@ def summarize(root, manifest):
         'ground_truth_used': False, 'generation_model': 'Qwen2-VL-7B-Instruct',
         'image_model': 'SDXL', 'review_model': 'gpt-6-luna', 'rows': rows})
     (root/'completion_manifest.jsonl').write_text(''.join(json.dumps(_safe_output(r), ensure_ascii=False)+'\n' for r in rows))
+
+
+def review(root):
+    """Apply the current export rule to immutable historical results, offline.
+
+    Generation still requires matching frozen source code. Review deliberately
+    uses today's rule and verifies historical inputs/artifacts, not regeneration.
+    """
+    manifest = validate(root, check_sources=False)
+    destination = root/'reviewed'
+    destination.mkdir(exist_ok=False)
+    rows, accepted = [], []
+    for item in manifest:
+        mode, key = item['missing_mode'], item['entity_key']
+        original = read(root/'state'/f'{mode}-{key}.json')
+        row = {'entity_key': key, 'label': item['label'], 'missing_mode': mode,
+               'scope': item['scope'], 'original_batch_status': original['status'],
+               'source_entity_dir': original.get('entity_dir')}
+        if original['status'] == 'failed':
+            row.update(status='failed', error_type=original.get('error_type'), error=original.get('error'))
+        else:
+            if not terminal(original, root):
+                raise ValueError('Review requires a terminal batch')
+            entity = Path(original['entity_dir'])
+            ranking = read(entity/'4_kg_aware_candidate_consistency_ranking.json')['data'][mode+'_ranking']
+            best = ranking.get('best_candidate_id')
+            candidate = next((c for c in ranking.get('ranked_candidates', []) if c['candidate_id'] == best), {})
+            manual_path = root/'verification/manual-review'/f'{key}.json'
+            manual = read(manual_path) if manual_path.exists() else {}
+            if manual and original.get('export') and manual.get('export_sha256') != original['export']['sha256']:
+                raise ValueError('Manual review refers to a different candidate export')
+            eligible = publication_ready(candidate)
+            row.update(status='needs_review', structured_checks_ready=eligible,
+                       manual_review=manual.get('decision', 'pending'), candidate_id=best)
+            if eligible and manual.get('decision') in {'panel_compatible', 'concept_compatible'}:
+                suffix = '.png' if mode == 'image' else '.txt'
+                exported = export_best(entity, mode, destination/'exports'/mode/(key+suffix))
+                if exported:
+                    row.update(status='accepted', export=exported)
+                    accepted.append(row)
+        rows.append(row)
+    summary = {'revalidation_only': True, 'new_model_calls': 0, 'ground_truth_used': False,
+        'review_source_sha256': digest(Path(__file__)),
+        'historical_execution': read(root/'verification/execution-commit.json'),
+        'counts': dict(Counter(r['status'] for r in rows)),
+        'by_modality': {mode: dict(Counter(r['status'] for r in rows if r['missing_mode'] == mode))
+                        for mode in ('text', 'image')},
+        'manual_review_is_independent_human_annotation': False,
+        'batch_expansion_allowed': False, 'reason': 'Pilot quality acceptance failed.'}
+    save(destination/'summary.json', summary)
+    for name, values in (('completion_manifest.jsonl', rows), ('accepted_completions.jsonl', accepted)):
+        (destination/name).write_text(''.join(json.dumps(_safe_output(r), ensure_ascii=False)+'\n' for r in values))
+    print(json.dumps(summary, ensure_ascii=False))
+
+
+def selection_control(root, failure_path):
+    """Replay one actual failed selection-repair request against local 7B."""
+    from mmkgc.adapters.qwen import load_qwen_config
+    from mmkgc.adapters.relation_planner import OpenAICompatibleRelationPlanner
+    from mmkgc.stages.candidate_planning import fact_selection_schema, apply_fact_selection
+    from mmkgc.stages.candidate_planning import parse_candidate_response
+    failure = read(failure_path)
+    original = next(c for c in failure['calls'] if c.get('stage') == 'stage2_selection')
+    payload = json.loads(original['prompt'])
+    knowledge = {'relation_facts': payload['triples'], 'evidence_catalog': payload['evidence_catalog']}
+    limit = original['max_selected_facts']
+    schema = fact_selection_schema(knowledge, limit)
+    messages = [{'role': 'system', 'content': original['system_prompt']},
+                {'role': 'user', 'content': original['prompt']},
+                {'role': 'user', 'content': original['selection_repairs'][-1]['prompt']}]
+    planner = OpenAICompatibleRelationPlanner(load_qwen_config(ROOT/'configs/qwen7b-stage2.yaml'))
+    call = {'network_attempts': [], 'transport_retries': 0, 'stage_timeout_seconds': 120}
+    try:
+        raw = planner._complete_with_retries(messages, schema, call, 1, time.perf_counter()+120)
+        parsed = parse_candidate_response(raw)
+        result = apply_fact_selection(knowledge, parsed, payload['target_modality'], limit)
+        save(root/'selection-control-result.json', {'status': 'applied', 'model_name': planner.config.model_name,
+             'source_failure': str(failure_path), 'source_sha256': digest(failure_path),
+             'same_frozen_repair_messages': True, 'response_text': raw, 'selection': result,
+             'network_attempts': call['network_attempts'], 'semantic_quality_not_established': True})
+    except Exception as exc:
+        save(root/'selection-control-failure.json', {'error_type': type(exc).__name__, 'error': str(exc),
+             'source_sha256': digest(failure_path), 'network_attempts': call['network_attempts']})
+        raise
 
 
 def run(root, retry_failed=False):
@@ -324,10 +424,16 @@ def main():
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--prepare', action='store_true')
     parser.add_argument('--retry-failed', action='store_true')
+    parser.add_argument('--review', action='store_true')
+    parser.add_argument('--selection-control', type=Path)
     args = parser.parse_args()
     root = args.root.resolve()
     if args.prepare:
         freeze(root)
+    elif args.review:
+        review(root)
+    elif args.selection_control:
+        selection_control(root, args.selection_control)
     else:
         with (root/'.worker.lock').open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

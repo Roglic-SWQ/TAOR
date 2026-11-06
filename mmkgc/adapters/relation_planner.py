@@ -192,6 +192,9 @@ class OpenAICompatibleRelationPlanner:
                 # Constrain only the tiny focused reply, never the global Stage 2 anyOf schema.
                 payload['guided_json'] = {k: deepcopy(v) for k, v in schema.items() if k != TASK_MARKER}
                 payload['guided_decoding_backend'] = 'lm-format-enforcer'
+            if 'guided_json' in payload:
+                from mmkgc.adapters.json_contract import decoder_safe_json_schema
+                payload['guided_json'] = decoder_safe_json_schema(payload['guided_json'])
         import httpx
 
         timeout = context.get('timeout', self.timeout_seconds)

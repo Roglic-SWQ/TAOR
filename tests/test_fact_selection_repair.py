@@ -146,3 +146,37 @@ def test_invalid_json_does_not_reuse_a_stale_parsed_selection(monkeypatch):
     assert result['fine_grained_relation_selection']['selected_fact_ids'] == ['rf:3']
     assert planner.calls[-1]['selection_repairs'][-1]['error_counts'] == {'invalid_json': 1}
     assert planner.calls[-1]['selection_repairs'][-1]['previous_legal_choices'] == ['rf:2']
+
+
+def test_local_selection_repair_uses_decoder_compatible_schema_without_weakening_validation(monkeypatch):
+    import httpx
+    import json as jsonlib
+    bodies = []
+    class Client:
+        def __init__(self, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): return False
+        async def post(self, url, json, headers):
+            request = httpx.Request('POST', url)
+            if url.endswith('/tokenize'):
+                return httpx.Response(200, request=request, json={'count': 1000, 'max_model_len': 24576})
+            bodies.append(json)
+            if 'uniqueItems' in jsonlib.dumps(json.get('guided_json', {})):
+                return httpx.Response(400, request=request, json={'error': {
+                    'type': 'BadRequestError', 'message': 'Grammar error: Unimplemented keys: ["uniqueItems"]'}})
+            return httpx.Response(200, request=request, json={'choices': [
+                {'finish_reason': 'stop', 'message': {'content': '{"status":"ready","selected_fact_ids":["rf:2"]}'}}]})
+    monkeypatch.setattr(httpx, 'AsyncClient', Client)
+    planner = OpenAICompatibleRelationPlanner(QwenConfig('Qwen/test', 'http://localhost/v1', 'EMPTY'))
+    schema = fact_selection_schema(source(), 2)
+    before = deepcopy(schema)
+    token = planner._request_context.set({'event': {'contract_attempt': 1}, 'timeout': 5})
+    try:
+        result = planner._complete([{'role': 'user', 'content': 'Repair the frozen selection.'}], schema)
+    finally:
+        planner._request_context.reset(token)
+    assert json.loads(result) == selection(['rf:2'])
+    assert 'uniqueItems' not in json.dumps(bodies[0]['guided_json'])
+    assert schema == before and 'uniqueItems' in json.dumps(schema)
+    with pytest.raises(RelationPlanValidationError):
+        apply_fact_selection(source(), selection(['rf:2', 'rf:2']), 'text', 2)

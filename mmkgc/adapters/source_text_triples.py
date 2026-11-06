@@ -285,7 +285,12 @@ class SourceTextTask:
             invalid("/extracted_triples", "return an array of subject/relation/object triples")
         canonical = deepcopy(response)
         canonical.pop('excluded_triples', None)
-        conservative = profile["primary_type"] == "entity" and profile["core_identity"] == self.label
+        # The reference has the same explicit meaning in a profile as in a
+        # triple endpoint. Bind only the reserved whole value, never aliases.
+        if canonical["entity_profile"]["core_identity"] == TARGET_REF:
+            canonical["entity_profile"]["core_identity"] = self.label
+        conservative = (profile["primary_type"] == "entity"
+                        and canonical["entity_profile"]["core_identity"] == self.label)
         canonical["entity_profile"]["evidence_refs"] = [] if conservative else [self.evidence_id]
         protocol_errors = []
         for index, raw_triple in enumerate(triples):

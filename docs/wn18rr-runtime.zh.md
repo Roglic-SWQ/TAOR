@@ -1,5 +1,48 @@
 # WN18RR 原生接入与 Qwen2-VL-7B／SDXL 冒烟
 
+## 2026-11-07：20 实体补全试跑
+
+**工程链路可批次执行，但当前 7B 配置未通过扩大批量的质量验收；未启动 100 实体或全量。**
+
+当前导入数据的 test.tsv 涉及 5,323 个去重实体，其中 4,493 个没有对齐图片，文本全部存在。本轮在生成前冻结 10 个真实缺图实体、10 个遮蔽文本实体，后者共 30 张原图；覆盖角色、器物、动植物、动作、抽象概念及训练邻边为空的实体。清单是诊断选例，文本例限定为 1–4 张原图，不能作为代表性随机样本或模型总体正确率。
+
+实际执行源码为 `ef809f4`，150 个生产源文件与冻结指纹一致。7B 承担 Stage 1 描述／抽取、Stage 2 选择、文本／生图提示词／反思；gpt-6-luna 承担图片准入、像素复核与 Stage 4 Judge。本地 Qwen3-Reranker、SBERT、CLIP、BLIP 与真实 SDXL 均按配置执行，始终最多申请一张 A100 80GB。只加载 train 图谱；测试边仅用于确定实体范围，不进入生成。
+
+| 项目 | 实测 |
+| --- | --- |
+| 实体任务 | 20 个均尝试，18 个完成生成与 Stage 4，2 个在 Stage 2 失败 |
+| 补图 | 10 个实体、20 张真实 1024×1024 PNG，20 个不同像素 SHA |
+| 图片控制 | 每实体一个提示词、两个种子 20260709／20260710；20 steps、guidance 7.5；未触发图片反思 |
+| 补文本 | 8 个实体生成文本；2 个 Stage 2 HTTP 400，批次继续执行 |
+| 文本反思 | 5 次真实反思全部原样返回，均标记 unchanged_text／unresolved |
+| 保守复核索引 | 1 份文本与所选事实相符、1 张图符合通道／水流概念；16 个待复核、2 个失败 |
+
+最后一行依据结构化检查与助手逐项来源／像素复核，不是独立人工真值标注，也不证明下游 KGC 指标提升或精确身份正确率。`doubter` 文本仍有冗余和 `soul` 词义不清的问题；`waterway` 图片只作为通道／水流概念补全。
+
+主要质量失败：`fish`、`migrator` 发生词义偏移；`rock oil` 不能明确表达油；抽象概念被无依据具象化；带原图的若干文本遗漏所选关系，且 7B 不能执行事实编辑。`mullah` 虽复述全部所选外观事实，却额外依据头巾、胡须推断宗教角色，Judge 未检出该额外推断。`playwright` 的图谱检查通过，但存在写作输入之外的人名扩写，保守复核保留为待检查。最终写作未传原图的两个案例事实覆盖较好；这不是同事实集的有／无图对照，不能作因果结论。
+
+在完整试跑结束后做了三项小修复，原始运行文件不改写：
+
+- 将抽取协议里整个字段值为 `__TARGET__` 的身份引用绑定到已知实体名。4 个真实来源字段的 CPU 重放通过，不据此纠正实体类型或宣称重跑了抽取。
+- Stage 2 本地修复请求复用已有 `decoder_safe_json_schema`，只移除解码器不支持的语法约束；应用层仍拒绝重复事实 ID。两个失败均为修复请求的 `uniqueItems` 兼容问题。另申请短时单卡，重放 ganoid fish 的同一修复消息：5,194 输入 token、3,072 输出预算不变，真实 7B 返回 HTTP 200，通过事实 ID 校验；未重跑该实体的完整生成／评审。
+- 导出除检查已保存的 gate=pass，还要求必需检查均 supported、无矛盾和未解决的额外断言；不将无效修复导出。可选断言的不可核验性继续保留。首批另结合逐项复核，拦下仅覆盖所选事实却有来源外推断的候选。
+
+三个问题在修复前复现为 7 个失败用例；修复后的相关回归为 **188 passed**。同一批次内第二候选／修复候选渲染异常也已隔离，成功 PNG 保留，追加出图预算不会因重新启动而重置。该异常路径由针对性回归验证，本次真实 SDXL 出图未发生渲染异常。
+
+原始记录位于 `outputs/wn18rr-completion-20-20261107-r2/`。原始 `exports/` 与 `completion_manifest.jsonl` 记录的是修复前较弱规则下的临时候选，**采用结果请看 `reviewed/completion_manifest.jsonl` 与 `reviewed/accepted_completions.jsonl`**。`verification/measured-results.json` 保留计数与逐例情况；`verification/review-source-executed.py` 是离线复核时的精确实现。671 个原始文件及冻结数据输入在复核后相同，未用隐藏目标补写结果。
+
+新增入口：`scripts/run_wn18rr_completion_batch.py` 和 `scripts/run_wn18rr_completion_cluster.sh`；配置 `configs/qwen7b-text-vision.yaml` 显式开启所选原图参与写作。为新版本重新试跑时，先在新目录冻结，再按上文 ClusterX 方法顺序申请一张卡；每个实体使用独立 attempt、原图／源码指纹、初始检查点、终态校验与失败记录，已有目录拒绝覆盖。
+
+```bash
+PYTHONPATH=. /medisco/linjiashi/venvs/taor-control/bin/python \
+  -m scripts.run_wn18rr_completion_batch --prepare --root <新的输出目录>
+# 在新分配的单卡作业内：
+TAOR_COMPLETION_ROOT=<新的输出目录绝对路径> \
+  bash scripts/run_wn18rr_completion_cluster.sh
+```
+
+同版本恢复使用相同 root；仅重试失败实体时为集群入口附加 `--retry-failed`。源码变化会拒绝继续旧生成任务。`--review` 是单独的离线复核模式，只读取历史输入和产物、核验指纹并使用当前导出规则，不调用模型，且拒绝覆盖已有 reviewed 目录。本轮短时解码验证入口为 `--selection-control <失败记录路径>`；其通过不等于整体语义质量通过。
+
 十实体 API 文本诊断及形态／展示细节选择、词汇去重、关系语义评审修正见 [本轮优化记录](evaluation/2026-11-07-text-cohort-optimization.zh.md)。对照中的措辞调整未显示明显优势；具体改进来自上游事实组织和检查输入。
 
 实体名称、关系与原图共同参与最终文本写作的配置和实测，见 [原图联合写作](evaluation/2026-11-07-entity-context-image-writing.zh.md)。启用 `configs/gpt6-luna-text-vision.yaml`；只发送已准入且与所选事实关联的原图。

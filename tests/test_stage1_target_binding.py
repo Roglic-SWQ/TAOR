@@ -40,6 +40,18 @@ def test_explicit_target_reference_binds_label_and_source_without_reversing_dire
     assert actual['evidence_refs'] == ['existing:text'] and wire == before
 
 
+@pytest.mark.parametrize('primary_type,expected_refs', [('person', ['existing:text']), ('entity', [])])
+def test_profile_target_reference_is_bound_without_leaking_into_identity_checks(primary_type, expected_refs):
+    task = SourceTextTask('student', 'existing:text', 'A student is a person who studies.')
+    wire = response(label=TARGET_REF, triples=[ref(relation='is', other='person who studies')])
+    wire['entity_profile']['primary_type'] = primary_type
+    before = deepcopy(wire)
+    actual = task.decode(wire)
+    assert actual['entity_profile'] == {'primary_type': primary_type, 'core_identity': 'student',
+                                        'evidence_refs': expected_refs}
+    assert wire == before
+
+
 @pytest.mark.parametrize('bad', [ref(other=''), ref(other=[]),
     {**ref(), 'subject': 'Eric Nigel Fellner'}, {**ref(), 'evidence_refs': ['invented']},
     {'subject': 'Eric Nigel Fellner', 'relation': 'occupation', 'object': 'film producer'},

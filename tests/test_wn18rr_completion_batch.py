@@ -77,7 +77,8 @@ def test_export_validates_actual_persisted_gate(tmp_path, gate, expected):
     batch.save(entity/'final.json', {'ranking_status': 'completed', 'best_image_candidate_id': 'image_001'})
     batch.save(entity/'4_kg_aware_candidate_consistency_ranking.json', {'data': {'image_ranking': {
         'best_candidate_id': 'image_001', 'ranked_candidates': [
-            {'candidate_id': 'image_001', 'gate': {'decision': gate}}]}}})
+            {'candidate_id': 'image_001', 'gate': {'decision': gate},
+             'observation': {'fact_checks': [{'requirement': 'must_include', 'status': 'supported'}]}}]}}})
     image = entity/'generated_images/image_001.png'
     image.parent.mkdir()
     image.write_bytes(image_artifact('01234567', 'image_001', 100).image_bytes)
@@ -95,7 +96,8 @@ def test_export_validates_actual_persisted_gate(tmp_path, gate, expected):
 def test_text_export_reads_real_writer_format(tmp_path):
     candidate = {'candidate_id': 'text_001', 'target_modality': 'text',
         'generated_content': {'type': 'text', 'value': 'A student is a kind of intellectual.'},
-        'hard_gate': {'decision': 'pass'}, 'final_score': 0.8}
+        'hard_gate': {'decision': 'pass'}, 'final_score': 0.8,
+        'observation': {'fact_checks': [{'requirement': 'must_include', 'status': 'supported'}]}}
     writer = RunWriter(tmp_path, 'evaluated', {})
     writer.write_entity({'entity': {'entity_key': '10557854'},
         'relation_alternation_generation': {'relation_alternation_generation': {'text_candidates': [candidate]}},
@@ -106,6 +108,33 @@ def test_text_export_reads_real_writer_format(tmp_path):
     exported = batch.export_best(writer.entities_dir/'10557854', 'text', destination)
     assert destination.read_text() == candidate['generated_content']['value']
     assert exported['candidate_id'] == 'text_001'
+
+
+@pytest.mark.parametrize('status', ['missing', 'uncertain', 'unverifiable', 'contradicted'])
+def test_gate_pass_does_not_publish_unresolved_required_facts(tmp_path, status):
+    candidate = {'candidate_id': 'image_001', 'gate': {'decision': 'pass'}, 'observation': {
+        'fact_checks': [{'requirement': 'must_include', 'status': status}]}}
+    entity = tmp_path/'entity'
+    entity.mkdir()
+    batch.save(entity/'final.json', {'ranking_status': 'completed', 'best_image_candidate_id': 'image_001'})
+    batch.save(entity/'4_kg_aware_candidate_consistency_ranking.json', {'data': {'image_ranking': {
+        'best_candidate_id': 'image_001', 'ranked_candidates': [candidate]}}})
+    image = entity/'generated_images/image_001.png'
+    image.parent.mkdir()
+    image.write_bytes(image_artifact('01234567', 'image_001', 100).image_bytes)
+    destination = tmp_path/'export.png'
+    assert batch.export_best(entity, 'image', destination) is None
+    assert not destination.exists()
+
+
+def test_publication_keeps_optional_uncertainty_but_rejects_unresolved_claims():
+    candidate = {'observation': {'fact_checks': [
+        {'requirement': 'must_include', 'status': 'supported'},
+        {'requirement': 'should_include', 'status': 'unverifiable'}]}}
+    assert batch.publication_ready(candidate) is True
+    candidate['observation']['unsupported_claims'] = [{'claim': 'invented appearance'}]
+    assert batch.publication_ready(candidate) is False
+    assert batch.publication_ready({}) is False
 
 
 def test_resume_checks_artifacts_before_skipping_completed_entity(tmp_path):
