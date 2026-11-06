@@ -87,6 +87,7 @@ def build_default_mainline_runtime(
     text_generator = QwenLocalTextGenerator(
         qwen_config,
         timeout_seconds=model_call_timeout_seconds,
+        dataset_root=resolve_dataset_root(dataset_root),
     )
     image_prompt_generator = (
         QwenLocalImagePromptGenerator(

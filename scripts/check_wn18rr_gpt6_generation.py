@@ -6,6 +6,7 @@ bad candidate. Each arm retains its own calls, observations and failures.
 """
 import argparse
 from copy import deepcopy
+from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
@@ -42,7 +43,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source-entity', type=Path, required=True)
     parser.add_argument('--output-root', type=Path, required=True)
-    parser.add_argument('--task', choices=('text', 'image_prompt'), default='text')
+    parser.add_argument('--task', choices=('text', 'text_compare', 'image_prompt'), default='text')
     parser.add_argument('--dataset-dir', type=Path,
                         default=Path('datasets/wn18rr-import-20261106/WN18RR'))
     parser.add_argument('--model-config', type=Path, default=Path('configs/gpt6-luna-mainline.yaml'))
@@ -88,16 +89,22 @@ def main():
     initial = initial_generation(saved)
     save('frozen-panel.json', {'checks':panel, 'sha256':panel_sha, 'source_files':sources,
                              'initial_text':initial['relation_alternation_generation']['text_candidates'][0]})
-    summary = {'model_name':config.model_name, 'scope':'fixed_panel_api_generation_and_repair',
+    summary = {'model_name':config.model_name, 'scope':('fixed_panel_facts_vs_direct_images'
+               if args.task == 'text_compare' else 'fixed_panel_api_generation_and_repair'),
                'local_gpu_inference':False, 'new_pixels_generated':False,
                'local_neural_scoring':False, 'independent_judge':False,
                'judge_model_name':config.model_name, 'panel_sha256':panel_sha, 'arms':{}}
     try:
-        for arm in ('repair_native_failure', 'fresh_api_generation'):
+        arms = (('facts_only', 'facts_and_images') if args.task == 'text_compare'
+                else ('repair_native_failure', 'fresh_api_generation'))
+        for arm in arms:
+            arm_config = (replace(config, text_use_source_images=arm == 'facts_and_images')
+                          if args.task == 'text_compare' else config)
             writer = RunWriter(args.output_root, arm, {**summary, 'arm':arm,
-                               'source_entity':str(args.source_entity), 'max_tokens':config.max_token})
+                               'source_entity':str(args.source_entity), 'max_tokens':config.max_token,
+                               'text_use_source_images':arm_config.text_use_source_images})
             ranker, _ = api_ranker(config, args.timeout)
-            generator = QwenLocalTextGenerator(config, timeout_seconds=args.timeout)
+            generator = QwenLocalTextGenerator(arm_config, timeout_seconds=args.timeout, dataset_root=args.dataset_dir)
             pipeline = MMKGCPipeline(candidate_budget=1, text_generator=generator,
                                      ranking_engine=ranker, dataset_root=args.dataset_dir)
             try:
@@ -107,6 +114,7 @@ def main():
                 ranking = result['kg_aware_candidate_consistency_ranking']
                 summary['arms'][arm] = {
                     'status':'completed', 'final':result['final'],
+                    'text_use_source_images':arm_config.text_use_source_images,
                     'reflect':{k:v for k,v in (ranking.get('stage3_regeneration') or {}).items()
                                if k in ('attempted','attempts','status','initial_status','final_status')},
                     'candidates':[{'candidate_id':c['candidate_id'],

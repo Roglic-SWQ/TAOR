@@ -20,7 +20,7 @@ from mmkgc.stages.semantic import StrictJsonStagePlanner, KNOWLEDGE_REQUEST_CONT
 from mmkgc.stages.triples import TRIPLE_SCHEMAS
 from mmkgc.generation_prompts import (
     IMAGE_PROMPT_VERSION, IMAGE_SYSTEM, PROMPT_PROFILES, PROMPT_VERSION, QWEN_PROMPT_VERSION,
-    TEXT_PROMPT_VERSION, TEXT_SYSTEM,
+    TEXT_PROMPT_VERSION, TEXT_VISION_PROMPT_VERSION, TEXT_SYSTEM,
     build_generation_prompt, generation_payload, build_image_description_prompt, build_image_focus_prompt,
 )
 from mmkgc.stages.presentation import (
@@ -68,8 +68,11 @@ class QwenConfig:
     image_prompt_top_p: float = 0.9
     api_response_format: str = "json_schema"
     stage1_image_policy: str = "entity_visual_features_v2"
+    text_use_source_images: bool = False
 
     def __post_init__(self) -> None:
+        if type(self.text_use_source_images) is not bool:
+            raise ValueError("text_use_source_images must be a boolean")
         from mmkgc.stages.visual_evidence import VISUAL_POLICIES
         if self.stage1_image_policy not in VISUAL_POLICIES:
             raise ValueError("stage1_image_policy must name a supported visual policy")
@@ -129,6 +132,7 @@ def _coerce_qwen_config(data: dict, source_path: str | Path) -> QwenConfig:
         image_prompt_top_p=inference.get("image_prompt_top_p", 0.9),
         api_response_format=inference.get("api_response_format", "json_schema"),
         stage1_image_policy=inference.get("stage1_image_policy", "entity_visual_features_v2"),
+        text_use_source_images=inference.get("text_use_source_images", False),
     )
 
 
@@ -183,11 +187,11 @@ class _CandidateCallLog:
             try:
                 payload, _ = json.JSONDecoder().raw_decode(prompt.split("INPUT_JSON:\n", 1)[1].lstrip())
                 generation_version = payload.get("prompt_version")
-                if (generation_version in {TEXT_PROMPT_VERSION, IMAGE_PROMPT_VERSION}
+                if (generation_version in {TEXT_PROMPT_VERSION, TEXT_VISION_PROMPT_VERSION, IMAGE_PROMPT_VERSION}
                         or payload.get("fact_format") in TRIPLE_SCHEMAS
                         or payload.get("task", {}).get("presentation_policy") == "stage3"):
                     return {"prompt_version": (generation_version
-                                               if generation_version in {TEXT_PROMPT_VERSION, IMAGE_PROMPT_VERSION}
+                                               if generation_version in {TEXT_PROMPT_VERSION, TEXT_VISION_PROMPT_VERSION, IMAGE_PROMPT_VERSION}
                                                else PROMPT_VERSION),
                             **({"fact_format": payload["fact_format"]} if payload.get("fact_format") else {})}
             except (ValueError, AttributeError):
@@ -232,10 +236,33 @@ class QwenLocalTextGenerator(_CandidateCallLog):
         self,
         config: QwenConfig,
         timeout_seconds: float = 60.0,
+        dataset_root: str | Path | None = None,
     ):
         self.config = config
         self.timeout_seconds = timeout_seconds
+        self.dataset_root = Path(dataset_root).resolve() if dataset_root is not None else None
         self._call_state = threading.local()
+
+    def _source_image_parts(self, sources, record_label):
+        from types import SimpleNamespace
+        from mmkgc.adapters.image_knowledge import _load_source_image
+        from mmkgc.ranking.image_input import ImageInputError
+        if sources and self.dataset_root is None:
+            raise ImageInputError('text source images require an explicit dataset_root')
+        parts, metadata, seen = [], [], set()
+        for source in sources:
+            ref = source['evidence_id']
+            if ref in seen or source.get('admission', {}).get('status') != 'compatible':
+                raise ImageInputError('text generation requires distinct admitted original images')
+            seen.add(ref)
+            image, actual = _load_source_image(SimpleNamespace(entity_key=record_label),
+                self.dataset_root, source['asset'], ref)
+            if (actual['sha256'], actual['byte_count']) != (source['sha256'], source['byte_count']):
+                raise ImageInputError('text source image changed after knowledge modeling')
+            parts.extend([{'type':'text', 'text':f'Original source image: {ref}'},
+                          {'type':'image_url', 'image_url':{'url':image.as_data_url(), 'detail':'auto'}}])
+            metadata.append({**actual, 'admission':deepcopy(source['admission'])})
+        return parts, metadata
 
     def _normalize_base_url(self) -> str:
         return self.config.base_url.rstrip("/")
@@ -278,6 +305,7 @@ class QwenLocalTextGenerator(_CandidateCallLog):
         generation_context: dict[str, Any] | None = None,
     ) -> str:
         if (self.prompt_version == QWEN_PROMPT_VERSION
+                and not (generation_context or {}).get('source_images')
                 and (generation_context or {}).get("fact_format") not in TRIPLE_SCHEMAS
                 and (generation_context or {}).get("task", {}).get("presentation_policy") != "stage3"):
             prompt = build_qwen_text_prompt(record_label, entity_type, relation, angle, facts)
@@ -373,11 +401,20 @@ class QwenLocalTextGenerator(_CandidateCallLog):
         *,
         generation_context: dict[str, Any] | None = None,
     ) -> str:
+        generation_context = deepcopy(generation_context or {})
+        sources = generation_context.pop('source_image_inputs', [])
+        if not self.config.text_use_source_images:
+            sources = []
+        generation_context.pop('source_images', None)
+        if sources:
+            generation_context['source_images'] = [
+                {'evidence_id':s['evidence_id'], 'admission':deepcopy(s['admission']),
+                 'usage':'interpret_selected_visual_facts'} for s in sources]
         prompt = self._build_prompt(record_label, entity_type, relation, angle, facts, generation_context)
         start_time = time.perf_counter()
         system_prompt = TEXT_SYSTEM
         if (self.prompt_version == QWEN_PROMPT_VERSION
-                and self._prompt_metadata(prompt)["prompt_version"] != TEXT_PROMPT_VERSION):
+                and self._prompt_metadata(prompt)["prompt_version"] not in {TEXT_PROMPT_VERSION, TEXT_VISION_PROMPT_VERSION}):
             system_prompt = QWEN_TEXT_SYSTEM
 
         request_body = {
@@ -403,7 +440,15 @@ class QwenLocalTextGenerator(_CandidateCallLog):
             method="POST",
         )
 
+        image_metadata = []
+        response_json = None
+        generated = ''
         try:
+            if sources:
+                image_parts, image_metadata = self._source_image_parts(sources, record_label)
+                request_body['messages'][-1]['content'] = [{'type':'text','text':prompt}, *image_parts]
+                req = request.Request(self._endpoint(), data=json.dumps(request_body).encode('utf-8'),
+                                      headers=headers, method='POST')
             with request.urlopen(req, timeout=self.timeout_seconds) as response:
                 response_text = response.read().decode("utf-8")
                 response_json = json.loads(response_text)
@@ -420,6 +465,7 @@ class QwenLocalTextGenerator(_CandidateCallLog):
                             error=None,
                             raw_response=response_json,
                         ),
+                        **({'image_input_metadata':image_metadata} if image_metadata else {}),
                     }
                 )
                 return generated
@@ -432,10 +478,12 @@ class QwenLocalTextGenerator(_CandidateCallLog):
                     **self._build_call_record(
                         status="failed",
                         prompt=prompt,
-                        response_text="",
+                        response_text=generated,
                         latency_ms=latency_ms,
                         error=self._short_error(exc),
+                        raw_response=response_json,
                     ),
+                    **({'image_input_metadata':image_metadata} if image_metadata else {}),
                 }
             )
             raise

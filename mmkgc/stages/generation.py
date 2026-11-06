@@ -417,6 +417,7 @@ def _model_generation_context(
     knowledge: dict[str, Any], item: dict[str, Any], reasoning: dict[str, Any],
     modality: str, angle: str, diversity_axis: str,
     regeneration_feedback: dict[str, Any] | None = None,
+    *, include_source_images: bool = False,
 ) -> dict[str, Any]:
     """Keep candidate facts, requirements, identity and visual evidence distinct."""
     context = _generation_context_for_item(item, reasoning, modality)
@@ -491,12 +492,24 @@ def _model_generation_context(
         and value.get("source_ref") in selected_refs and value["source_ref"] in catalog
     ]
     feedback = regeneration_feedback or {}
+    from mmkgc.adapters.image_knowledge import image_modeling_entries
+    source_images = []
+    if modality == 'text' and include_source_images:
+        for entry in image_modeling_entries(knowledge.get('image_modeling', {})):
+            admission = entry.get('entity_match', {})
+            if entry['original_image_ref'] in selected_refs and admission.get('status') == 'compatible':
+                source_images.append({
+                    **{key: deepcopy(entry['original_image'][key]) for key in (
+                        'asset','sha256','byte_count','evidence_id')},
+                    'admission':{key:deepcopy(admission[key]) for key in ('status','identity_verified')},
+                })
     return {
         "task": ({"target_modality": modality, "presentation_policy": "stage3"}
                  if item.get("plan_schema_version") in {PLAN_SCHEMA, FACT_SELECTION_SCHEMA} else
                  {"target_modality": modality, "generation_angle": angle, "diversity_axis": diversity_axis}),
         **({"fact_format": knowledge["schema_version"]} if knowledge.get("schema_version") in TRIPLE_SCHEMAS else {}),
         "source_facts": source_facts, "source_evidence": evidence,
+        **({'source_image_inputs':source_images} if source_images else {}),
         "must_include": requirements("must_include"), "should_include": requirements("should_include"),
         "context_only": requirements("context_only"), "identity_context": identity,
         "supported_visual_details": visual_details,
@@ -858,6 +871,7 @@ def _generate_modality_candidates(
             base["metadata"]["prompt_version"] = generator.prompt_version
         model_context = _model_generation_context(
             knowledge, relation_item, reasoning, modality, angle, diversity_axis, feedback,
+            include_source_images=getattr(getattr(generator, 'config', None), 'text_use_source_images', False),
         ) if callable(structured_generate) else {}
         if shared and not safe_variant:
             model_context["presentation_context"] = {

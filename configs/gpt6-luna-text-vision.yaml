@@ -1,0 +1,11 @@
+lmm:
+  model_name: gpt-6-luna
+  base_url_env: OPENAI_BASE_URL
+  api_key_env: OPENAI_API_KEY
+inference:
+  max_token: 4096
+  image_prompt_max_token: 384
+  temperature: 0.0
+  stage3_max_concurrency: 1
+  api_response_format: json_object
+  text_use_source_images: true
