@@ -5,7 +5,7 @@ import pytest
 
 from test_image_knowledge import fixture, transport, text_and_image
 from test_entity_visual_features import (assessment, feature, response, planner, run, pixel_reply)
-from mmkgc.adapters.image_feature_check import parse_checks, proposed_features, apply_checks
+from mmkgc.adapters.image_feature_check import parse_checks, proposed_features, apply_checks, check_schema
 from mmkgc.adapters.image_knowledge import IMAGE_REF
 from mmkgc.stages.candidate_planning import planning_facts, fact_selection_prompt
 from mmkgc.stages.semantic import Stage1CompletionError, KNOWLEDGE_REQUEST_CONTEXT
@@ -93,3 +93,11 @@ def test_only_reobserved_originals_receive_positive_support():
     assert fact["evidence_refs"] == sorted([originals[0], captions[0]])
     assert fact["visual_observations"][0]["evidence_refs"] == originals + captions
     assert fact["generation_eligible"] is True
+
+
+def test_decoder_cardinality_still_limits_citations_when_uniqueness_is_not_supported():
+    from mmkgc.adapters.json_contract import decoder_safe_json_schema
+    wire=decoder_safe_json_schema(check_schema([
+        {'observation_id':'mf:0001:visual:0','evidence_refs':[IMAGE_REF]}],{IMAGE_REF}))
+    refs=wire['properties']['checks']['items']['properties']['evidence_refs']
+    assert 'uniqueItems' not in refs and refs['maxItems']==1

@@ -1176,8 +1176,14 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
                 batch_records.append(batch_record)
             token = KNOWLEDGE_REQUEST_CONTEXT.set(batch_context)
             try:
-                results.append(self._refine("stage1_knowledge", record, missing_mode, batch_inputs,
-                    lambda response: apply_knowledge_response(batch_inputs, response)))
+                compact = ("qwen" in model and urlsplit(self.config.base_url).hostname in {"127.0.0.1", "localhost", "::1"}
+                           and inputs.get("visual_fact_policy") == ENTITY_VISUAL_POLICY
+                           and all(source.modality == "image" for source in group))
+                if compact:
+                    results.append(self._compact_visual_knowledge(batch_inputs, batch_context, deadline))
+                else:
+                    results.append(self._refine("stage1_knowledge", record, missing_mode, batch_inputs,
+                        lambda response: apply_knowledge_response(batch_inputs, response)))
             finally:
                 KNOWLEDGE_REQUEST_CONTEXT.reset(token)
         result = merge_image_batches(inputs, results)
@@ -1194,6 +1200,57 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
         if len(image_paths) > 1:
             result["image_modeling"]["extraction_batches"] = batch_records
         return result
+
+    def _compact_visual_knowledge(self, inputs, context, deadline):
+        from mmkgc.adapters import visual_feature_contract as contract
+        from mmkgc.stages.modeling import apply_knowledge_response
+        from mmkgc.stages.semantic import Stage1CompletionError
+        import jsonschema
+        prompt = contract.prompt(inputs)
+        call = {"stage": "stage1_knowledge", "prompt_version": contract.SCHEMA,
+            "response_schema_version": contract.SCHEMA, "canonical_schema_version": inputs['schema'],
+            "prompt": prompt, "output_schema": contract.response_schema(inputs),
+            "network_attempts": [], "contract_repair_retries": 0,
+            "stage_timeout_seconds": self.knowledge_stage_timeout_seconds,
+            **{key: value for key, value in context.items() if key.endswith('metadata') or key.endswith('model_call_ref')
+               or key.endswith('model_call_refs') or key == 'image_extraction_batch'}}
+        started = time.perf_counter()
+        token = KNOWLEDGE_REQUEST_CONTEXT.set({**context, "deadline": deadline, "call": call})
+        try:
+            for attempt in range(2):
+                text = self._complete_prompt(prompt).strip()
+                call['response_text'] = text
+                failure = ('output_token_limit' if call['network_attempts'] and
+                    call['network_attempts'][-1].get('finish_reason') == 'length' else
+                    'empty_response' if not text else None)
+                if failure:
+                    call['completion_failure'] = failure
+                    raise Stage1CompletionError(failure)
+                if time.perf_counter() >= deadline:
+                    raise TimeoutError('Stage 1 total time budget exhausted during visual extraction')
+                try:
+                    result = apply_knowledge_response(inputs, contract.decode(text, inputs))
+                    break
+                except (ValueError, jsonschema.ValidationError) as exc:
+                    call.setdefault('contract_failures', []).append({'response_text': text,
+                        'error_type': type(exc).__name__, 'error': str(exc)})
+                    if attempt:
+                        raise
+                    call['contract_repair_retries'] = 1
+                    prompt = contract.prompt(inputs, [str(exc)])
+                    call['repair_prompt'] = prompt
+            call['status'] = 'applied'
+            result['semantic_refinement'] = {'stage': 'stage1_knowledge', 'status': 'applied',
+                                             'planner': self.planner_name, 'prompt_version': contract.SCHEMA}
+            return result
+        except Exception as exc:
+            call.update(status='failed', error_type=type(exc).__name__, error_message=str(exc))
+            setattr(exc, 'model_call', call)
+            raise
+        finally:
+            call['latency_ms'] = int((time.perf_counter() - started) * 1000)
+            self.calls.append(call)
+            KNOWLEDGE_REQUEST_CONTEXT.reset(token)
 
     def _verify_visual_features(self, knowledge, images, entity_key, deadline):
         from mmkgc.adapters.image_feature_check import (proposed_features, check_schema,

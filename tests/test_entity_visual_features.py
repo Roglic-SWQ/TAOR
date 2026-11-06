@@ -62,8 +62,12 @@ def test_admitted_features_are_abstract_scoped_and_not_confidence_weighted(tmp_p
     rows = [feature(), feature("faces right", "depiction_detail"),
             feature("dirt ground", "context", scope="context"),
             feature("possibly A or B", basis="inferred", uncertainty="Unresolved alternative", uncertainty_scope="feature")]
+    compact = {'features': [{'attribute': row['relation'], 'value': row['object'],
+        'kind': row['visual_support']['feature_kind'], 'basis': row['visual_support']['basis'],
+        'uncertainty': row['visual_support']['uncertainty'], 'evidence_refs': row['evidence_refs']} for row in rows],
+        'uncertain_aspects': []}
     requests = transport(monkeypatch, [json.dumps(assessment()), "A blue circle and red rectangle.",
-                                      json.dumps(response(rows)), pixel_reply()])
+                                      json.dumps(compact), pixel_reply()])
     client = planner(tmp_path, "Qwen/Qwen2-VL-7B-Instruct")
     result = run(client, target)
     assert len(requests) == 4

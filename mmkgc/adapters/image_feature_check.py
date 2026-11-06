@@ -22,7 +22,7 @@ def check_schema(items, original_refs):
     fields = {"observation_id": {"type": "string", "enum": [item["observation_id"] for item in items]},
         "status": {"type": "string", "enum": ["supported", "uncertain", "contradicted"]},
         "observed": text, "reason": text,
-        "evidence_refs": {"type": "array", "minItems": 1, "uniqueItems": True,
+        "evidence_refs": {"type": "array", "minItems": 1, "maxItems": len(original_refs), "uniqueItems": True,
                           "items": {"type": "string", "enum": sorted(original_refs)}}}
     return {"type": "object", "required": ["checks"], "additionalProperties": False,
         "properties": {"checks": {"type": "array", "minItems": len(items), "maxItems": len(items),
