@@ -267,7 +267,11 @@ def build_triple_prompt(inputs: dict[str, Any], errors: list[dict[str, Any]] | N
             "even when omitted from triples. Compatible image admission does not verify identity. "
             "Use a neutral profile (entity and target label) rather than inventing a verified type. "
             "Profile evidence_refs must be empty: visual properties belong in the scoped triples, "
-            "not in an unrestricted identity summary. No minimum fact quota."
+            "not in an unrestricted identity summary. Keep independently selectable visual properties "
+            "in separate triples: do not bundle morphology, depiction medium, paint and surface condition "
+            "into one object description. Separate the represented subject's shape and structural parts "
+            "from the physical depiction or display. Preserve uncertain alternatives together rather "
+            "than splitting them into certain assertions. No minimum fact quota."
         )
     if errors is not None:
         parts.extend(["Return a COMPLETE corrected response from the original sources; prior replies are not evidence.",

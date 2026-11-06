@@ -48,7 +48,12 @@ MAX_REPAIR_RESPONSE_CHARS = 4000
 OBSERVATION_CONTRACT_VERSION = "candidate_observation_contract_v2"
 VISUAL_SCOPE_INSTRUCTIONS = (
     "\nUse each supplied relation_meaning to interpret original subject/relation/object. "
+    "When CHECK_TARGETS supplies relation_meaning, use that definition to read the edge; matching "
+    "relation words with an incompatible meaning is not support and may be a contradiction. "
     "Matching relation tokens alone do not establish that the candidate paraphrase preserves direction. "
+    "Evaluate semantic equivalence, including correct converse paraphrases: A has member B and "
+    "B is a member of A express the same edge. Changing the grammatical subject alone does not "
+    "reverse a fact. Preserve asymmetric meaning: A is a kind of B does not mean B is a kind of A. "
     "\nRespect visual_observations claim_scope: depicted_instance supports only the pictured sample, "
     "not a universal category property. Compatible image admission is not verified entity identity. "
     "Check whether candidate wording preserves these limits; class-wide or exact-identity claims "
@@ -1064,10 +1069,18 @@ def _rubric_response_schema(targets, modality, repair_targets=None):
 def _build_rubric_prompt(context, candidate, modality, *, image_input=None):
     targets = validate_verification_targets(candidate.get("verification_targets") or [])
     repair_targets = validate_repair_targets(candidate.get("repair_targets") or [])
+    evidence = context.to_prompt_payload()
+    meanings = {fact['fact_id']:fact['relation_meaning']
+                for bucket in ('relation_facts','supported_facts') for fact in evidence.get(bucket,[])
+                if fact.get('fact_id') and fact.get('relation_meaning')}
+    # Prompt-only annotations preserve archived check IDs and the strict output
+    # contract while keeping each edge's definition beside the actual question.
+    semantic_targets = [{**target, **({'relation_meaning':meanings[target['fact_id']]}
+                          if target.get('fact_id') in meanings else {})} for target in targets]
     payload = {
         "task": f"stage4_{modality}_ranking_judge", "rubric_version": judge_rubrics.RUBRIC_VERSION,
         "TARGET_ENTITY": {"entity_key": context.entity_key, "label": context.entity_label},
-        "EVIDENCE_BUNDLE": context.to_prompt_payload(), "CHECK_TARGETS": targets,
+        "EVIDENCE_BUNDLE": evidence, "CHECK_TARGETS": semantic_targets,
         "response_schema": _rubric_response_schema(targets, modality, repair_targets),
     }
     if repair_targets:

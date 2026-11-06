@@ -1,5 +1,6 @@
 """Native edge direction must survive model prompts without leaking unselected paths."""
 import json
+from copy import deepcopy
 
 from test_wn18rr_data import fixture
 from mmkgc.data import WN18RRDataStore
@@ -12,6 +13,7 @@ from mmkgc.stages.plan_context import compile_plan_context, ranking_knowledge
 from mmkgc.stages.generation import _model_generation_context
 from mmkgc.generation_prompts import generation_payload
 from mmkgc.ranking.context import build_ranking_context
+from mmkgc.ranking.scorers.gpt4omini_judge import build_text_judge_prompt
 
 
 def prepared(tmp_path):
@@ -63,3 +65,24 @@ def test_unselected_path_content_stays_in_audit_not_generation(tmp_path):
         ranking_knowledge(knowledge,reasoning),reasoning,
         {'relation_alternation_generation':{'text_candidates':[]}}, {})
     assert ranked.to_prompt_payload()['supported_facts'][0]['relation_meaning']==fact['relation_meaning']
+
+
+def test_each_judge_check_receives_its_edge_meaning_without_rewriting_archived_targets(tmp_path):
+    record,inputs,knowledge=prepared(tmp_path)
+    fact=next(f for f in knowledge['relation_facts'] if f['relation']=='hypernym')
+    selection,reasoning=compile_plan_context(knowledge,apply_fact_selection(knowledge,
+        {'status':'ready','selected_fact_ids':[fact['fact_id']]},'text',8),'text')
+    targets=deepcopy(selection['fine_grained_relation_selection']['candidates'][0]['verification_targets'])
+    candidate={'candidate_id':'text_001','target_modality':'text','verification_targets':targets,
+               'generated_content':{'type':'text','value':'A neighbor is a kind of the target.'}}
+    before=deepcopy(candidate)
+    context=build_ranking_context(record.entity_key,record.label,'text',inputs['existing_modalities'],
+        ranking_knowledge(knowledge,reasoning),reasoning,
+        {'relation_alternation_generation':{'text_candidates':[candidate]}},{})
+    prompt=build_text_judge_prompt(context,candidate,use_rubrics=True)
+    payload=json.loads(prompt.split('INPUT_JSON:\n')[1])
+    assert payload['CHECK_TARGETS'][0]['relation_meaning']==fact['relation_meaning']
+    assert payload['CHECK_TARGETS'][0]['check_id']==targets[0]['check_id']
+    assert payload['CHECK_TARGETS'][0]['subject']=='neighbor'
+    assert payload['CHECK_TARGETS'][0]['object']=='target lemma'
+    assert candidate==before and 'relation_meaning' not in targets[0]

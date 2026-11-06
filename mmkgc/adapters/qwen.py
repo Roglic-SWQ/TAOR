@@ -20,7 +20,7 @@ from mmkgc.stages.semantic import StrictJsonStagePlanner, KNOWLEDGE_REQUEST_CONT
 from mmkgc.stages.triples import TRIPLE_SCHEMAS
 from mmkgc.generation_prompts import (
     IMAGE_PROMPT_VERSION, IMAGE_SYSTEM, PROMPT_PROFILES, PROMPT_VERSION, QWEN_PROMPT_VERSION,
-    TEXT_PROMPT_VERSION, TEXT_VISION_PROMPT_VERSION, TEXT_SYSTEM,
+    TEXT_PROMPT_VERSION, TEXT_VISION_PROMPT_VERSION, TEXT_PROMPT_VERSIONS, TEXT_SYSTEM,
     build_generation_prompt, generation_payload, build_image_description_prompt, build_image_focus_prompt,
 )
 from mmkgc.stages.presentation import (
@@ -187,11 +187,11 @@ class _CandidateCallLog:
             try:
                 payload, _ = json.JSONDecoder().raw_decode(prompt.split("INPUT_JSON:\n", 1)[1].lstrip())
                 generation_version = payload.get("prompt_version")
-                if (generation_version in {TEXT_PROMPT_VERSION, TEXT_VISION_PROMPT_VERSION, IMAGE_PROMPT_VERSION}
+                if (generation_version in TEXT_PROMPT_VERSIONS | {IMAGE_PROMPT_VERSION}
                         or payload.get("fact_format") in TRIPLE_SCHEMAS
                         or payload.get("task", {}).get("presentation_policy") == "stage3"):
                     return {"prompt_version": (generation_version
-                                               if generation_version in {TEXT_PROMPT_VERSION, TEXT_VISION_PROMPT_VERSION, IMAGE_PROMPT_VERSION}
+                                               if generation_version in TEXT_PROMPT_VERSIONS | {IMAGE_PROMPT_VERSION}
                                                else PROMPT_VERSION),
                             **({"fact_format": payload["fact_format"]} if payload.get("fact_format") else {})}
             except (ValueError, AttributeError):
@@ -414,7 +414,7 @@ class QwenLocalTextGenerator(_CandidateCallLog):
         start_time = time.perf_counter()
         system_prompt = TEXT_SYSTEM
         if (self.prompt_version == QWEN_PROMPT_VERSION
-                and self._prompt_metadata(prompt)["prompt_version"] not in {TEXT_PROMPT_VERSION, TEXT_VISION_PROMPT_VERSION}):
+                and self._prompt_metadata(prompt)["prompt_version"] not in TEXT_PROMPT_VERSIONS):
             system_prompt = QWEN_TEXT_SYSTEM
 
         request_body = {

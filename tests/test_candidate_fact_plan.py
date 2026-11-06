@@ -13,7 +13,7 @@ from mmkgc.adapters.base import GeneratedImageArtifact
 from mmkgc.adapters.qwen import QwenConfig, QwenLocalTextGenerator, QwenLocalImagePromptGenerator
 from mmkgc.adapters.relation_planner import OpenAICompatibleRelationPlanner
 from mmkgc.data import EntityRecord
-from mmkgc.generation_prompts import IMAGE_PROMPT_VERSION, IMAGE_SYSTEM
+from mmkgc.generation_prompts import IMAGE_PROMPT_VERSION, IMAGE_SYSTEM, TEXT_PROMPT_VERSION
 from mmkgc.io.resume import load_saved_image_run
 from mmkgc.io.writer import RunWriter, _stage_artifact
 from mmkgc.pipeline import MMKGCPipeline, PreparedEntity
@@ -256,7 +256,7 @@ def test_qwen_original_profile_uses_fact_only_context_and_stage3_presentation(mo
     assert 'UNREQUESTED_ANGLE_SENTINEL' not in prompt
     assert [fact['fact_id'] for fact in payload['source_facts']] == ['rf:2']
     assert client._prompt_metadata(prompt)['prompt_version'] == (
-        'entity_semantics_text_v4' if mode == 'text' else IMAGE_PROMPT_VERSION)
+        TEXT_PROMPT_VERSION if mode == 'text' else IMAGE_PROMPT_VERSION)
 
 
 @pytest.mark.parametrize('local_qwen', [True, False])

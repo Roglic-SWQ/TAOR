@@ -17,7 +17,7 @@ from mmkgc.plan_schema import (
 )
 
 SELECTION_SOURCE = "stage2_candidate_plan"
-FACT_SELECTION_PROMPT_VERSION = "entity_semantics_fact_selection_v3"
+FACT_SELECTION_PROMPT_VERSION = "entity_semantics_fact_selection_v5"
 
 
 def planning_facts(knowledge: dict[str, Any]) -> list[dict[str, Any]]:
@@ -166,6 +166,17 @@ def fact_selection_prompt(label: str, mode: str, knowledge: dict[str, Any],
         "the target modality. Select facts as a coherent set: prefer distinguishing, complementary "
         "information over redundant or generic details. Non-visual identity and background relations "
         "may be useful for images, but do not establish appearance, people or settings. "
+        "Reciprocal lexical associations may be redundant: select one assertion when it conveys the "
+        "same lexical link. Do not collapse directed type/subtype, part/whole or other asymmetric relations. "
+        "Interpret image features in the context of the named entity and its relations. Distinguish the "
+        "represented entity from the physical medium depicting it: a model, illustration or display's "
+        "paint, material and weathering are not properties of the represented category. Select such "
+        "features only when the artifact itself is the target. Likewise, an incidental person's "
+        "appearance, clothing or pose does not define a role or abstract concept. Prefer features that "
+        "meaningfully characterize this entity, without filling a quota or requiring any visual fact. "
+        "These limits do not prohibit clear, relevant morphology or structural parts of an admitted "
+        "depiction. Such observations describe the pictured sample; do not discard a source-checked "
+        "property solely because exact identity is unverified or the source is a depiction. "
         "Preserve subject/relation/object, direction, attribution and qualifications. "
         "Read relation_meaning when supplied; its subject/object refer to the original triple, "
         "regardless of whether the target occupies the incoming or outgoing position. "

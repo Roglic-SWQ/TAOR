@@ -1,5 +1,7 @@
 # WN18RR 原生接入与 Qwen2-VL-7B／SDXL 冒烟
 
+十实体 API 文本诊断及形态／展示细节选择、词汇去重、关系语义评审修正见 [本轮优化记录](evaluation/2026-11-07-text-cohort-optimization.zh.md)。对照中的措辞调整未显示明显优势；具体改进来自上游事实组织和检查输入。
+
 实体名称、关系与原图共同参与最终文本写作的配置和实测，见 [原图联合写作](evaluation/2026-11-07-entity-context-image-writing.zh.md)。启用 `configs/gpt6-luna-text-vision.yaml`；只发送已准入且与所选事实关联的原图。
 
 用户指定 gpt-6-luna 后的生成／反思测试、显式模型配置和单卡入口见 [gpt-6-luna 实测](evaluation/2026-11-06-wn18rr-gpt6-luna.zh.md)。
