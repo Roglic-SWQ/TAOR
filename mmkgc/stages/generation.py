@@ -1066,12 +1066,22 @@ def _generate_modality_candidates(
     for base in planned:
         if modality == "image":
             if image_generator is not None:
-                artifact = image_generator.generate(
-                    entity_key,
-                    base["candidate_id"],
-                    base["positive_prompt"],
-                    "",
-                )
+                try:
+                    artifact = image_generator.generate(
+                        entity_key,
+                        base["candidate_id"],
+                        base["positive_prompt"],
+                        "",
+                    )
+                except Exception as exc:
+                    # A renderer failure belongs to this candidate, including
+                    # during Reflect. Keep earlier PNGs and continue the round.
+                    call = deepcopy(getattr(exc, "model_call", None) or {})
+                    call.update(stage="stage3_image_generation", entity_key=entity_key,
+                                candidate_id=base["candidate_id"], status="failed",
+                                error_type=type(exc).__name__, error=str(exc))
+                    model_calls.append(call)
+                    continue
                 variant_metadata = {key: base['metadata'][key] for key in _IMAGE_VARIANT_METADATA
                                     if key in base['metadata']}
                 artifact.metadata.update(deepcopy(variant_metadata))
