@@ -16,7 +16,9 @@ def response_schema(inputs):
                 "additionalProperties": False}
     sources = extraction_sources(inputs)
     count = max(1, sum(item.get("representation") == "original_image" for item in inputs['evidence_catalog']))
-    return obj({"features": {"type": "array", "maxItems": 8 * count, "items": obj({
+    from mmkgc.visual_description import TASK
+    maximum = 6 if inputs.get('generation_task') == TASK else 8 * count
+    return obj({"features": {"type": "array", "maxItems": maximum, "items": obj({
         "attribute": text(80), "value": text(240),
         "kind": {"type": "string", "enum": ["entity_feature", "depiction_detail", "context"]},
         "basis": {"type": "string", "enum": ["direct", "inferred"]},
@@ -28,7 +30,9 @@ def response_schema(inputs):
 
 
 def prompt(inputs, errors=None):
+    from mmkgc.visual_description import TASK, FEATURE_RULES
     return (
+        (FEATURE_RULES + '\n' if inputs.get('generation_task') == TASK else '') +
         "Inspect the original images and the supplied source-only descriptions. Extract a small set "
         "of useful, distinct properties of the pictured subject associated with the target label. "
         "Use morphology, shape, material, structural parts or other entity-relevant visible features. "

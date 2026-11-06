@@ -164,6 +164,13 @@ def publication_ready(candidate):
     if not isinstance(checks, list) or any(not isinstance(c, dict) for c in checks):
         return False
     required = [c for c in checks if c.get('requirement') == 'must_include']
+    from mmkgc.visual_description import TASK
+    if candidate.get('description_task') == TASK:
+        return (any(c.get('status') == 'supported' for c in checks)
+                and all(c.get('status') == 'supported' for c in required)
+                and not any(c.get('status') == 'contradicted' for c in checks)
+                and not observation.get('unsupported_claims')
+                and candidate.get('repair_eligible') is not False)
     return (bool(required) and all(c.get('status') == 'supported' for c in required)
             and not any(c.get('status') == 'contradicted' for c in checks)
             and not observation.get('unsupported_claims')

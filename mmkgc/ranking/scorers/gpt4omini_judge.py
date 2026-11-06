@@ -1090,7 +1090,17 @@ def _build_rubric_prompt(context, candidate, modality, *, image_input=None):
     else:
         payload["CANDIDATE_IMAGE"] = {"candidate_id": candidate.get("candidate_id", ""),
             "pixels_attached": image_input is not None, **_attached_image_payload(image_input)}
-    return judge_rubrics.instructions(modality) + VISUAL_SCOPE_INSTRUCTIONS + (_repair_check_instructions() if repair_targets else "") + "\nINPUT_JSON:\n" + json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    from mmkgc.visual_description import TASK, FEATURE_RULES
+    task_instructions = ''
+    if modality == 'text' and candidate.get('description_task') == TASK:
+        payload['description_task'] = TASK
+        task_instructions = ('\nENTITY-FOCUSED VISUAL DESCRIPTION: ' + FEATURE_RULES +
+            'Selected properties are optional coverage, not a checklist to enumerate. Do not penalize missing graph relations. '
+            'Check the whole text for extra claims: identifying an occupation or religious role from clothing, '
+            'beard or posture is unsupported even if every listed appearance fact was repeated correctly. '
+            'Flag unsupported identity/generalization in unsupported_claims. Evaluate entity relevance; '
+            'a scene inventory is not an informative entity description.\n')
+    return judge_rubrics.instructions(modality) + VISUAL_SCOPE_INSTRUCTIONS + task_instructions + (_repair_check_instructions() if repair_targets else "") + "\nINPUT_JSON:\n" + json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
 
 def _repair_check_instructions():

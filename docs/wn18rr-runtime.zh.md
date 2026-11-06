@@ -1,5 +1,34 @@
 # WN18RR 原生接入与 Qwen2-VL-7B／SDXL 冒烟
 
+## 2026-11-07：实体相关视觉语义重试（最新）
+
+目标改为保留图片中与实体有关的少量可见语义特征，不要求描述覆盖图谱关系，也不将每张图片的背景、衣着、姿态逐项列出。新增显式任务 `entity_visual_description_v1`，默认旧配置不变。
+
+本轮仍使用前轮的六个真实实体及其 17 张原图：piciform bird、bludgeon、screen、surface lift、mullah、liberator。准入、盲描述和原图字节来自已冻结的历史记录；新提取、筛选和写作输入不提供图谱断言。完整图谱与未选观察继续留在审计产物，隐藏目标文本未使用。此为受控重试，不是重新执行全部预处理的质量基准，也没有新 SDXL 出图。
+
+直接让 7B 看图重试的结果保存在 `outputs/wn18rr-entity-visual-description-20261107/attempt-r4/`：它仍会初提取人物衣着、雪景等内容，并在最终写作补入未选的停栖面、物体形状。该结果不作为“7B 已能可靠抽取相关语义”的证据。
+
+目前采用的受控分工为 **gpt-6-luna 从原图提取并筛选实体相关特征，Qwen2-VL-7B 只根据冻结的特征写作**。写作阶段不再重看原图，避免绕过筛选重新带入背景。两种写作模型使用同一份特征清单；7B 写作调用均确认原图输入数为 0。相关性筛选属于模型判断，不是真值概率。
+
+| 实体 | 最终选择的图片语义 | 7B 写作复核 |
+| --- | --- | --- |
+| piciform bird | 长而尖的喙、身体浅色横斑、头部浅色条纹 | 保留这些观察，没有再加入停栖面或模糊背景；只作为样本特征 |
+| bludgeon | 细长外形 | 明确身份未核验，不再补写颜色、木材或尖端；可用信息较少 |
+| screen | 矩形玻璃格、成对面板、圆孔表面 | 仍有重复枚举和不同原图属性合并的问题，待复核；API 对照按不同视图分别描述 |
+| surface lift | 上方缆线、竖直支撑杆 | 保留结构，没有人物衣着；身份／机制不确定性未充分表述，待复核 |
+| mullah | 无足够实体相关的视觉特征 | 不生成外观清单，不凭头巾或胡须推断宗教角色 |
+| liberator | 无足够实体相关的视觉特征 | 不凭肖像、衬衫或背景描述该角色 |
+
+最终清单共 9 项所选视觉特征；7B 写作阶段 4 个实体生成文本、2 个保留证据不足。9 项所选检查均获模型评审 supported、未触发反思，但逐项文本复核仅将前两例列为有使用限制的候选，screen 与 surface lift 仍待复核。未扩大到 100 或全量。
+
+原始结果及最终带来源的清单位于 `outputs/wn18rr-entity-visual-description-20261107/attempt-r5/`，优先查看 `reviewed/entity_descriptions.json` 与 `reviewed/summary.json`。其中并列保留 API 与 7B 文本、特征引用、身份／特征不确定性和复核说明。原生 7B 提取失败对照、初次 API 格式失败、任务标记保存／恢复修复前记录均保留，各轮源码指纹或精确源码归档可追溯，未覆盖历史结果。
+
+实现集中在已有阶段：提取不填每图配额；筛选仅能选择有图片观察的事实，不能选入图谱边；所选特征是可简洁组织的内容范围，不是全部必须枚举的检查清单。只有明确的无依据断言才要求修复，缺少未选图谱关系不再是失败。新任务标记贯穿写作、评分、产物保存及恢复，仍严格核对原始检查 ID 和来源。图片描述与像素复核的额外解释不作为新的写作事实或评分依据。
+
+相关回归 **232 passed**。收紧了评审引用范围，但两条真实旧 7B 负例仍未被 Judge 检出额外细节，不能把模型放行当完整质量保证；当前清单继续保留人工逐项复核状态，不自动删除或改写旧文本。这里的逐项复核由助手完成，非独立人工标注。
+
+新配置：`configs/gpt6-luna-visual-description.yaml` 用于提取和筛选，`configs/qwen7b-visual-description.yaml` 用于只接收特征的 7B 写作。完整 CLI 使用 `--missing-mode text --stage1-model-config configs/gpt6-luna-visual-description.yaml --stage2-model-config configs/gpt6-luna-visual-description.yaml --model-config configs/qwen7b-visual-description.yaml --max-selected-facts 4`，并沿用独立像素复核和 Stage 4 配置。`scripts/retry_entity_visual_description.py` 的 `api`／`native`／`writer` 阶段分别保留 API 对照、原生看图对照与冻结语义清单的 7B 写作，不将不同模型的工作混报。
+
 ## 2026-11-07：20 实体补全试跑
 
 **工程链路可批次执行，但当前 7B 配置未通过扩大批量的质量验收；未启动 100 实体或全量。**

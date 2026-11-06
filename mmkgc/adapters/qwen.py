@@ -69,8 +69,11 @@ class QwenConfig:
     api_response_format: str = "json_schema"
     stage1_image_policy: str = "entity_visual_features_v2"
     text_use_source_images: bool = False
+    entity_visual_description: bool = False
 
     def __post_init__(self) -> None:
+        if type(self.entity_visual_description) is not bool:
+            raise ValueError("entity_visual_description must be a boolean")
         if type(self.text_use_source_images) is not bool:
             raise ValueError("text_use_source_images must be a boolean")
         from mmkgc.stages.visual_evidence import VISUAL_POLICIES
@@ -133,6 +136,7 @@ def _coerce_qwen_config(data: dict, source_path: str | Path) -> QwenConfig:
         api_response_format=inference.get("api_response_format", "json_schema"),
         stage1_image_policy=inference.get("stage1_image_policy", "entity_visual_features_v2"),
         text_use_source_images=inference.get("text_use_source_images", False),
+        entity_visual_description=inference.get("entity_visual_description", False),
     )
 
 
@@ -413,6 +417,9 @@ class QwenLocalTextGenerator(_CandidateCallLog):
         prompt = self._build_prompt(record_label, entity_type, relation, angle, facts, generation_context)
         start_time = time.perf_counter()
         system_prompt = TEXT_SYSTEM
+        from mmkgc.visual_description import TASK
+        if self._prompt_metadata(prompt).get('prompt_version') == TASK:
+            system_prompt = 'Describe only entity-relevant visual features grounded in the supplied original-image evidence. Preserve uncertainty; do not infer identity or roles.'
         if (self.prompt_version == QWEN_PROMPT_VERSION
                 and self._prompt_metadata(prompt)["prompt_version"] not in TEXT_PROMPT_VERSIONS):
             system_prompt = QWEN_TEXT_SYSTEM
@@ -1102,6 +1109,9 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
         started = time.perf_counter()
         deadline = started + self.knowledge_stage_timeout_seconds
         inputs = build_knowledge_input(record, missing_mode, coarse)
+        if self.config.entity_visual_description and missing_mode == 'text':
+            from mmkgc.visual_description import TASK
+            inputs['generation_task'] = TASK
         sources = []
         for modality in modalities:
             remaining = deadline - time.perf_counter()

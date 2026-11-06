@@ -509,6 +509,8 @@ def _model_generation_context(
                  {"target_modality": modality, "generation_angle": angle, "diversity_axis": diversity_axis}),
         **({"fact_format": knowledge["schema_version"]} if knowledge.get("schema_version") in TRIPLE_SCHEMAS else {}),
         "source_facts": source_facts, "source_evidence": evidence,
+        **({'description_task': knowledge.get('generation_task', knowledge.get('stage1_v3', {}).get('generation_task'))}
+           if knowledge.get('generation_task', knowledge.get('stage1_v3', {}).get('generation_task')) else {}),
         **({'source_image_inputs':source_images} if source_images else {}),
         "must_include": requirements("must_include"), "should_include": requirements("should_include"),
         "context_only": requirements("context_only"), "identity_context": identity,
@@ -873,6 +875,8 @@ def _generate_modality_candidates(
             knowledge, relation_item, reasoning, modality, angle, diversity_axis, feedback,
             include_source_images=getattr(getattr(generator, 'config', None), 'text_use_source_images', False),
         ) if callable(structured_generate) else {}
+        if model_context.get('description_task'):
+            base['description_task'] = model_context['description_task']
         if shared and not safe_variant:
             model_context["presentation_context"] = {
                 "candidate_index": index + 1, "candidate_budget": candidate_budget,

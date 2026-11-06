@@ -105,6 +105,9 @@ def triple_response_schema(inputs: Mapping[str, Any]) -> dict[str, Any]:
     if inputs.get("visual_fact_policy") in VISUAL_POLICIES:
         triple_fields["visual_support"] = {"anyOf": [visual_support_schema(inputs["visual_fact_policy"]), {"type": "null"}]}
     triples = {"type": "array", "items": obj(triple_fields)}
+    from mmkgc.visual_description import TASK
+    if inputs.get('generation_task') == TASK:
+        triples['maxItems'] = 6
     if not source_refs:
         triples["maxItems"] = 0
     return obj({
@@ -273,6 +276,9 @@ def build_triple_prompt(inputs: dict[str, Any], errors: list[dict[str, Any]] | N
             "from the physical depiction or display. Preserve uncertain alternatives together rather "
             "than splitting them into certain assertions. No minimum fact quota."
         )
+    from mmkgc.visual_description import TASK, FEATURE_RULES
+    if inputs.get('generation_task') == TASK:
+        parts.append('ENTITY-FOCUSED VISUAL TASK (takes priority over generic extraction examples): ' + FEATURE_RULES)
     if errors is not None:
         parts.extend(["Return a COMPLETE corrected response from the original sources; prior replies are not evidence.",
                       "VALIDATION_FEEDBACK_JSON:\n" + json.dumps(errors, ensure_ascii=False)])
@@ -439,6 +445,8 @@ def apply_triple_response(inputs: dict[str, Any], response: dict[str, Any]) -> d
     schema = inputs.get("schema", TRIPLE_SCHEMA)
     v3 = {"schema_version": schema, "entity_profile": profile, "uncertain_aspects": gaps,
           "modality_state": {"targets": [inputs["target_modality"]], "existing": deepcopy(inputs["existing_modalities"])}}
+    if inputs.get('generation_task'):
+        v3['generation_task'] = inputs['generation_task']
     if inputs.get("visual_fact_policy") in VISUAL_POLICIES:
         v3["visual_fact_policy"] = {"schema_version": VISUAL_FACT_POLICY,
             "min_direct_confidence": MIN_VISUAL_CONFIDENCE, "context_multiplier": 0.5,
@@ -451,6 +459,7 @@ def apply_triple_response(inputs: dict[str, Any], response: dict[str, Any]) -> d
     if "evidence_selection" in inputs:
         v3["evidence_selection"] = deepcopy(inputs["evidence_selection"])
     return {"schema_version": schema, "entity": deepcopy(inputs["entity"]), "stage1_v3": v3,
+            **({'generation_task': inputs['generation_task']} if inputs.get('generation_task') else {}),
             **{key: deepcopy(inputs[key]) for key in ("image_modeling", "media_modeling", "source_inputs") if key in inputs},
             "entity_profile": {**profile, "entity_type": profile["primary_type"], "type": profile["primary_type"],
                                "type_evidence": list(profile["evidence_refs"])},

@@ -45,6 +45,9 @@ def image_assessment_prompt(inputs, metadata, errors=None):
     # deliberately NOT passed to the subsequent visual feature extractor.
     anchors = [{key: fact[key] for key in ("subject", "relation", "object", "evidence_refs")}
                for fact in inputs["fact_candidates"]]
+    from mmkgc.visual_description import TASK
+    if inputs.get('generation_task') == TASK:
+        anchors = []
     for anchor in anchors:
         meaning = inputs.get('relation_semantics', {}).get(anchor['relation'])
         if meaning:

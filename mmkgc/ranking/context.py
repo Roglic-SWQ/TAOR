@@ -180,6 +180,7 @@ _CONSTRAINT_FIELDS = (
 )
 _CONSTRAINT_BUCKETS = ("must_include", "should_include", "context_only", "avoid")
 _CANDIDATE_FIELDS = (
+    "description_task",
     "repair_targets",
     "plan_schema_version", "source_plan_id", "source_fact_refs", "focus",
     "candidate_id",
@@ -200,6 +201,7 @@ _CANDIDATE_FIELDS = (
     "metadata",
 )
 _CANDIDATE_STRING_FIELDS = {
+    "description_task",
     "plan_schema_version", "source_plan_id", "focus",
     "candidate_id",
     "source_candidate_id",

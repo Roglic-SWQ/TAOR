@@ -76,9 +76,16 @@ def load_saved_run(entity_dir: str | Path, record: EntityRecord, candidate_budge
             raise ValueError("Saved triple knowledge belongs to another entity")
     if "relevance_selection" in v3:
         knowledge["relevance_selection"] = deepcopy(v3["relevance_selection"])
-    for key in ("image_modeling", "media_modeling", "source_inputs", "source_extraction"):
+    for key in ("image_modeling", "media_modeling", "source_inputs", "source_extraction", "generation_task"):
         if key in v3:
             knowledge[key] = deepcopy(v3[key])
+    # Early opt-in description runs wrote their explicit task marker only in
+    # Stage 3. Recover that declared policy, then retain the exact check match.
+    from mmkgc.visual_description import TASK
+    saved_candidates = stage('3_relation_alternation_generation.json').get('text_candidates', [])
+    if (missing_mode == 'text' and not knowledge.get('generation_task') and saved_candidates
+            and all(c.get('description_task') == TASK for c in saved_candidates)):
+        knowledge['generation_task'] = knowledge['stage1_v3']['generation_task'] = TASK
     _validate_saved_media_sources(knowledge, record)
     original_sources = knowledge.get("source_inputs", knowledge["existing_modalities"])
     if original_sources.get("text") != record.existing_modalities.get("text"):

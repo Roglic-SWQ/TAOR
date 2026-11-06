@@ -22,6 +22,9 @@ FACT_SELECTION_PROMPT_VERSION = "entity_semantics_fact_selection_v5"
 
 def planning_facts(knowledge: dict[str, Any]) -> list[dict[str, Any]]:
     """A bounded retrieval view, never a replacement for the full fact catalogue."""
+    from mmkgc.visual_description import enabled, selection_view
+    if enabled(knowledge):
+        return selection_view(knowledge)['relation_facts']
     selection = knowledge.get("relevance_selection")
     if selection is None:
         return [fact for fact in knowledge["relation_facts"] if generation_eligible(fact)]
@@ -145,6 +148,10 @@ def fact_selection_schema(knowledge: dict[str, Any], max_selected_facts: int) ->
 
 def fact_selection_prompt(label: str, mode: str, knowledge: dict[str, Any],
                           max_selected_facts: int) -> tuple[str, str]:
+    from mmkgc.visual_description import enabled, selection_view, TASK, FEATURE_RULES
+    visual_task = mode == 'text' and enabled(knowledge)
+    if visual_task:
+        knowledge = selection_view(knowledge)
     fact_selection_schema(knowledge, max_selected_facts)
     _, raw = candidate_plan_prompt(label, mode, knowledge, 1)
     payload = json.loads(raw)
@@ -203,6 +210,14 @@ def fact_selection_prompt(label: str, mode: str, knowledge: dict[str, Any],
         "when the evidence cannot support completion. Decide status from the evidence; neither status "
         "is a default. Do not copy the output_contract instructions into the response. Return JSON only."
     )
+    if visual_task:
+        payload['prompt_version'] = TASK
+        system = (FEATURE_RULES +
+            'Choose only the few supplied fact IDs useful for this entity-focused visual description. '
+            'A clearly visible but incidental property is not useful just because it was extracted. '
+            'Do not invent a conceptual definition or infer a role. Graph relations are not part of this task. '
+            'Return exactly status and selected_fact_ids. Use ready with a nonempty distinct subset of allowed_fact_ids, '
+            'or insufficient_evidence with [] when none characterizes the target. No reasons, new facts or extra fields. Return JSON only.')
     return system, json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 

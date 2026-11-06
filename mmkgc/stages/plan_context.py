@@ -142,10 +142,13 @@ def _compile_candidate_context(knowledge, selection, modality):
         candidate["evidence_triples"] = list(dict.fromkeys(
             triple for fact in sources for triple in fact.get("evidence_triples", [])))
         image_views = payload["schema_version"] == FACT_SELECTION_SCHEMA and modality == "image"
+        from mmkgc.visual_description import enabled, TASK
+        visual_description = modality == 'text' and enabled(knowledge)
         requirements = [requirement(fact) for fact in sources]
         candidate["generation_context"] = {
-            "must_include": [*deepcopy(identity), *([] if image_views else requirements)],
-            "should_include": requirements if image_views else [], "context_only": [],
+            "must_include": [*deepcopy(identity), *([] if image_views or visual_description else requirements)],
+            "should_include": requirements if image_views or visual_description else [], "context_only": [],
+            **({'description_task': TASK} if visual_description else {}),
         }
         candidate["verification_targets"] = compile_verification_targets(
             candidate["generation_context"], knowledge, modality)
@@ -160,4 +163,22 @@ def _compile_candidate_context(knowledge, selection, modality):
 
 def ranking_knowledge(knowledge: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Keep unused/context facts in Stage 1 artifacts but outside positive ranking references."""
-    return {**knowledge, "relation_facts": deepcopy(context["supported_facts"])}
+    facts = deepcopy(context['supported_facts'])
+    from mmkgc.visual_description import enabled
+    if enabled(knowledge):
+        # Pixel-review prose and old captions are audit observations, not extra
+        # selected assertions. Do not let the Judge use them to excuse a scene
+        # inventory that the writing task deliberately excluded.
+        for fact in facts:
+            if 'visual_source_checks' in fact:
+                fact['visual_source_checks'] = [{key: deepcopy(value) for key,value in check.items()
+                    if key not in {'observed','reason'}} for check in fact['visual_source_checks']]
+        catalog = deepcopy(knowledge.get('evidence_catalog', []))
+        for source in catalog:
+            if source.get('modality') == 'image':
+                source.pop('content', None)
+                if source.get('entity_match'):
+                    source['entity_match']={key:value for key,value in source['entity_match'].items()
+                                            if key in {'status','identity_verified'}}
+        return {**knowledge,'relation_facts':facts,'evidence_catalog':catalog}
+    return {**knowledge, 'relation_facts': facts}

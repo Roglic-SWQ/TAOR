@@ -311,6 +311,7 @@ def _compact_stage1_modeling(payload: dict[str, Any]) -> dict[str, Any]:
             "evidence_catalog": payload["evidence_catalog"],
             "modality_state": v3["modality_state"],
             **({"visual_fact_policy": v3["visual_fact_policy"]} if "visual_fact_policy" in v3 else {}),
+            **({'generation_task': v3['generation_task']} if v3.get('generation_task') else {}),
             **({"relevance_selection": payload["relevance_selection"]} if "relevance_selection" in payload else {}),
             **{key: payload[key] for key in ("image_modeling", "media_modeling", "source_inputs", "source_extraction") if key in payload},
             **({"evidence_selection": v3["evidence_selection"]} if "evidence_selection" in v3 else {}),
@@ -763,6 +764,8 @@ def _compact_stage3_candidate(item: Any) -> tuple[Any, list[str]]:
     }
     if item.get("source_candidate_id"):
         compact["source_candidate_id"] = item.get("source_candidate_id")
+    if item.get('description_task'):
+        compact['description_task'] = item['description_task']
     if item.get("verification_targets") is not None:
         compact["verification_targets"] = item["verification_targets"]
     if isinstance(item.get("metadata"), dict) and item["metadata"].get("presentation_policy"):
@@ -956,6 +959,7 @@ def _compact_stage4_candidate(
     candidate_id = str(item.get("candidate_id") or "")
     compact: dict[str, Any] = {
         "candidate_id": candidate_id,
+        **({'description_task': item['description_task']} if item.get('description_task') else {}),
         "source_candidate_id": item.get("source_candidate_id"),
         "verification_targets": item.get("verification_targets"),
         "repair_targets": item.get("repair_targets"),

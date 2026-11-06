@@ -6,13 +6,14 @@ import json
 from copy import deepcopy
 from typing import Any
 from mmkgc.stages.presentation import IMAGE_PRESENTATION_POLICY
+from mmkgc.visual_description import TASK as VISUAL_DESCRIPTION_TASK
 
 
 PROMPT_VERSION = "gpt4omini_stage03_v2"
 TEXT_PROMPT_VERSION = "entity_semantics_text_v5"
 TEXT_VISION_PROMPT_VERSION = "entity_semantics_text_with_images_v2"
 TEXT_PROMPT_VERSIONS = frozenset({TEXT_PROMPT_VERSION, TEXT_VISION_PROMPT_VERSION,
-                                 'entity_semantics_text_v4', 'entity_semantics_text_with_images_v1'})
+                                 'entity_semantics_text_v4', 'entity_semantics_text_with_images_v1', VISUAL_DESCRIPTION_TASK})
 IMAGE_PROMPT_VERSION = "entity_semantics_image_v8"
 QWEN_PROMPT_VERSION = "qwen7b_original_v1"
 PROMPT_PROFILES = (PROMPT_VERSION, QWEN_PROMPT_VERSION)
@@ -132,6 +133,9 @@ def generation_payload(
                 "source_images"):
         if key in context:
             payload[key] = deepcopy(context[key])
+    if context.get('description_task') == VISUAL_DESCRIPTION_TASK:
+        payload['description_task'] = VISUAL_DESCRIPTION_TASK
+        payload['task'] = {'target_modality': 'text', 'purpose': 'entity-relevant visual description'}
     if isinstance(context.get("task"), dict):
         for key in ("target_modality", "diversity_axis"):
             if key in context["task"]:
@@ -154,6 +158,24 @@ def generation_payload(
 
 def build_generation_prompt(kind: str, payload: dict[str, Any]) -> str:
     if kind == "text":
+        if payload.get('description_task') == VISUAL_DESCRIPTION_TASK:
+            from mmkgc.visual_description import FEATURE_RULES
+            payload = {**payload, 'prompt_version': VISUAL_DESCRIPTION_TASK}
+            rules = (
+                'Write a concise natural English description of the entity-relevant visual features '
+                'of the pictured subject associated with entity.label. This is not a graph summary. '
+                + FEATURE_RULES +
+                'Use source_facts as the evidence boundary. Select and combine the useful supported '
+                'features into coherent prose; you need not enumerate every supplied feature. '
+                'Do not add scene details from attached originals outside that selected boundary. '
+                'Keep qualifiers attached to the relevant property. When identity is unverified, say '
+                'once that these are features of the pictured subject associated with the label. '
+                'Do not assert that the label identifies a person or classify a role from appearance. '
+                'Do not discuss graph relations, missing relations or evaluation procedures. '
+                'If regeneration_feedback is present, correct its specific unsupported assertions '
+                'while preserving correct visual content. Return only the description, without IDs or JSON.\n'
+            )
+            return rules + 'INPUT_JSON:\n' + json.dumps(payload, ensure_ascii=False)
         payload = {**payload, "prompt_version": TEXT_VISION_PROMPT_VERSION if payload.get('source_images') else TEXT_PROMPT_VERSION}
         rules = TEXT_RULES
         if payload.get('source_images'):

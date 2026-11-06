@@ -315,6 +315,9 @@ class OpenAICompatibleRelationPlanner:
     def plan(self, record: Any, missing_mode: str, knowledge: dict[str, Any], candidate_budget: int) -> dict[str, Any]:
         if missing_mode not in {"text", "image"}:
             raise ValueError("missing_mode must be one of: text, image")
+        from mmkgc.visual_description import enabled, selection_view
+        if missing_mode == 'text' and enabled(knowledge):
+            knowledge = selection_view(knowledge)
         shared = self.selection_schema == FACT_SELECTION_SCHEMA
         system, prompt = (fact_selection_prompt(record.label, missing_mode, knowledge, self.max_selected_facts)
                           if shared else candidate_plan_prompt(record.label, missing_mode, knowledge, candidate_budget))
