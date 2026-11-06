@@ -7,6 +7,9 @@ ATTEMPT="${TAOR_REAL_ATTEMPT:-$(date -u +%Y%m%dT%H%M%S)}"
 LOG_DIR="${ART}/attempt-${ATTEMPT}"
 PY=/medisco/linjiashi/venvs/taor-inference/bin/python
 SERVER_PY=/medisco/linjiashi/venvs/taor-qwen7b/bin/python
+MODEL_LABEL="${TAOR_REAL_MODEL_LABEL:-qwen7b}"
+[[ "${MODEL_LABEL}" =~ ^[a-zA-Z0-9_-]+$ ]] || { echo 'Invalid model label'; exit 2; }
+export TAOR_REAL_MODEL_LABEL="${MODEL_LABEL}"
 mkdir -p "${ART}"
 mkdir "${LOG_DIR}"
 export TAOR_REAL_LOG_DIR="${LOG_DIR}"
@@ -29,6 +32,7 @@ files=[p for folder in ('mmkgc','scripts','configs') for p in Path(folder).rglob
     'visible_devices':torch.cuda.device_count(),'source_sha256':{
         str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in files}},indent=2))
 PY
+if [[ -z "${TAOR_REAL_LANGUAGE_MODEL_CONFIG:-}" ]]; then
 "${SERVER_PY}" -m vllm.entrypoints.openai.api_server \
   --model /medisco/linjiashi/models/Qwen/Qwen2-VL-7B-Instruct \
   --served-model-name Qwen/Qwen2-VL-7B-Instruct \
@@ -45,6 +49,7 @@ for ((attempt=0; attempt<180; attempt++)); do
   if ((attempt == 179)); then echo 'Qwen startup timed out'; exit 3; fi
   sleep 5
 done
+fi
 RUNNER=("${PY}" -m mmkgc.run)
 DOCTOR=("${PY}" -m mmkgc.doctor)
 if [[ -n "${TAOR_REAL_API_ENV_FILE:-}" ]]; then
@@ -62,6 +67,11 @@ COMMON=(--dataset-type wn18rr --dataset-dir datasets/wn18rr-import-20261106/WN18
 if [[ -n "${TAOR_REAL_VISUAL_VERIFIER_CONFIG:-}" ]]; then
   COMMON+=(--stage1-visual-verifier-config "${TAOR_REAL_VISUAL_VERIFIER_CONFIG}")
 fi
+if [[ -n "${TAOR_REAL_LANGUAGE_MODEL_CONFIG:-}" ]]; then
+  COMMON+=(--model-config "${TAOR_REAL_LANGUAGE_MODEL_CONFIG}"
+           --stage1-model-config "${TAOR_REAL_LANGUAGE_MODEL_CONFIG}"
+           --stage2-model-config "${TAOR_REAL_LANGUAGE_MODEL_CONFIG}")
+fi
 "${DOCTOR[@]}" "${COMMON[@]}" --qwen-timeout-seconds 20 --missing-mode image >"${LOG_DIR}/doctor.json"
 if [[ -n "${TAOR_REAL_FROZEN_FAILURE:-}" ]]; then
   timeout 1200 "${PY}" scripts/check_wn18rr_native_contract.py \
@@ -69,9 +79,9 @@ if [[ -n "${TAOR_REAL_FROZEN_FAILURE:-}" ]]; then
   exit $?
 fi
 set +e
-timeout 1200 "${RUNNER[@]}" "${COMMON[@]}" --missing-mode text --run-name text-qwen7b
+timeout 1200 "${RUNNER[@]}" "${COMMON[@]}" --missing-mode text --run-name "text-${MODEL_LABEL}"
 TEXT_STATUS=$?
-timeout 1200 "${RUNNER[@]}" "${COMMON[@]}" --missing-mode image --run-name image-qwen7b-sdxl \
+timeout 1200 "${RUNNER[@]}" "${COMMON[@]}" --missing-mode image --run-name "image-${MODEL_LABEL}-sdxl" \
   --sdxl-model-dir /medisco/linjiashi/models/SDXL/stable-diffusion-xl-base-1.0 \
   --sdxl-width 1024 --sdxl-height 1024 --sdxl-steps 20 --sdxl-seed 20260708
 IMAGE_STATUS=$?
@@ -84,7 +94,8 @@ from PIL import Image
 root=Path(os.environ['TAOR_REAL_LOG_DIR'])
 report={'text_exit_code':int(os.environ['TAOR_REAL_TEXT_STATUS']),
         'image_exit_code':int(os.environ['TAOR_REAL_IMAGE_STATUS']),'runs':{}}
-for name in ('text-qwen7b','image-qwen7b-sdxl'):
+label=os.environ['TAOR_REAL_MODEL_LABEL']
+for name in (f'text-{label}',f'image-{label}-sdxl'):
     entity=root/'runs'/name/'entities/02436645'
     final=entity/'final.json'
     result=json.loads(final.read_text()) if final.exists() else {}
@@ -98,7 +109,7 @@ for name in ('text-qwen7b','image-qwen7b-sdxl'):
     report['runs'][name]['new_sdxl_images']=images
 report['completed']=(report['text_exit_code']==report['image_exit_code']==0 and
     all(r['ranking_status']=='completed' for r in report['runs'].values()) and
-    bool(report['runs']['image-qwen7b-sdxl']['new_sdxl_images']))
+    bool(report['runs'][f'image-{label}-sdxl']['new_sdxl_images']))
 (root/'result.json').write_text(json.dumps(report,ensure_ascii=False,indent=2))
 print(json.dumps(report,ensure_ascii=False),flush=True)
 assert report['completed'], 'Real execution did not satisfy all generation and Stage 4 checks'

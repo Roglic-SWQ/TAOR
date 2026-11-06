@@ -35,6 +35,28 @@ def test_optional_visual_reviewer_does_not_replace_local_generation(monkeypatch,
     assert build_parser().parse_args([]).stage1_visual_verifier_config is None
 
 
+@pytest.mark.parametrize('missing_mode', ['text', 'image'])
+def test_explicit_luna_config_replaces_all_language_routes_without_changing_sdxl(monkeypatch, missing_mode):
+    monkeypatch.setenv('OPENAI_BASE_URL', 'https://luna.example.test/v1')
+    monkeypatch.setenv('OPENAI_API_KEY', 'private-luna-test-key')
+    monkeypatch.setenv('OPENAI_MODEL', 'unrelated-environment-model')
+    monkeypatch.setattr(defaults, 'Qwen3EvidenceReranker', lambda *a, **kw: object())
+    monkeypatch.setattr(defaults, 'MMKGCPipeline', lambda **kw: SimpleNamespace(**kw))
+    monkeypatch.setattr(defaults, 'validate_sdxl_model_dir', lambda p: Path(p))
+    monkeypatch.setattr(defaults, 'SDXLImageGenerator', lambda config: SimpleNamespace(config=config))
+    path=PROJECT_ROOT/'configs/gpt6-luna-mainline.yaml'
+    runtime=defaults.build_default_mainline_runtime(missing_mode=missing_mode, model_config=path,
+        stage1_model_config=path, stage2_model_config=path, stage1_visual_verifier_config=path,
+        stage4_config='configs/stage4-gpt6-luna-gpu0.yaml')
+    components=[runtime.pipeline.text_generator, runtime.pipeline.knowledge_planner,
+                runtime.pipeline.knowledge_planner.visual_verifier, runtime.pipeline.relation_planner]
+    if missing_mode=='image': components.append(runtime.pipeline.image_prompt_generator)
+    assert all(c.config.model_name=='gpt-6-luna' for c in components)
+    assert all(c.config.base_url=='https://luna.example.test/v1' for c in components)
+    if missing_mode=='image':
+        assert runtime.pipeline.image_generator.config.model_dir.name=='stable-diffusion-xl-base-1.0'
+
+
 @pytest.mark.parametrize("missing_mode", ["text", "image"])
 @pytest.mark.parametrize("gpt_override", [False, True])
 def test_runtime_routes_local_qwen_and_explicit_gpt_override(monkeypatch, tmp_path, missing_mode, gpt_override):
