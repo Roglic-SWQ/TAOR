@@ -255,7 +255,7 @@ def test_split_real_pipeline_matches_serial_and_preserves_owned_preparation_logs
             return {"ranking_status": "valid", "text_ranking": {"ranked_candidates": list(context.text_candidates)}}
 
     def pipeline():
-        return MMKGCPipeline(semantic_planner=Builder(), evidence_reranker=grounded.Scorer(),
+        return MMKGCPipeline(candidate_budget=5, semantic_planner=Builder(), evidence_reranker=grounded.Scorer(),
                              relation_planner=Planner(), text_generator=Generator(), ranking_engine=Ranking())
 
     serial, split = pipeline(), pipeline()

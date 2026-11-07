@@ -1,0 +1,3 @@
+# Install in a dedicated serving environment; leave the pipeline environment unchanged.
+vllm==0.19.1
+transformers==5.5.4

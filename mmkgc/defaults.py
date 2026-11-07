@@ -19,6 +19,7 @@ from mmkgc.adapters import (
 from mmkgc.adapters.evidence_reranker import Qwen3EvidenceReranker
 from mmkgc.adapters.relation_planner import OpenAICompatibleRelationPlanner
 from mmkgc.pipeline import MMKGCPipeline
+from mmkgc.shared_models import SharedLocalModels
 
 
 MMKGC_ROOT = Path(__file__).resolve().parents[1]
@@ -76,6 +77,7 @@ def build_default_mainline_runtime(
     sdxl_guidance_scale: float = 7.5,
     sdxl_device: str = "cuda",
     skip_stage4: bool = False,
+    shared_local_models: SharedLocalModels | None = None,
 ) -> PipelineRuntime:
     """Build the single supported MMKGC mainline."""
 
@@ -127,14 +129,16 @@ def build_default_mainline_runtime(
     reranker_path = Path(stage1_reranker_model_dir)
     if not reranker_path.is_absolute():
         reranker_path = MMKGC_ROOT / reranker_path
-    evidence_reranker = Qwen3EvidenceReranker(
+    reranker_factory = shared_local_models.reranker if shared_local_models is not None else Qwen3EvidenceReranker
+    evidence_reranker = reranker_factory(
         reranker_path, device=stage1_reranker_device, max_length=stage1_reranker_max_length
     )
 
     image_generator = None
     if missing_mode == "image":
         validated_model_dir = validate_sdxl_model_dir(sdxl_model_dir)
-        image_generator = SDXLImageGenerator(
+        image_factory = shared_local_models.image_generator if shared_local_models is not None else SDXLImageGenerator
+        image_generator = image_factory(
             SDXLConfig(
                 model_dir=validated_model_dir,
                 width=sdxl_width,
@@ -156,6 +160,9 @@ def build_default_mainline_runtime(
         knowledge_planner=knowledge_planner,
         evidence_reranker=evidence_reranker,
         relation_planner=relation_planner,
+        ranking_engine=(shared_local_models.ranking_engine(
+                            MMKGC_ROOT, stage4_config or "configs/stage4-model-fusion.yaml")
+                        if shared_local_models is not None and not skip_stage4 else None),
         stage4_config=stage4_config,
         dataset_root=resolve_dataset_root(dataset_root),
         skip_stage4=skip_stage4,

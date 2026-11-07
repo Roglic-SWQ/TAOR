@@ -320,7 +320,7 @@ def selection_control(root, failure_path):
         raise
 
 
-def run(root, retry_failed=False):
+def run(root, retry_failed=False, *, shared_local_models=None, max_attempts=None):
     from mmkgc.defaults import build_default_mainline_runtime
     rows = validate(root)
     settings = read(root/'runtime-settings.json') if (root/'runtime-settings.json').exists() else {}
@@ -332,11 +332,15 @@ def run(root, retry_failed=False):
             previous = read(state) if state.exists() else {}
             if terminal(previous, root) or (previous.get('status') == 'failed' and not retry_failed):
                 continue
+            if (max_attempts is not None and previous.get('status') == 'failed'
+                    and int(previous.get('attempt', 0)) >= max_attempts):
+                continue
             pending.append((item, state, previous))
         if not pending:
             continue
         runtime = build_default_mainline_runtime(missing_mode=mode, candidate_budget=2 if mode == 'image' else 1,
             **{'model_config': ROOT/'configs/qwen7b-text-vision.yaml', 'model_call_timeout_seconds': 120, **settings},
+            shared_local_models=shared_local_models,
             dataset_root=DATASET,
             stage1_reranker_model_dir='/medisco/linjiashi/models/Qwen/Qwen3-Reranker-4B',
             stage1_reranker_device='cuda:0',
