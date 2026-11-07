@@ -8,9 +8,9 @@ import math
 from typing import Any
 
 
-OBSERVATION_VERSION = "fact_observation_v1"
+OBSERVATION_VERSION = "fact_observation_v2"
 REPAIR_CONFIDENCE = 0.8
-REFLECTION_POLICY = "targeted_reflection_v2"
+REFLECTION_POLICY = "targeted_reflection_v3"
 CHECK_STATUSES = ("supported", "contradicted", "missing", "unverifiable", "uncertain")
 VERIFICATION_MODES = ("direct", "appearance_only", "unverifiable")
 
@@ -33,9 +33,9 @@ def validate_repair_targets(value: Any) -> list[dict[str, Any]]:
 
 
 def removal_targets(operations: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return validate_repair_targets([{"issue_id": item["claim_id"], "claim": item["observed"],
+    return validate_repair_targets([{"issue_id": item.get("claim_id", item.get("check_id")), "claim": item["observed"],
         "evidence_refs": item.get("evidence_refs") or [entry[len("context:"):].strip() for entry in item["evidence"]
-                          if entry.startswith("context:")]} for item in operations if item["action"] == "remove"])
+                          if entry.startswith("context:")]} for item in operations if item["action"] in {"remove", "reframe"}])
 
 
 def bind_repair_checks(raw: Any, targets: Any, modality: str) -> list[dict[str, Any]]:
@@ -66,11 +66,12 @@ def bind_repair_checks(raw: Any, targets: Any, modality: str) -> list[dict[str, 
 
 
 def compile_verification_targets(context: Mapping[str, Any], knowledge: Mapping[str, Any], modality: str) -> list[dict[str, Any]]:
-    """Compile only this candidate's requirements; never infer new graph facts."""
+    """Bind candidate-local evidence without assigning coverage obligations."""
     facts = {fact["fact_id"]: fact for fact in knowledge.get("relation_facts", [])}
     non_visual = knowledge.get("text_visual_profile", {}).get("non_visual_facts", [])
     targets = []
-    for bucket in ("must_include", "should_include"):
+    catalog = {item['evidence_id']: item for item in knowledge.get('evidence_catalog', [])}
+    for bucket in ("checks",):
         for constraint in context.get(bucket, []):
             claim = constraint.get("constraint")
             if not claim:
@@ -80,12 +81,16 @@ def compile_verification_targets(context: Mapping[str, Any], knowledge: Mapping[
             targets.append({
                 "check_id": constraint["constraint_id"],
                 "fact_id": refs[0] if refs else None,
-                "claim": claim, "requirement": bucket,
+                "claim": claim,
                 "subject": fact.get("subject", ""), "relation": fact.get("relation", ""),
                 "object": fact.get("object", ""), "direction": fact.get("direction", ""),
                 "verification_mode": ("direct" if modality == "text" else
                                       "unverifiable" if claim in non_visual else "assess"),
                 "evidence_refs": list(constraint.get("evidence_refs", [])),
+                "source_modalities": sorted(set(fact.get('source_modalities', [])) | {
+                    catalog[ref]['modality'] for ref in constraint.get('evidence_refs', [])
+                    if ref in catalog and catalog[ref].get('modality')}),
+                "visual_observations": deepcopy(fact.get('visual_observations', [])),
             })
     return validate_verification_targets(targets)
 
@@ -104,19 +109,20 @@ def validate_verification_targets(value: Any) -> list[dict[str, Any]]:
         fact_id = item.get("fact_id")
         if fact_id is not None:
             fact_id = _text(fact_id, "fact_id")
-        requirement = item.get("requirement")
         mode = item.get("verification_mode")
-        if requirement not in {"must_include", "should_include"}:
-            raise ValueError("invalid verification requirement")
+        if 'requirement' in item:
+            raise ValueError('Legacy coverage requirements must be converted at the saved-input boundary')
         if mode not in {*VERIFICATION_MODES, "assess"}:
             raise ValueError("invalid verification mode")
         target = {
             "check_id": check_id, "fact_id": fact_id,
-            "claim": _text(item.get("claim"), "claim"), "requirement": requirement,
+            "claim": _text(item.get("claim"), "claim"),
             "verification_mode": mode, "evidence_refs": _strings(item.get("evidence_refs"), "evidence_refs"),
         }
         for key in ("subject", "relation", "object", "direction"):
             target[key] = _text(item.get(key, ""), key, allow_empty=True)
+        target['source_modalities'] = _strings(item.get('source_modalities', []), 'source_modalities')
+        target['visual_observations'] = deepcopy(item.get('visual_observations', []))
         result.append(target)
     return result
 
@@ -140,7 +146,7 @@ def observation_response_schema() -> dict[str, Any]:
 
 
 def bind_observation(raw: Any, targets: Any, modality: str, candidate_id: str, *, repair_targets=None) -> dict[str, Any]:
-    """Validate model observations and attach trusted requirements and provenance."""
+    """Validate model observations and attach trusted source metadata and provenance."""
     targets = validate_verification_targets(targets)
     by_id = {item["check_id"]: item for item in targets}
     repair_targets = validate_repair_targets(repair_targets or [])
@@ -214,8 +220,7 @@ def repair_operations(observation: Mapping[str, Any]) -> list[dict[str, Any]]:
         if item["confidence"] < REPAIR_CONFIDENCE or item["verification_mode"] != "direct" or not item["evidence_refs"]:
             continue
         status = item["status"]
-        if status != "contradicted" and not (status == "missing" and item["requirement"] == "must_include"
-                                            and observation.get("modality") == "text"):
+        if status != "contradicted":
             continue
         operations.append({
             "action": "replace" if status == "contradicted" else "add",
@@ -246,12 +251,27 @@ def observation_priority(candidate: Mapping[str, Any]) -> tuple[int, int, int]:
     )
 
 
+def candidate_repair_operations(candidate):
+    """Route a grounded semantic rejection without relabeling it a factual error."""
+    operations = repair_operations(candidate.get('observation') or {})
+    gate = candidate.get('hard_gate', {})
+    rubric = candidate.get('judge_rubrics', {}).get('rubric_scores', {}).get('entity_semantics', {})
+    refs = sorted({ref for item in candidate.get('verification_targets', []) for ref in item.get('evidence_refs', [])})
+    evidence = list(rubric.get('evidence') or gate.get('evidence') or [])
+    if gate.get('decision') == 'reject' and rubric.get('score') == 0 and refs and evidence:
+        operations.append({'action': 'reframe', 'check_id': 'semantic:entity',
+            'expected': 'Express the target entity meaning with concrete, source-supported semantic cues.',
+            'observed': rubric.get('reason') or gate.get('reason', ''),
+            'evidence': evidence, 'evidence_refs': refs})
+    return operations
+
+
 def repair_is_eligible(original: Mapping[str, Any], repaired: Mapping[str, Any]) -> bool:
     """A repair must resolve an observed defect without sacrificing verified facts."""
     if repaired.get("hard_gate", {}).get("decision") != "pass":
         return False
     before = original.get("observation") or {}
-    operations = repair_operations(before)
+    operations = candidate_repair_operations(original)
     if not operations:
         return False
     after = repaired.get("observation") or {}
@@ -261,7 +281,7 @@ def repair_is_eligible(original: Mapping[str, Any], repaired: Mapping[str, Any])
     for item in before.get("fact_checks", []):
         current = checked[item["check_id"]]
         if any(item.get(key) != current.get(key) for key in
-               ("expected", "fact_id", "subject", "relation", "object", "direction", "requirement")):
+               ("expected", "fact_id", "subject", "relation", "object", "direction", "source_modalities", "visual_observations")):
             return False
         if set(item.get("evidence_refs", [])) != set(current.get("evidence_refs", [])):
             return False
@@ -298,13 +318,14 @@ def repair_outcomes(original: Mapping[str, Any], repaired: Mapping[str, Any]) ->
     facts = {item["check_id"]: item for item in after.get("fact_checks", [])}
     removals = {item["issue_id"]: item for item in after.get("repair_checks", [])}
     outcomes = []
-    for operation in repair_operations(original.get("observation") or {}):
+    for operation in candidate_repair_operations(original):
         remove = operation["action"] == "remove"
+        explicit_issue = operation['action'] in {'remove', 'reframe'}
         issue_id = operation["claim_id"] if remove else operation["check_id"]
-        check = (removals if remove else facts).get(issue_id, {})
+        check = (removals if explicit_issue else facts).get(issue_id, {})
         state = "uncertain"
         if check.get("confidence", 0) >= REPAIR_CONFIDENCE:
-            if remove and check.get("claim") == operation["observed"]:
+            if explicit_issue and check.get("claim") == operation["observed"]:
                 state = check.get("status", "uncertain")
             elif not remove and check.get("verification_mode") == "direct":
                 state = ("resolved" if check.get("status") == "supported" else

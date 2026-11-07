@@ -453,7 +453,7 @@ def test_reflection_reuses_original_fact_plan_without_role_or_quota_replanning()
     original = generation['relation_alternation_generation']['text_candidates'][0]
     targets = original['verification_targets']
     raw = {'unsupported_claims': [], 'fact_checks': [
-        {'check_id': item['check_id'], 'status': 'missing' if item['fact_id'] == 'rf:3' else 'supported',
+        {'check_id': item['check_id'], 'status': 'contradicted' if item['fact_id'] == 'rf:3' else 'supported',
          'verification_mode': 'direct', 'observed': 'candidate text', 'evidence': ['text: checked span'],
          'confidence': 0.95, 'reason': 'checked'} for item in targets]}
     observed = {**original, 'hard_gate': {'decision': 'pass'}, 'final_score': 0.8,

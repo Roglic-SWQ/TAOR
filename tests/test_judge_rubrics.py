@@ -270,7 +270,7 @@ def test_full_engine_retains_rubrics_and_old_reflection_input(mode):
         "gpt4omini_judge": GPT4OMiniRankingJudge(GraphClient(payload), use_rubrics=True),
         "sentence_bert": Local(), "clip": Local(), "blip_itm": Local()})
     result = engine.rank(context)
-    assert result["ranking_status"] == "completed"
+    assert result["ranking_status"] == "no_valid_candidate"
     item = result[mode + "_ranking"]["ranked_candidates"][0]
     assert item["judge_rubrics"]["rubric_scores"]["verified_fact_consistency"]["score"] == 1
     assert item["final_score"] <= .25

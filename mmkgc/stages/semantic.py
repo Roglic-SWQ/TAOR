@@ -1800,7 +1800,7 @@ def _normalize_modality_constraints(
             normalized[modality] = fallback.get(modality, {})
             continue
         normalized[modality] = {}
-        for bucket in ("must_include", "should_include", "context_only"):
+        for bucket in ("checks", "context_only"):
             values = source.get(bucket, [])
             if not isinstance(values, list):
                 values = []

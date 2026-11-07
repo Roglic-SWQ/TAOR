@@ -20,7 +20,7 @@ def test_repair_keeps_all_input_evidence_and_layout_without_competing_output_ins
     context = {'source_facts': [{'fact_id': 'f1', 'subject': 'Actor', 'relation': 'cast member',
                 'object': 'Film', 'evidence_refs': ['t']}],
         'source_evidence': [{'evidence_id': 't', 'content': 'Original source biography. ' * 100}],
-        'must_include': [{'constraint': 'Actor'}], 'should_include': [], 'context_only': [],
+        'checks': [{'constraint': 'Actor'}], 'context_only': [],
         'presentation_context': {'policy_version': 'grounded_image_diversity_v1',
             'previous_candidates': ['OLD_IMAGE_DRAFT'], 'remaining_request_budget': 2,
             'sampling_seed': 17, 'requested_rendering': {'framing': 'close framing'},
@@ -33,7 +33,7 @@ def test_repair_keeps_all_input_evidence_and_layout_without_competing_output_ins
     assert payload['prompt_version'] == IMAGE_PROMPT_VERSION
     assert payload['source_facts'] == context['source_facts']
     assert payload['source_evidence'] == context['source_evidence']
-    assert payload['must_include'] == context['must_include']
+    assert payload['checks'] == context['checks']
     assert payload['presentation_context']['sampling_seed'] == 17
     assert payload['presentation_context']['requested_rendering'] == {'framing': 'close framing'}
     assert payload['regeneration_feedback'] == context['regeneration_feedback']

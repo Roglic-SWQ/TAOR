@@ -41,7 +41,7 @@ from mmkgc.ranking.scorers.gpt4omini_judge import GPT4OMiniJudgeParseError
 from mmkgc.observation import OBSERVATION_VERSION
 
 
-SCORE_VERSION = "stage4_rubric_fusion_v5"
+SCORE_VERSION = "stage4_rubric_fusion_v6"
 RANKER_NAME = "model_fusion"
 _JUDGE_SCORER_KEY = "gpt4omini_judge"
 JUDGE_OUTPUT_SCORER_NAME = "gpt4omini_judge"
@@ -391,6 +391,15 @@ class ModelFusionRankingEngine:
             items[index]["soft_violations"] = list(gate.soft_violations)
             items[index]["ranking_reason"] = gate.reason
             observation = getattr(result, "observation", None)
+            if observation is not None:
+                from mmkgc.observation import repair_operations
+                conflicts = repair_operations(observation)
+                if conflicts and gate.decision == 'pass':
+                    gate = GateResult('reject', gate.source,
+                        hard_violations=('evidence_conflict',),
+                        reason='Candidate has an unresolved, evidence-backed factual conflict.')
+                    items[index]['hard_gate'] = _gate_payload(gate)
+                    items[index]['ranking_reason'] = gate.reason
             if result.score.details.get("rubric_version"):
                 items[index]["judge_rubrics"] = _plain({key: result.score.details[key] for key in (
                     "rubric_version", "rubric_scores", "rubric_aggregation", "unverified_additions", "repair_suggestions")})

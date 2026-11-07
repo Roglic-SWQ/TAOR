@@ -86,8 +86,7 @@ def _supported_fact_refs(reasoning: dict[str, Any], fact: dict[str, Any]) -> lis
 def _constraint_buckets(reasoning: dict[str, Any], modality: str) -> dict[str, list[dict[str, Any]]]:
     constraints = reasoning.get("modality_constraints", {}).get(modality, {})
     return {
-        "must_include": list(constraints.get("must_include", [])),
-        "should_include": list(constraints.get("should_include", [])),
+        "checks": list(constraints.get("checks", [])),
         "context_only": list(constraints.get("context_only", [])),
     }
 
@@ -97,7 +96,7 @@ def _constraints_for_relation(
     modalities: list[str],
     relation: str,
 ) -> dict[str, list[dict[str, Any]]]:
-    plan = {"must_include": [], "should_include": [], "context_only": []}
+    plan = {"checks": [], "context_only": []}
     for modality in modalities:
         buckets = _constraint_buckets(reasoning, modality)
         for bucket, items in buckets.items():
@@ -162,11 +161,7 @@ def _context_only_reasons(
     if generation_use in {"context", "context_only", "use_as_context"}:
         return ["generation_use_context_only"]
     relation_context = _relation_constraints(generation_plan, "context_only", relation)
-    relation_positive = _relation_constraints(generation_plan, "must_include", relation) + _relation_constraints(
-        generation_plan,
-        "should_include",
-        relation,
-    )
+    relation_positive = _relation_constraints(generation_plan, "checks", relation)
     if relation_context and not relation_positive:
         return ["relation_specific_context_only_constraint"]
     return []
@@ -490,7 +485,7 @@ def _embedding_constraint_alignment(
 ) -> float:
     constraints = [
         str(item.get("constraint") or "")
-        for bucket in ("must_include", "should_include", "context_only")
+        for bucket in ("checks", "context_only")
         for item in generation_plan.get(bucket, [])
         if isinstance(item, dict) and str(item.get("constraint") or "").strip()
     ]
@@ -965,7 +960,7 @@ def _constraint_refs_by_bucket(
     relation: str,
 ) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
     """Return global and relation-specific constraint references for Stage2 output."""
-    buckets = ("must_include", "should_include", "context_only")
+    buckets = ("checks", "context_only")
     global_refs = {bucket: [] for bucket in buckets}
     relation_refs = {bucket: [] for bucket in buckets}
     for bucket in buckets:

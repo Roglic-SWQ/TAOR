@@ -42,7 +42,7 @@ class ImagePromptGenerator(Protocol):
     """Protocol for image prompt planners used by Stage 3."""
 
     # Model adapters can implement generate_with_context(..., context=...) to
-    # receive facts, requirements and rendering choices as separate fields.
+    # receive facts, source context and rendering choices as separate fields.
 
     def generate(
         self,

@@ -40,12 +40,12 @@ def reviewer(state="supported", confidence=.95):
 
 def test_cropped_image_missing_even_at_099_never_requests_added_parts():
     target = {"check_id": "windows", "fact_id": "f:windows", "claim": "The tower has exactly two front windows.",
-              "requirement": "must_include", "verification_mode": "direct", "evidence_refs": ["e:windows"]}
+              "verification_mode": "direct", "evidence_refs": ["e:windows"]}
     for mode in ("image", "text"):
         raw = raw_observation([target], mode=mode, confidence=.99, status="missing")
         raw["fact_checks"][0]["observed"] = "No windows in this doorway crop."
         observation = bind_observation(raw, [target], mode, mode + "_001")
-        assert bool(repair_operations(observation)) is (mode == "text")
+        assert not repair_operations(observation)
         assert observation["missing_facts"]
 
 
@@ -237,7 +237,7 @@ def test_full_pipeline_routes_one_repair_and_keeps_all_candidates(route):
         image_generator=images, ranking_engine=engine)
     result = pipeline.finish(PreparedEntity(record, "image", coarse, knowledge, selection, reasoning, []))
     repaired = route in {"resample", "edit_prompt"}
-    assert result["final"]["best_image_candidate_id"] == ("image_safe_001" if repaired else "image_001")
+    assert result["final"]["best_image_candidate_id"] == ("image_safe_001" if repaired else "image_001" if route == "skip_omission" else None)
     assert len(images.calls) == (2 if repaired else 1)
     assert len(prompts.calls) == (2 if route == "edit_prompt" else 1)
     ranking = result["kg_aware_candidate_consistency_ranking"]
@@ -287,7 +287,7 @@ def test_text_removal_is_rechecked_in_the_same_pipeline_judge_call(state):
     pipeline = MMKGCPipeline(candidate_budget=1, text_generator=text, ranking_engine=engine)
     result = pipeline.finish(PreparedEntity(record, "text", coarse, knowledge, selection, reasoning, []))
     assert text.calls == 2
-    assert result["final"]["best_text_candidate_id"] == ("text_safe_001" if state == "resolved" else "text_001")
+    assert result["final"]["best_text_candidate_id"] == ("text_safe_001" if state == "resolved" else None)
     assert "REPAIR_TARGETS" in client.calls[1][0]
     ranking = result["kg_aware_candidate_consistency_ranking"]
     repaired = next(item for item in ranking["text_ranking"]["ranked_candidates"] if item["candidate_id"] == "text_safe_001")

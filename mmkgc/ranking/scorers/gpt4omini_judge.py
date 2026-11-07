@@ -639,7 +639,7 @@ class GPT4OMiniRankingJudge:
         for item in operations:
             remove = item["action"] == "remove"
             targets.append({"check_id": item["claim_id"] if remove else item["check_id"],
-                "fact_id": item.get("fact_id"), "requirement": "must_include", "verification_mode": "direct",
+                "fact_id": item.get("fact_id"), "verification_mode": "direct",
                 "claim": ("The prompt does not assert this rejected claim: " + item["observed"] if remove else item["expected"]),
                 "evidence_refs": item.get("evidence_refs", [])})
         targets = validate_verification_targets(targets)
@@ -660,9 +660,16 @@ class GPT4OMiniRankingJudge:
             "check, supported means the prompt does NOT assert that claim; contradicted means it does. "
             "Evidence must start text: and describe the actual prompt, not the desired image. "
             "Do not judge aesthetics, add facts, or infer image contents. unsupported_claims must be []. "
+            "For VISUAL_SEMANTIC_DEFECTS, inspect the visual plan itself. Naming the target, repeating "
+            "its definition or saying an arbitrary shape symbolizes it is not a concrete semantic cue. "
+            "A cube symbolizing belief or a generic portrait symbolizing freedom lacks a source-grounded "
+            "visual realization: mark missing if the plan needs revision, or uncertain if no grounded "
+            "realization can be established. Do not mark supported merely because the target is named. "
+            "A supported plan needs entity-relevant visible structure or activity; it need not show every fact. "
             "Return only JSON matching response_schema.\nINPUT_JSON:\n" + json.dumps({
                 "TARGET_ENTITY": {"entity_key": context.entity_key, "label": context.entity_label},
                 "EVIDENCE_BUNDLE": context.to_prompt_payload(), "PROMPT_TEXT": original_prompt,
+                "VISUAL_SEMANTIC_DEFECTS": [item for item in operations if item['action'] == 'reframe'],
                 "CHECK_TARGETS": targets, "response_schema": schema}, ensure_ascii=False))
         attempts = []
         request_prompt = prompt
@@ -1128,7 +1135,7 @@ def _build_rubric_prompt(context, candidate, modality, *, image_input=None):
 
 def _repair_check_instructions():
     return (
-        "\nREPAIR REVIEW: REPAIR_TARGETS contains specific rejected assertions from the ORIGINAL "
+        "\nREPAIR REVIEW: REPAIR_TARGETS contains specific rejected assertions or semantic defects from the ORIGINAL "
         "candidate, not assertions made by the current candidate and not new evidence. Re-read the "
         "current actual text/pixels and return observation.repair_checks for each issue_id exactly once. "
         "resolved means the old wrong assertion is demonstrably absent or corrected; unresolved means "
@@ -1172,7 +1179,7 @@ def _build_prompt(
         payload["observation_guidance"] = (
             "Return observation in addition to ALL normal judgment fields. Check exactly the supplied "
             "candidate-local targets, each check_id once; never add targets or borrow another candidate's "
-            "requirements. The expected claims are requirements, not observations. Assess subject, "
+            "evidence. Expected claims are references, not coverage obligations or observations. Assess subject, "
             "relation, object, direction and negation. supported means expressed with actual content "
             "evidence; contradicted requires an explicit conflict, not mere absence; missing requires "
             "an expressible, directly verifiable target and enough content visibility to establish absence. "
@@ -1186,7 +1193,7 @@ def _build_prompt(
             "with pixel: or quote actual text with text:. Missing text may cite absence explicitly. "
             "unsupported_claims lists concrete assertions unsupported by ANY supplied evidence, not "
             "ordinary rendering choices; absence from KG alone does not mean false. Give confidence "
-            "per check. A should_include omission can lower quality without requiring regeneration."
+            "per check. An omitted fact can affect coverage without requiring regeneration."
         )
     if repair_targets:
         payload["REPAIR_TARGETS"] = validate_repair_targets(repair_targets)
@@ -1224,7 +1231,7 @@ def _task_evaluation_guidance(task: str, *, uses_attached_image: bool = False) -
             "because the candidate type is image. Forbidden or avoid-list items "
             "are checks to apply, not evidence that the candidate contains those "
             "items; hard-reject only when the candidate content actually requests "
-            "or contains them. must_include and should_include are positive "
+            "or contains them. Selected facts are positive "
             "grounding targets, not unsafe-content categories. The words "
             "entity, identity, film, and grounded details are allowed "
             "descriptors in an image-generation prompt. Use low score and "
@@ -1252,7 +1259,7 @@ def _task_evaluation_guidance(task: str, *, uses_attached_image: bool = False) -
             "not reject solely because the candidate type is image. Forbidden or "
             "avoid-list items are checks to apply, not evidence that the candidate "
             "contains those items; hard-reject only when the candidate content "
-            "actually requests or contains them. must_include and should_include "
+            "actually requests or contains them. Selected facts "
             "are positive grounding targets, not unsafe-content categories. The "
             "words entity, identity, film, and grounded details are allowed "
             "descriptors in an image-generation prompt. Use low score and "
@@ -1282,7 +1289,7 @@ def _visual_evidence_source_guidance(*, uses_attached_image: bool) -> str:
         )
     return (
         "Evidence strings must start with pixel:, metadata:, or context:. "
-        "KG/context facts are requirements, not pixel evidence; metadata is "
+        "KG/context facts are source assertions, not pixel evidence; metadata is "
         "provenance, not proof that pixels contain a fact. "
         + pixel_requirement
         + "Generic entity-type matches alone must score <= 50 and should use "

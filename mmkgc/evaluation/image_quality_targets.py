@@ -178,7 +178,7 @@ def build_entity_evidence_summary(artifacts: RunEntityArtifacts) -> str:
 
     visual_terms = _image_constraint_terms(artifacts.reasoning)
     if visual_terms:
-        parts.append(f"Visual requirements: {', '.join(_dedupe(visual_terms))}")
+        parts.append(f"Visual evidence: {', '.join(_dedupe(visual_terms))}")
 
     return ". ".join(parts)
 
@@ -293,10 +293,10 @@ def _image_constraint_terms(reasoning: dict[str, Any]) -> list[str]:
     image_constraints = _as_dict(constraints.get("image"))
     terms: list[str] = []
 
-    for key in ("must_include", "should_include", "context_only"):
+    for key in ("checks", "context_only"):
         terms.extend(_constraint_terms(image_constraints.get(key)))
 
-    for key in ("must_include", "required_visual_terms"):
+    for key in ("checks", "visual_terms"):
         terms.extend(_constraint_terms(constraints.get(key)))
 
     return _dedupe(terms)

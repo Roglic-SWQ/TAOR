@@ -77,7 +77,7 @@ def freeze(root, runtime_settings=None):
         save(root/'runtime-settings.json', runtime_settings)
         bindings[str(root/'runtime-settings.json')] = digest(root/'runtime-settings.json')
     sources = {str(path.relative_to(ROOT)): digest(path) for folder in ('mmkgc', 'scripts', 'configs')
-               for path in (ROOT/folder).rglob('*') if path.suffix in {'.py', '.yaml', '.sh'}}
+               for path in (ROOT/folder).rglob('*') if path.suffix in {'.py', '.yaml', '.sh', '.txt'}}
     save(root/'scope.json', {'test_entities': len(test), 'real_missing_image': missing_images,
          'real_missing_text': missing_texts, 'pilot_is_diagnostic': True,
          'test_relations_are_not_generation_inputs': True})
@@ -165,22 +165,8 @@ def persist_initial(pipeline, prepared, generation, root, name):
 
 
 def publication_ready(candidate):
-    """A gate pass alone cannot resolve missing facts or certify an identity."""
-    observation = candidate.get('observation') or {}
-    checks = observation.get('fact_checks')
-    if not isinstance(checks, list) or any(not isinstance(c, dict) for c in checks):
-        return False
-    required = [c for c in checks if c.get('requirement') == 'must_include']
-    from mmkgc.visual_description import TASK
-    if candidate.get('description_task') == TASK:
-        return (any(c.get('status') == 'supported' for c in checks)
-                and all(c.get('status') == 'supported' for c in required)
-                and not any(c.get('status') == 'contradicted' for c in checks)
-                and not observation.get('unsupported_claims')
-                and candidate.get('repair_eligible') is not False)
-    return (bool(required) and all(c.get('status') == 'supported' for c in required)
-            and not any(c.get('status') == 'contradicted' for c in checks)
-            and not observation.get('unsupported_claims')
+    """Use the persisted Stage4 decision; do not invent a second coverage gate."""
+    return (candidate.get('gate', {}).get('decision') == 'pass'
             and candidate.get('repair_eligible') is not False)
 
 

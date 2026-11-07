@@ -38,7 +38,7 @@ TEXT_RULES = (
     "Describe the entity rather than reporting the modeling task: avoid reciting supplied knowledge, "
     "labels, evidence checks or verification procedures. Preserve meaningful source attribution and "
     "uncertainty at the point where they limit the claim, without repeating them throughout the text.\n\n"
-    "Use source_facts as the factual scope. Cover every distinct supported selected fact, "
+    "Use source_facts as the factual scope. Use a coherent subset of relevant supported selected facts, "
     "merging overlap without losing specific information. Use identity_context only for the "
     "evidence-backed name and type, and source_evidence only to clarify the selected facts. "
     "Do not add facts from background evidence, other candidates or outside knowledge.\n\n"
@@ -119,7 +119,7 @@ def generation_payload(
         "task": {"primary_relation": relation, "generation_angle": angle},
         "source_facts": [{"claim": str(fact)} for fact in facts],
         "source_evidence": [],
-        "must_include": [], "should_include": [], "context_only": [],
+        "checks": [], "context_only": [],
         "identity_context": {}, "supported_visual_details": [], "candidate_visual_cues": [],
         "rendering_options": {
             "allowed_choices": ["framing", "camera angle", "lighting", "depth of field",
@@ -127,7 +127,7 @@ def generation_payload(
         },
         "regeneration_feedback": {},
     }
-    for key in ("source_facts", "source_evidence", "must_include", "should_include", "context_only",
+    for key in ("source_facts", "source_evidence", "checks", "context_only",
                 "identity_context", "supported_visual_details", "candidate_visual_cues",
                 "regeneration_feedback", "presentation_context", "candidate_description", "generation_step", "focus_plan",
                 "source_images"):

@@ -117,18 +117,15 @@ def test_non_visual_fact_is_not_an_image_omission():
     assert not _needs_stage4_regeneration({"ranking_status": "completed"}, feedback)
 
 
-def test_text_candidate_with_required_omission_triggers_scoped_repair():
+def test_text_omission_does_not_trigger_forced_coverage():
     mode = "text"
     *_, targets = setup(mode)
     candidate = observed_candidate(targets, mode=mode)
     feedback = build_stage3_feedback(ranked(candidate), attempt=1, generation={f"{mode}_candidates": [
         {**candidate, "positive_prompt": "original red tower prompt"}
     ]})
-    assert _needs_stage4_regeneration(ranked(candidate), feedback)
-    task = feedback["candidate_feedback"][0]
-    assert [op["fact_id"] for op in task["operations"]] == ["rf:0001"]
-    assert task["previous_prompt"] == "original red tower prompt"
-    assert task["operations"][0]["evidence_refs"] == targets[1]["evidence_refs"]
+    assert not _needs_stage4_regeneration(ranked(candidate), feedback)
+    assert not feedback['candidate_feedback']
 
 
 @pytest.mark.parametrize("state,verification", [("uncertain", "direct"), ("unverifiable", "unverifiable"),
@@ -218,7 +215,7 @@ def test_real_engine_keeps_structured_observation_and_its_audit_record(mode):
         def complete(self, prompt):
             if "Extract factual triples" in prompt:
                 return '{"triples": []}'
-            return judgment(raw_observation(targets, status="missing" if mode == "text" else "contradicted", mode=mode))
+            return judgment(raw_observation(targets, status="contradicted", mode=mode))
 
         def complete_multimodal(self, prompt, image_data_url):
             assert image_data_url.startswith("data:image/")
@@ -301,7 +298,7 @@ def test_judge_does_not_silently_accept_legacy_scores_when_factual_checks_are_re
 @pytest.mark.parametrize("mode", ["text", "image"])
 def test_qwen_original_profile_receives_original_content_and_only_its_own_fact_edits(mode):
     record, _, knowledge, selection, reasoning, targets = setup(mode)
-    candidate = observed_candidate(targets, mode=mode, status="missing" if mode == "text" else "contradicted")
+    candidate = observed_candidate(targets, mode=mode, status="contradicted")
     candidate["positive_prompt"] = "original prompt without red color"
     feedback = build_stage3_feedback(ranked(candidate), attempt=1, generation={f"{mode}_candidates": [candidate]})
     if mode == "image":
@@ -325,7 +322,7 @@ def test_qwen_original_profile_receives_original_content_and_only_its_own_fact_e
         candidate_budget=2, failed_ranking=ranked(candidate), stage3_feedback=feedback,
     )["relation_alternation_generation"]
     assert len(captures) == 1
-    action = "add" if mode == "text" else "replace"
+    action = "replace"
     assert "original prompt without red color" in captures[0] and f'"action": "{action}"' in captures[0]
     # A global list of non-visual cautions can mention the architect, but it must
     # not become this candidate's source fact or an editing target.
@@ -429,7 +426,7 @@ def test_pipeline_performs_one_scoped_repair_and_writes_both_observations(mode, 
             for candidate in candidates:
                 item = {**candidate, **observed_candidate(candidate["verification_targets"], mode=mode,
                         candidate_id=candidate["candidate_id"], status="supported" if self.calls == 2 else
-                            "missing" if mode == "text" else "contradicted",
+                            "contradicted",
                         score=0.7 if candidate["candidate_id"].endswith("002") else 0.8)}
                 item['generated_content'] = candidate['generated_content']
                 items.append(item)

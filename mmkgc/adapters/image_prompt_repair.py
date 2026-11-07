@@ -181,7 +181,7 @@ def compact_repair_prompt(label, entity_type, relation, angle, facts, context, e
               'generation_angle': angle, 'grounded_facts': list(dict.fromkeys(facts))[:8]}
     for key in ('entity_text_excerpt', 'text_visual_cues', 'text_context_cues', 'relation_plan',
                 'generation_brief', 'source_facts', 'identity', 'constraints', 'evidence_catalog',
-                'source_evidence', 'must_include', 'should_include', 'context_only', 'identity_context',
+                'source_evidence', 'checks', 'context_only', 'identity_context',
                 'supported_visual_details', 'candidate_visual_cues', 'regeneration_feedback'):
         if context.get(key) is not None:
             source[key] = deepcopy(context[key])

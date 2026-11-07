@@ -327,8 +327,7 @@ class QwenLocalTextGenerator(_CandidateCallLog):
             if feedback:
                 repair_payload = {
                     key: generation_context[key] for key in (
-                        "regeneration_feedback", "source_facts", "source_evidence", "must_include",
-                        "should_include", "context_only", "identity_context",
+                        "regeneration_feedback", "source_facts", "source_evidence", "checks", "context_only", "identity_context",
                     ) if key in generation_context
                 }
                 prompt += "\nRepair only the previous candidate using this JSON. Preserve supported content; " \

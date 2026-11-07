@@ -669,7 +669,7 @@ def _stage2_evidence_refs(item: dict[str, Any]) -> list[str]:
 
 
 def _empty_stage2_constraint_refs() -> dict[str, list[str]]:
-    return {key: [] for key in ("must_include", "should_include", "context_only")}
+    return {key: [] for key in ("checks", "context_only")}
 
 
 def _merge_stage2_constraint_refs(
@@ -684,7 +684,7 @@ def _merge_stage2_constraint_refs(
 
 
 def _normalize_stage2_constraint_refs(value: Any) -> dict[str, list[str]]:
-    buckets = ("must_include", "should_include", "context_only")
+    buckets = ("checks", "context_only")
     if not isinstance(value, dict):
         return {bucket: [] for bucket in buckets}
     return {
@@ -1265,13 +1265,13 @@ def _stage_summary(stage: str, data: Any) -> dict[str, Any]:
             - graph_relation_count
             - entity_fact_count,
             "safe_inference_count": len(data.get("safe_inferences", [])),
-            "text_must_include_count": len(
-                constraints.get("text", {}).get("must_include", [])
+            "text_evidence_check_count": len(
+                constraints.get("text", {}).get("checks", [])
                 if isinstance(constraints.get("text"), dict)
                 else []
             ),
-            "image_must_include_count": len(
-                constraints.get("image", {}).get("must_include", [])
+            "image_evidence_check_count": len(
+                constraints.get("image", {}).get("checks", [])
                 if isinstance(constraints.get("image"), dict)
                 else []
             ),

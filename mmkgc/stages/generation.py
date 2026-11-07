@@ -13,7 +13,7 @@ from typing import Any
 from mmkgc.adapters import GeneratedImageArtifact, ImageGenerator, ImagePromptGenerator, TextGenerator
 from mmkgc.generation_prompts import PROMPT_VERSION, QWEN_PROMPT_VERSION
 from mmkgc.observation import (REPAIR_CONFIDENCE, REFLECTION_POLICY, observation_priority,
-                               repair_operations, removal_targets)
+                               repair_operations, removal_targets, candidate_repair_operations)
 from mmkgc.stages.candidate_planning import PLAN_SCHEMA, PLAN_SCHEMAS, LEGACY_PLAN_SCHEMA
 from mmkgc.plan_schema import FACT_SELECTION_SCHEMA
 from mmkgc.stages.triples import TRIPLE_SCHEMAS
@@ -51,11 +51,6 @@ _STAGE3_REPAIR_ACTIONS = {
     "unsupported_high_risk_fact": "remove unsupported high-risk facts",
     "forbidden_content": "remove forbidden or excluded content",
     "hard_constraint_violation": "remove content that violates hard constraints",
-    "missing_core_evidence": "include the required core evidence",
-    "missing_must_include": "include all required relations and facts",
-    "missing_should_include": "increase coverage of recommended relations and facts",
-    "core_relation_missing": "include the missing core relation",
-    "low_relation_coverage": "increase coverage of the required relations",
     "weak_evidence_support": "use stronger graph-supported evidence",
     "context_only_evidence": "do not treat context-only evidence as a core fact",
     "generic_entity_type_only": "include entity-specific supported evidence",
@@ -86,8 +81,7 @@ def _selection_payload(selection: dict[str, Any]) -> dict[str, Any]:
 def _constraints_for_modality(reasoning: dict[str, Any], modality: str) -> dict[str, list[dict[str, Any]]]:
     constraints = reasoning.get("modality_constraints", {}).get(modality, {})
     return {
-        "must_include": list(constraints.get("must_include", [])),
-        "should_include": list(constraints.get("should_include", [])),
+        "checks": list(constraints.get("checks", [])),
         "context_only": list(constraints.get("context_only", [])),
     }
 
@@ -97,7 +91,7 @@ def _constraint_lookup(reasoning: dict[str, Any], modality: str) -> dict[str, di
     constraints = reasoning.get("modality_constraints", {}).get(modality, {})
     if not isinstance(constraints, Mapping):
         return lookup
-    for bucket in ("must_include", "should_include", "context_only"):
+    for bucket in ("checks", "context_only"):
         items = constraints.get(bucket, [])
         if not isinstance(items, list):
             continue
@@ -123,13 +117,12 @@ def _generation_context_for_item(
     global_refs = item.get("global_constraint_refs_by_bucket", {})
     lookup = _constraint_lookup(reasoning, modality)
     context: dict[str, Any] = {
-        "must_include": [],
-        "should_include": [],
+        "checks": [],
         "context_only": [],
         "candidate_quota": int(item.get("candidate_quota", 0) or 0),
         "candidate_quota_by_modality": dict(item.get("candidate_quota_by_modality", {})),
     }
-    for bucket in ("must_include", "should_include", "context_only"):
+    for bucket in ("checks", "context_only"):
         refs = []
         for source in (global_refs, relation_refs):
             values = source.get(bucket, []) if isinstance(source, Mapping) else []
@@ -248,7 +241,7 @@ def _facts_for_relation(
     if fact.get("fact"):
         facts.append(str(fact["fact"]))
     context = _generation_context_for_item(item, reasoning, modality)
-    for constraint in list(context.get("must_include", [])) + list(context.get("should_include", [])):
+    for constraint in list(context.get("checks", [])):
         text = constraint.get("constraint")
         if text and text not in facts:
             facts.append(str(text))
@@ -388,11 +381,8 @@ def _generation_brief(
 ) -> dict[str, Any]:
     relation = str(item.get("relation", "global_profile"))
     context = _generation_context_for_item(item, reasoning, modality)
-    must_include = _constraint_strings(list(context.get("must_include", [])))
-    should_include = _constraint_strings(list(context.get("should_include", [])))
+    checks = _constraint_strings(list(context.get("checks", [])))
     context_only = _constraint_strings(list(context.get("context_only", [])))
-    if not must_include:
-        must_include = facts[:2]
     diversity_axis = diversity_axis or relation
     return {
         "generation_intent": (
@@ -406,8 +396,7 @@ def _generation_brief(
             if modality == "text"
             else "clear inspectable composition, concrete but not over-specific"
         ),
-        "must_include": must_include,
-        "should_include": should_include,
+        "checks": checks,
         "context_only": context_only,
         "evidence_facts": list(facts),
     }
@@ -419,7 +408,7 @@ def _model_generation_context(
     regeneration_feedback: dict[str, Any] | None = None,
     *, include_source_images: bool = False,
 ) -> dict[str, Any]:
-    """Keep candidate facts, requirements, identity and visual evidence distinct."""
+    """Keep candidate facts, source context, identity and visual evidence distinct."""
     context = _generation_context_for_item(item, reasoning, modality)
     by_id = {fact.get("fact_id"): fact for fact in knowledge.get("relation_facts", []) if fact.get("fact_id")}
     source_facts = []
@@ -450,7 +439,7 @@ def _model_generation_context(
                 for check in fact["visual_source_checks"]
             ]
 
-    def requirements(bucket: str) -> list[dict[str, Any]]:
+    def evidence_entries(bucket: str) -> list[dict[str, Any]]:
         return [{key: deepcopy(value[key]) for key in (
             "constraint_id", "constraint", "constraint_type", "source_fact_refs", "evidence_refs",
         ) if key in value} for value in context.get(bucket, []) if isinstance(value, Mapping)]
@@ -461,7 +450,7 @@ def _model_generation_context(
     ) if key in profile}
     selected_refs = {ref for fact in source_facts for ref in fact.get("evidence_refs", [])}
     identity_refs = set(identity.get("evidence_refs", []))
-    context_refs = {ref for value in requirements("context_only") for ref in value.get("evidence_refs", [])}
+    context_refs = {ref for value in evidence_entries("context_only") for ref in value.get("evidence_refs", [])}
     catalog = {value["evidence_id"]: value for value in knowledge.get("evidence_catalog", [])}
     evidence = []
     for ref, value in catalog.items():
@@ -512,8 +501,8 @@ def _model_generation_context(
         **({'description_task': knowledge.get('generation_task', knowledge.get('stage1_v3', {}).get('generation_task'))}
            if knowledge.get('generation_task', knowledge.get('stage1_v3', {}).get('generation_task')) else {}),
         **({'source_image_inputs':source_images} if source_images else {}),
-        "must_include": requirements("must_include"), "should_include": requirements("should_include"),
-        "context_only": requirements("context_only"), "identity_context": identity,
+        "checks": evidence_entries("checks"),
+        "context_only": evidence_entries("context_only"), "identity_context": identity,
         "supported_visual_details": visual_details,
         "candidate_visual_cues": deepcopy(visual.get("visual_scene_cues", [])),
         "regeneration_feedback": {key: deepcopy(feedback[key]) for key in (
@@ -530,13 +519,10 @@ def _brief_instruction(brief: dict[str, Any]) -> str:
         f"Evidence policy: {brief.get('evidence_policy', 'grounded_graph_only')}.",
         f"Composition focus: {brief.get('diversity_axis', '')}.",
     ]
-    must = brief.get("must_include") or []
-    should = brief.get("should_include") or []
+    checks = brief.get("checks") or []
     context = brief.get("context_only") or []
-    if must:
-        parts.append("Must include: " + "; ".join(map(str, must)))
-    if should:
-        parts.append("Should include: " + "; ".join(map(str, should)))
+    if checks:
+        parts.append("Selected evidence: " + "; ".join(map(str, checks)))
     if context:
         parts.append("Context only: " + "; ".join(map(str, context)))
     return " ".join(part for part in parts if part.strip())
@@ -574,7 +560,7 @@ def _positive_prompt_suffix(brief: dict[str, Any]) -> str:
     fragments: list[str] = []
     seen: set[str] = set()
 
-    for field_name, limit in (("must_include", 2), ("should_include", 2)):
+    for field_name, limit in (("checks", 4),):
         values = brief.get(field_name) or []
         if not isinstance(values, (list, tuple)):
             continue
@@ -602,8 +588,7 @@ def _positive_prompt_suffix(brief: dict[str, Any]) -> str:
 def _constraints_used(item: dict[str, Any], reasoning: dict[str, Any], modality: str) -> list[dict[str, Any]]:
     context = _generation_context_for_item(item, reasoning, modality)
     return _unique_constraints(
-        list(context.get("must_include", []))
-        + list(context.get("should_include", []))
+        list(context.get("checks", []))
         + list(context.get("context_only", []))
     )
 
@@ -642,7 +627,7 @@ def _candidate_base(
     coverage = [] if relation == "global_profile" else [str(relation)]
     source_fact = item.get("source_fact", {})
     supporting_relations = []
-    for constraint in _generation_context_for_item(item, reasoning, modality).get("should_include", []):
+    for constraint in _generation_context_for_item(item, reasoning, modality).get("checks", []):
         supporting_relations.extend(constraint.get("source_relations", []))
     supporting_relations = list(dict.fromkeys(supporting_relations))
     if item.get("fact_id"):
@@ -831,7 +816,7 @@ def _generate_modality_candidates(
             diversity_axis=diversity_axis,
         )
         if original_qwen_prompts and not relation_item.get("fact_ids"):
-            for key in ("must_include", "should_include", "context_only", "evidence_facts"):
+            for key in ("checks", "context_only", "evidence_facts"):
                 brief[key] = brief[key][:4]
         base = _candidate_base(
             (
@@ -1289,9 +1274,8 @@ def build_stage3_feedback(
     if any(
         item.get("observation") is not None
         for section in ("text_ranking", "image_ranking")
-        for item in failed_ranking.get(section, {}).get(
-            "ranked_candidates", failed_ranking.get(section, {}).get("rejected_candidates", []),
-        )
+        for item in (failed_ranking.get(section, {}).get("ranked_candidates")
+                     or failed_ranking.get(section, {}).get("rejected_candidates", []))
     ):
         return _fact_stage3_feedback(failed_ranking, attempt, generation or {})
     candidate_feedback: list[dict[str, Any]] = []
@@ -1365,17 +1349,17 @@ def _fact_stage3_feedback(ranking: Mapping[str, Any], attempt: int, generation: 
     }
     for modality in ("text", "image"):
         section = ranking.get(f"{modality}_ranking", {})
-        items = section.get("ranked_candidates", section.get("rejected_candidates", []))
+        items = section.get("ranked_candidates") or section.get("rejected_candidates", [])
         if not items:
             continue
         candidate = next((item for item in items if item["candidate_id"] == section.get("best_candidate_id")), None)
         if candidate is None:
-            repairable = [item for item in items if repair_operations(item.get("observation") or {})]
+            repairable = [item for item in items if candidate_repair_operations(item)]
             if not repairable:
                 continue
             candidate = min(repairable, key=lambda item: (observation_priority(item), -float(item.get("final_score", 0))))
         observation = candidate.get("observation") or {}
-        operations = repair_operations(observation)
+        operations = candidate_repair_operations(candidate)
         if not operations:
             continue
         candidate_id = candidate["candidate_id"]

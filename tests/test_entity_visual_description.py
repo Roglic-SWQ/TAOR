@@ -43,10 +43,9 @@ def test_checked_visual_features_are_optional_coverage_and_do_not_force_relation
     selection=apply_fact_selection(value,{'status':'ready','selected_fact_ids':['rf:2']},'text',4)
     compiled,reasoning=compile_plan_context(value,selection,'text')
     candidate=compiled['fine_grained_relation_selection']['candidates'][0]
-    assert candidate['generation_context']['must_include']==[]
-    assert candidate['verification_targets'][0]['requirement']=='should_include'
-    observation={'modality':'text','fact_checks':[{'status':'missing','requirement':'should_include',
-        'confidence':0.99,'verification_mode':'direct','evidence_refs':['evidence:2']}]}
+    assert 'must_include' not in candidate['generation_context']
+    assert 'requirement' not in candidate['verification_targets'][0]
+    observation={'modality':'text','fact_checks':[{'status':'missing','confidence':0.99,'verification_mode':'direct','evidence_refs':['evidence:2']}]}
     assert repair_operations(observation)==[]
     context={**candidate['generation_context'],'source_facts':candidate['source_facts']}
     payload=generation_payload('Museum','entity','facade material','none',[],context)
@@ -74,11 +73,11 @@ def test_feature_ceiling_is_joint_not_per_image_inventory():
 
 
 def test_visual_export_requires_supported_content_but_not_every_optional_feature():
-    candidate={'description_task':TASK,'observation':{'fact_checks':[
-        {'requirement':'should_include','status':'supported'},
-        {'requirement':'should_include','status':'missing'}]}}
+    candidate={'gate': {'decision':'pass'}, 'description_task':TASK,'observation':{'fact_checks':[
+        {'status':'supported'},
+        {'status':'missing'}]}}
     assert publication_ready(candidate)
-    candidate['observation']['unsupported_claims']=[{'claim':'identity inferred from clothing'}]
+    candidate['gate']['decision']='reject'
     assert not publication_ready(candidate)
     candidate['observation']={'fact_checks':[]}
     assert not publication_ready(candidate)
@@ -130,7 +129,7 @@ def test_description_task_survives_grounded_stage_writer_and_resume(tmp_path):
     assert stage['data']['generation_task']==TASK
     restored,generation=load_saved_run(entity,record,1,missing_mode='text')
     assert restored.knowledge['generation_task']==TASK
-    assert all(t['requirement']=='should_include' for t in generation['relation_alternation_generation']['text_candidates'][0]['verification_targets'])
+    assert all('requirement' not in t for t in generation['relation_alternation_generation']['text_candidates'][0]['verification_targets'])
 
 
 def test_visual_judge_reference_does_not_reintroduce_unselected_caption_details():

@@ -238,7 +238,7 @@ def build_image_prompt(
     }
     if context.get("regeneration_feedback"):
         payload["regeneration_feedback"] = context["regeneration_feedback"]
-        for key in ("source_facts", "source_evidence", "must_include", "should_include",
+        for key in ("source_facts", "source_evidence", "checks",
                     "context_only", "identity_context", "supported_visual_details"):
             if key in context:
                 payload[key] = context[key]

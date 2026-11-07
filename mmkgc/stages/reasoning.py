@@ -6,10 +6,6 @@ from typing import Any
 
 from mmkgc.stages.credibility import ensure_fact_credibility
 
-CORE_MISSING_CODE = "missing_core_must_include"
-NON_CORE_MISSING_CODE = "missing_non_core_must_include"
-SHOULD_MISSING_CODE = "missing_should_include"
-
 def _constraint_text(fact: dict[str, Any]) -> str:
     neighbors = ", ".join(map(str, fact.get("neighbor_entities", [])))
     return f"{fact.get('relation')}: {neighbors}" if neighbors else str(fact.get("relation"))
@@ -24,10 +20,6 @@ def _constraint_object(
     confidence: str,
     reason: str,
     *,
-    severity: str,
-    gate_action: str,
-    violation_code: str,
-    core: bool = False,
     evidence_policy: str = "direct_kg",
 ) -> dict[str, Any]:
     return {
@@ -38,16 +30,12 @@ def _constraint_object(
         "evidence_triples": evidence_triples,
         "confidence": confidence,
         "reason": reason,
-        "severity": severity,
-        "gate_action": gate_action,
-        "violation_code": violation_code,
-        "core": core,
         "evidence_policy": evidence_policy,
     }
 
 
 def _empty_constraints() -> dict[str, list[dict[str, Any]]]:
-    return {"must_include": [], "should_include": [], "context_only": []}
+    return {"checks": [], "context_only": []}
 
 
 def _assign_constraint_ids(modality_constraints: dict[str, dict[str, list[dict[str, Any]]]]) -> None:
@@ -129,10 +117,8 @@ def _normalized_entity_profile(knowledge: dict[str, Any]) -> dict[str, Any]:
 
 def _modality_usage_for_fact(fact: dict[str, Any], target_modality: str) -> dict[str, str]:
     allowed_use = str(fact.get("allowed_use") or "supporting_only")
-    if allowed_use == "direct_generation":
-        bucket = "must_include"
-    elif allowed_use == "supporting_only":
-        bucket = "should_include"
+    if allowed_use in {"direct_generation", "supporting_only"}:
+        bucket = "checks"
     else:
         bucket = "context_only"
     return {target_modality: bucket}
@@ -164,7 +150,7 @@ def _supported_fact(fact: dict[str, Any], target_modality: str) -> dict[str, Any
         "usable_for": [
             modality
             for modality, bucket in usage.items()
-            if bucket in {"must_include", "should_include", "context_only"}
+            if bucket in {"checks", "context_only"}
         ],
         "confidence": _confidence_for_fact(fact),
         "credibility_score": fact.get("credibility_score"),
@@ -267,7 +253,7 @@ def _text_profile_constraints(knowledge: dict[str, Any]) -> dict[str, list[dict[
         else knowledge.get("text_visual_profile", {})
     )
     if not isinstance(profile, dict) or not profile:
-        return {"should_include": [], "context_only": []}
+        return {"checks": [], "context_only": []}
     should = []
     context = []
     for cue in profile.get("visual_scene_cues", [])[:4]:
@@ -283,10 +269,10 @@ def _text_profile_constraints(knowledge: dict[str, Any]) -> dict[str, list[dict[
                 evidence_triples=[],
                 confidence="medium",
                 reason="Derived from the existing text modality as a safe visual generation cue.",
-                severity="soft",
-                gate_action="prefer",
-                violation_code=SHOULD_MISSING_CODE,
-                core=False,
+
+
+
+
                 evidence_policy="entity_text",
             )
         )
@@ -303,14 +289,14 @@ def _text_profile_constraints(knowledge: dict[str, Any]) -> dict[str, list[dict[
                 evidence_triples=[],
                 confidence="medium",
                 reason="Derived from the existing text modality as context, not a hard visual requirement.",
-                severity="soft",
-                gate_action="context_only",
-                violation_code="context_only_evidence",
-                core=False,
+
+
+
+
                 evidence_policy="entity_text",
             )
         )
-    return {"should_include": should, "context_only": context}
+    return {"checks": should, "context_only": context}
 
 
 def build_knowledge_from_v3_artifacts(
@@ -471,7 +457,7 @@ def constraint_compilation(missing_mode: str, knowledge: dict[str, Any]) -> dict
         if fact.get("allowed_use") in {"direct_generation", "supporting_only"}
     )
     if entity_type and entity_type != "entity":
-        modality_constraints[missing_mode]["must_include"].append(
+        modality_constraints[missing_mode]["checks"].append(
                 _constraint_object(
                     constraint=f"entity type: {entity_type}",
                     constraint_type="identity",
@@ -480,10 +466,10 @@ def constraint_compilation(missing_mode: str, knowledge: dict[str, Any]) -> dict
                     evidence_triples=list(profile.get("type_evidence", [])),
                     confidence="high" if profile.get("confidence", 0) >= 0.7 else "medium",
                     reason="Entity type anchors generation to the supported graph profile.",
-                    severity="hard",
-                    gate_action="hard_required",
-                    violation_code=CORE_MISSING_CODE,
-                    core=True,
+
+
+
+
                     evidence_policy="entity_profile",
                 )
             )
@@ -493,24 +479,8 @@ def constraint_compilation(missing_mode: str, knowledge: dict[str, Any]) -> dict
         modality = missing_mode
         if fact.get("allowed_use") == "excluded":
             continue
-        if fact.get("allowed_use") == "direct_generation":
-            bucket = "must_include"
-            constraint_type = "grounded_fact"
-            severity = "soft"
-            gate_action = "soft_required"
-            violation_code = NON_CORE_MISSING_CODE
-        elif fact.get("allowed_use") == "supporting_only":
-            bucket = "should_include"
-            constraint_type = "grounded_fact"
-            severity = "soft"
-            gate_action = "prefer"
-            violation_code = SHOULD_MISSING_CODE
-        else:
-            bucket = "context_only"
-            constraint_type = "context"
-            severity = "soft"
-            gate_action = "context_only"
-            violation_code = "context_only_evidence"
+        bucket = "checks" if fact.get("allowed_use") in {"direct_generation", "supporting_only"} else "context_only"
+        constraint_type = "grounded_fact" if bucket == "checks" else "context"
         _append_unique(
             modality_constraints[modality][bucket],
             _constraint_object(
@@ -521,17 +491,17 @@ def constraint_compilation(missing_mode: str, knowledge: dict[str, Any]) -> dict
                 evidence_triples=list(fact.get("evidence_triples", [])),
                 confidence=_confidence_for_fact(fact),
                 reason=f"Derived from {fact.get('direction', 'out')} graph evidence.",
-                severity=severity,
-                gate_action=gate_action,
-                violation_code=violation_code,
-                core=False,
+
+
+
+
             ),
         )
 
     text_profile_constraints = _text_profile_constraints(knowledge)
     if missing_mode == "image":
-        for item in text_profile_constraints["should_include"]:
-            _append_unique(modality_constraints["image"]["should_include"], item)
+        for item in text_profile_constraints["checks"]:
+            _append_unique(modality_constraints["image"]["checks"], item)
         for item in text_profile_constraints["context_only"]:
             _append_unique(modality_constraints["image"]["context_only"], item)
 

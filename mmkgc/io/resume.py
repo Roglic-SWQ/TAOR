@@ -10,6 +10,7 @@ from typing import Any
 from mmkgc.adapters.base import GeneratedImageArtifact
 from mmkgc.data import EntityRecord, existing_image_paths
 from mmkgc.pipeline import PreparedEntity
+from mmkgc.io.legacy_evidence import convert_saved_checks
 from mmkgc.stages.plan_context import compile_plan_context
 from mmkgc.stages.relation_planning import apply_candidate_slot_plans
 from mmkgc.stages.candidate_planning import PLAN_SCHEMAS, LEGACY_PLAN_SCHEMA, apply_candidate_plans
@@ -127,14 +128,13 @@ def load_saved_run(entity_dir: str | Path, record: EntityRecord, candidate_budge
             raise ValueError("Duplicate saved text candidate")
         seen.add(candidate_id)
         plan = by_plan[candidate["source_plan_id"]]
-        if candidate.get("verification_targets") != plan["verification_targets"]:
-            raise ValueError("Saved candidate checks differ from its original fact plan")
+        convert_saved_checks(candidate, plan["verification_targets"])
         content = candidate.get("generated_content", {})
         if content.get("type") != "text" or not isinstance(content.get("value"), str) or not content["value"].strip():
             raise ValueError("Saved text candidate has no usable content")
         context = plan["generation_context"]
         candidate.update(used_evidence_triples=deepcopy(plan["evidence_triples"]),
-            used_constraints=deepcopy(context["must_include"] + context["should_include"]),
+            used_constraints=deepcopy(context["checks"]),
             generation_context=deepcopy(context), metadata={"status": "generated"})
         if simple:
             candidate.update(plan_schema_version=plan_schema, source_fact_refs=list(plan["fact_ids"]))
@@ -151,15 +151,14 @@ def load_saved_run(entity_dir: str | Path, record: EntityRecord, candidate_budge
         if (metadata["entity_key"], metadata["candidate_id"]) != (record.entity_key, candidate_id):
             raise ValueError("Saved image metadata belongs to another candidate")
         plan = by_plan[candidate["source_plan_id"]]
-        if candidate.get("verification_targets") != plan["verification_targets"]:
-            raise ValueError("Saved candidate checks differ from its original fact plan")
+        convert_saved_checks(candidate, plan["verification_targets"])
         context = plan["generation_context"]
         candidate.update(
             generated_content={"type": "image", "value": metadata["positive_prompt"],
                 "status": "generated", "image_artifact_id": f"{record.entity_key}:{candidate_id}"},
             positive_prompt=metadata["positive_prompt"], negative_prompt=metadata.get("negative_prompt", ""),
             used_evidence_triples=deepcopy(plan["evidence_triples"]),
-            used_constraints=deepcopy(context["must_include"] + context["should_include"]),
+            used_constraints=deepcopy(context["checks"]),
             metadata=deepcopy(metadata),
         )
         if simple:

@@ -190,7 +190,7 @@ def test_views_share_facts_and_checks_and_receive_previous_presentations(monkeyp
     assert len(items) == 3
     assert all(item['source_fact_refs'] == ['rf:2', 'rf:3'] for item in items)
     assert all(item['verification_targets'] == items[0]['verification_targets'] for item in items)
-    assert all(item['requirement'] == 'should_include' for item in items[0]['verification_targets'] if item['fact_id'])
+    assert all('requirement' not in item for item in items[0]['verification_targets'] if item['fact_id'])
     for index, context in enumerate(views.calls):
         assert [fact['fact_id'] for fact in context['source_facts']] == ['rf:2', 'rf:3']
         assert context['presentation_context']['previous_candidates'] == [item['positive_prompt'] for item in items[:index]]

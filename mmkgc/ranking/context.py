@@ -14,7 +14,7 @@ from mmkgc.observation import validate_verification_targets, validate_repair_tar
 from mmkgc.plan_schema import FACT_GROUNDED_SCHEMAS as CANDIDATE_PLAN_SCHEMAS, FACT_SELECTION_SCHEMA
 
 
-CONTEXT_SCHEMA_VERSION = "ranking_context_v1"
+CONTEXT_SCHEMA_VERSION = "ranking_context_v2"
 _MISSING_MODES = frozenset({"text", "image"})
 
 _PROFILE_FIELDS = (
@@ -178,7 +178,7 @@ _CONSTRAINT_FIELDS = (
     "context_only",
     "uncertain",
 )
-_CONSTRAINT_BUCKETS = ("must_include", "should_include", "context_only", "avoid")
+_CONSTRAINT_BUCKETS = ("checks", "context_only", "avoid")
 _CANDIDATE_FIELDS = (
     "description_task",
     "repair_targets",
@@ -268,8 +268,6 @@ _NEGATIVE_CONSTRAINT_TYPES = frozenset({"context", "avoid_unsupported_detail"})
 _CONSTRAINT_SEVERITIES = frozenset({"hard", "soft"})
 _CONSTRAINT_GATE_ACTIONS = frozenset(
     {
-        "hard_required",
-        "soft_required",
         "prefer",
         "context_only",
         "hard_forbidden",
@@ -615,7 +613,7 @@ def _sanitize_constraint(value: Any, bucket: str) -> dict[str, Any]:
         elif key == "constraint_type":
             allowed_types = (
                 _POSITIVE_CONSTRAINT_TYPES
-                if bucket in {"must_include", "should_include"}
+                if bucket in {"checks"}
                 else _NEGATIVE_CONSTRAINT_TYPES
             )
             if isinstance(item, str) and _normalized_label(item) in allowed_types:
@@ -1491,8 +1489,7 @@ def build_kg_reference(context: RankingContext, modality: str) -> str:
         if _is_safe_positive_text(type_text, context):
             _append_stable(parts, [type_text])
     _append_stable(parts, _supported_reference_facts(context, modality))
-    _append_stable(parts, _constraint_texts(context, modality, "must_include"))
-    _append_stable(parts, _constraint_texts(context, modality, "should_include"))
+    _append_stable(parts, _constraint_texts(context, modality, "checks"))
     return " ".join(parts)
 
 
@@ -1556,16 +1553,6 @@ def build_structured_kg_triples(
                         fact_text,
                         source_relation=relation,
                     )
-    if not triples:
-        for constraint in _constraint_texts(context, modality, "must_include"):
-            _append_triple(
-                triples,
-                seen,
-                context.entity_label,
-                "has_required_content",
-                constraint,
-                source_relation="must_include",
-            )
     return triples
 
 
@@ -1619,7 +1606,7 @@ def build_visual_target_graph(context: RankingContext) -> dict[str, Any]:
                         }
                     )
 
-    for bucket in ("should_include",):
+    for bucket in ("checks",):
         for value in _constraint_texts(context, "image", bucket):
             visual_text = _visual_constraint_text(value)
             if visual_text:
@@ -1955,11 +1942,10 @@ def build_visual_constraint_text(
         type_text = f"entity type: {str.strip(_exact_string(entity_type))}"
         if _is_safe_positive_text(type_text, context):
             _append_stable(parts, [type_text])
-    _append_stable(parts, _constraint_texts(context, "image", "must_include"))
     clue = _primary_relation_visual_clue(context, candidate)
     if clue:
         _append_stable(parts, [clue])
-    _append_stable(parts, _constraint_texts(context, "image", "should_include"))
+    _append_stable(parts, _constraint_texts(context, "image", "checks"))
     _append_stable(parts, _safe_visual_profile_values(context))
     return _compact_clip_constraint_text(parts) if clip_safe else " ".join(parts)
 
@@ -1982,12 +1968,12 @@ def candidate_ranking_context(context: RankingContext, candidate: Mapping[str, A
     constraints = {item.get("constraint_id"): item
                    for bucket in context.modality_constraints.get(context.missing_mode, {}).values()
                    for item in bucket if isinstance(item, Mapping)}
-    buckets = {"must_include": [], "should_include": [], "context_only": []}
+    buckets = {"checks": [], "context_only": []}
     for target in candidate.get("verification_targets", ()):
         constraint = constraints.get(target["check_id"])
         if constraint is None:
             raise ValueError("candidate check is not in its Stage 2 constraints")
-        buckets[target["requirement"]].append(constraint)
+        buckets["checks"].append(constraint)
     return replace(context,
         relation_facts=tuple(fact for fact in context.relation_facts if fact.get("fact_id") in refs),
         supported_facts=supported, modality_constraints={context.missing_mode: buckets})
