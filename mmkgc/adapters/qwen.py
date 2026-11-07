@@ -1312,7 +1312,10 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
                 if definition and not any(f.get('subject') == record.label and
                         f.get('object', '').strip() == definition and 'text' in f.get('source_modalities', [])
                         for f in result['relation_facts']):
-                    raise ValueError('Source review did not preserve the supplied lexical definition')
+                    # A faithful paraphrase or several smaller facts need not
+                    # repeat a dictionary gloss verbatim. Keep the source and
+                    # discrepancy for semantic review rather than failing here.
+                    audit['diagnostics'] = ['lexical_definition_not_verbatim']
             audit.update(status='applied', reviewed_text_facts=[deepcopy(f) for f in result['relation_facts']
                 if 'text' in f.get('source_modalities', [])])
             return result

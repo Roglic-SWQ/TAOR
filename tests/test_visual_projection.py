@@ -113,9 +113,10 @@ def test_source_review_uses_original_text_and_restores_reviewers_mode(monkeypatc
     assert not client.visual_verifier.source_bound_text_extraction
     assert client.calls[-1]['proposed_text_facts'][0]['object'] == 'food'
     assert client.calls[-1]['reviewed_text_facts'][0]['object'] == 'catch or try to catch fish'
-    corrected['relation_facts'][0]['object'] = 'food'
-    with pytest.raises(ValueError, match='lexical definition'):
-        client.build_knowledge(record, 'image', {})
+    corrected['relation_facts'][0]['object'] = 'attempt to catch fish'
+    assert client.build_knowledge(record, 'image', {}) == corrected
+    assert client.calls[-1]['diagnostics'] == ['lexical_definition_not_verbatim']
+    assert client.calls[-1]['original_text'] == record.description
     assert not client.visual_verifier.source_bound_text_extraction
 
 
