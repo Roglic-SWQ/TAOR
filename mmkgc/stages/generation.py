@@ -38,6 +38,7 @@ _NON_STAGE3_VIOLATION_CODES = frozenset(
         "candidate_id_missing",
         "generator_failed",
         "judge_service_error",
+        "judge_response_invalid",
         "malformed_candidate",
         "missing_image_artifact",
         "missing_image_input",

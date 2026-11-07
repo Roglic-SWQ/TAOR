@@ -117,7 +117,7 @@ def test_parallel_parse_and_service_failures_stay_with_their_candidates():
     result = engine.rank(context())
     rejected = {item["candidate_id"]: item for item in result["image_ranking"]["rejected_candidates"]}
     assert set(rejected) == {"image_002", "image_003"}
-    assert rejected["image_002"]["hard_gate"]["hard_violations"] == ["malformed_candidate"]
+    assert rejected["image_002"]["hard_gate"]["hard_violations"] == ["judge_response_invalid"]
     assert rejected["image_003"]["hard_gate"]["hard_violations"] == ["judge_service_error"]
     ranked = result["image_ranking"]["ranked_candidates"]
     assert len(ranked) == 5

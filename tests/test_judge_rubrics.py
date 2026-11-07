@@ -75,15 +75,17 @@ def test_real_local_decoder_accepts_complete_multiword_evidence(mode):
 
 def test_rubric_score_and_trace_survive_actual_adapter_and_writer():
     context, candidate, payload = fixture(values=(3, 4, 4, 4))
+    payload['scores']['entity_semantics']['evidence'] = []
     client = Client(payload)
     result = GPT4OMiniRankingJudge(client, use_rubrics=True).judge_text(context, candidate)
     validate(payload, client.calls[0][1])
     assert result.score.normalized_score == .75
     assert any(check["status"] == "supported" for check in result.observation["fact_checks"])
     details = {key: result.score.details[key] for key in (
-        "rubric_version", "rubric_scores", "rubric_aggregation", "unverified_additions", "repair_suggestions")}
+        "rubric_version", "rubric_scores", "rubric_aggregation", "unverified_additions", "repair_suggestions", "rubric_diagnostics")}
     compact = _compact_stage4_candidate({**candidate, "judge_rubrics": details}, rank=1, fallback_modality="text")
     assert compact["judge_rubrics"] == details
+    assert compact['judge_rubrics']['rubric_diagnostics']
 
 
 @pytest.mark.parametrize("bad", [True, 1.5, -1, 5, "4"])
@@ -95,7 +97,7 @@ def test_invalid_score_is_rejected(bad):
 
 
 @pytest.mark.parametrize("change", ["missing_dimension", "extra_overall", "source_only_evidence"])
-def test_incomplete_or_unsupported_numeric_judgment_is_rejected(change):
+def test_required_dimensions_and_optional_metadata(change):
     _, _, payload = fixture()
     if change == "missing_dimension":
         del payload["scores"]["semantic_coverage"]
@@ -103,8 +105,12 @@ def test_incomplete_or_unsupported_numeric_judgment_is_rejected(change):
         payload["score"] = 99
     else:
         payload["scores"]["entity_semantics"]["evidence"] = ["context:rf:0001"]
-    with pytest.raises(GPT4OMiniJudgeParseError):
-        parse_text_judge_response(json.dumps(payload))
+    if change == "missing_dimension":
+        with pytest.raises(GPT4OMiniJudgeParseError):
+            parse_text_judge_response(json.dumps(payload))
+    else:
+        result = parse_text_judge_response(json.dumps(payload))
+        assert result.score.normalized_score == 1  # The optional overall score is ignored.
 
 
 def test_unknown_addition_is_recorded_without_becoming_a_delete_operation():
@@ -141,16 +147,16 @@ def test_empty_check_scope_remains_valid_strict_schema_without_invented_facts():
     assert result.score.details["rubric_aggregation"]["fact_assessment"] == "unavailable"
 
 
-def test_conflicting_observation_cannot_keep_a_perfect_factual_score():
+def test_conflicting_observation_preserves_raw_score_and_routes_confirmed_conflict():
     context, candidate, invalid = fixture()
     invalid["observation"]["fact_checks"][1]["status"] = "contradicted"
     fixed = deepcopy(invalid)
     fixed["scores"]["verified_fact_consistency"]["score"] = 2
     client = Client(invalid, fixed)
     result = GPT4OMiniRankingJudge(client, use_rubrics=True).judge_text(context, candidate)
-    assert len(client.calls) == 2
-    assert "RUBRIC_VALIDATION_ERROR" in client.calls[1][0]
-    assert result.score.normalized_score == .5
+    assert len(client.calls) == 1
+    assert result.score.normalized_score == 1
+    assert any(d["code"] == "high_fact_score_with_conflict" for d in result.score.details["rubric_diagnostics"])
     assert [op["action"] for op in repair_operations(result.observation)] == ["replace"]
 
 
@@ -164,8 +170,10 @@ def test_confirmed_extra_conflict_needs_candidate_and_supplied_source_evidence()
     result = GPT4OMiniRankingJudge(Client(payload), use_rubrics=True).judge_text(context, candidate)
     assert repair_operations(result.observation)[0]["action"] == "remove"
     payload["observation"]["unsupported_claims"][0]["evidence"] = ["text: blue tower"]
-    with pytest.raises(GPT4OMiniJudgeParseError):
-        GPT4OMiniRankingJudge(Client(payload, payload), use_rubrics=True).judge_text(context, candidate)
+    result = GPT4OMiniRankingJudge(Client(payload), use_rubrics=True).judge_text(context, candidate)
+    assert not repair_operations(result.observation)
+    assert not result.observation["repair_needed"]
+    assert any(d["code"] == "claim_without_source_citation" for d in result.score.details["rubric_diagnostics"])
 
 
 def test_unknown_claim_cannot_also_be_executable_removal():
@@ -176,8 +184,9 @@ def test_unknown_claim_cannot_also_be_executable_removal():
         "context:" + candidate["verification_targets"][1]["evidence_refs"][0]], "confidence": .95, "reason": "Conflict."}]
     parsed = judge_rubrics.parse_payload(payload, "text")
     bound = bind_observation(payload["observation"], candidate["verification_targets"], "text", "text_001")
-    with pytest.raises(ValueError, match="unverified addition"):
-        judge_rubrics.validate_bound_observation(parsed, bound, candidate["verification_targets"])
+    details = judge_rubrics.validate_bound_observation(parsed, bound, candidate["verification_targets"])
+    assert not repair_operations(bound)
+    assert any(d["code"] == "conflict_also_unverified" for d in details["rubric_diagnostics"])
 
 
 def test_rubric_mode_does_not_accept_legacy_overall_scores():
@@ -195,7 +204,7 @@ def test_image_uses_pixels_not_generated_prompt_and_keeps_pixels_on_contract_ret
     context, candidate, invalid = fixture("image")
     candidate["generated_content"]["value"] = "PRIVATE_GENERATION_CLAIM"
     candidate["positive_prompt"] = "PRIVATE_GENERATION_PROMPT"
-    invalid["observation"]["fact_checks"][1]["status"] = "contradicted"
+    invalid["scores"]["verified_fact_consistency"]["score"] = 5
     fixed = deepcopy(invalid)
     fixed["scores"]["verified_fact_consistency"]["score"] = 1
     image = ImageInput.from_bytes(entity_key=context.entity_key, candidate_id=candidate["candidate_id"], image_bytes=png())
@@ -240,8 +249,9 @@ def test_factory_enables_new_contract_on_production_path(monkeypatch):
 
 
 @pytest.mark.parametrize("mode", ["text", "image"])
-def test_full_engine_retains_rubrics_and_old_reflection_input(mode):
-    context, candidate, payload = fixture(mode, values=(4, 1, 4, 4))
+@pytest.mark.parametrize('fact_score', [1, 4])
+def test_full_engine_retains_rubrics_and_old_reflection_input(mode, fact_score):
+    context, candidate, payload = fixture(mode, values=(4, fact_score, 4, 4))
     payload["observation"]["fact_checks"][1]["status"] = "contradicted"
     record, _, knowledge, _, reasoning, _ = setup(mode)
     from mmkgc.stages.plan_context import ranking_knowledge
@@ -272,45 +282,50 @@ def test_full_engine_retains_rubrics_and_old_reflection_input(mode):
     result = engine.rank(context)
     assert result["ranking_status"] == "no_valid_candidate"
     item = result[mode + "_ranking"]["ranked_candidates"][0]
-    assert item["judge_rubrics"]["rubric_scores"]["verified_fact_consistency"]["score"] == 1
-    assert item["final_score"] <= .25
+    assert item["judge_rubrics"]["rubric_scores"]["verified_fact_consistency"]["score"] == fact_score
+    if fact_score == 1:
+        assert item["final_score"] <= .25
+    assert item['hard_gate']['hard_violations'] == ['evidence_conflict']
+    assert not result['evaluation_failures']
     assert item["observation"]["violated_facts"]
     assert _needs_stage4_regeneration(result)
 
 
-def test_schema_and_parser_keep_candidate_evidence_rules_strict():
-    from jsonschema import ValidationError
-    _, _, payload = fixture('text')
-    schema = _rubric_response_schema([], 'text')
-    payload['observation']['fact_checks'] = []
-    payload['scores']['entity_semantics']['evidence'] = []
-    with pytest.raises(ValidationError): validate(payload, schema)
-    payload['scores']['entity_semantics']['evidence'] = ['bare candidate quotation']
-    with pytest.raises(ValueError, match='text:'): judge_rubrics.parse_payload(payload, 'text')
-    payload['scores']['entity_semantics']['evidence'] = ['text: candidate quotation']
-    payload['scores']['verified_fact_consistency']['score'] = 4
+@pytest.mark.parametrize('mode', ['text', 'image'])
+@pytest.mark.parametrize('evidence', [[], ['A single person is visible.']])
+def test_zero_score_accepts_empty_or_prefix_free_evidence_without_fabrication(mode, evidence):
+    context, candidate, payload = fixture(mode, values=(0, None, 1, 4))
+    payload['scores']['entity_semantics']['evidence'] = evidence
+    for check in payload['observation']['fact_checks']:
+        check['evidence'] = ['A single person is visible.']
+    client = Client(payload)
+    judge = GPT4OMiniRankingJudge(client, use_rubrics=True)
+    if mode == 'image':
+        image = ImageInput.from_bytes(entity_key=context.entity_key, candidate_id=candidate['candidate_id'], image_bytes=png())
+        result = judge.judge_image(context, candidate, image_input=image)
+    else:
+        result = judge.judge_text(context, candidate)
+    validate(payload, client.calls[0][1])
+    assert len(client.calls) == 1
+    assert result.score.normalized_score == 0
+    assert list(result.score.details['rubric_scores']['entity_semantics']['evidence']) == evidence
+    assert result.score.details['rubric_scores']['verified_fact_consistency']['score'] is None
+    assert result.observation['fact_checks'][0]['evidence'] == ['A single person is visible.']
+    if not evidence:
+        assert any(d['code'] == 'score_without_citation' for d in result.score.details['rubric_diagnostics'])
+
+
+def test_nonnull_fact_score_without_evidence_is_retained_without_retry():
+    context, candidate, payload = fixture('text')
     payload['scores']['verified_fact_consistency']['evidence'] = []
-    with pytest.raises(ValueError, match='text:'): judge_rubrics.parse_payload(payload, 'text')
-    payload['scores']['verified_fact_consistency']['score'] = None
-    validate(payload, schema)
-    judge_rubrics.parse_payload(payload, 'text')
-
-
-def test_nonnull_fact_score_missing_evidence_tightens_only_bounded_repair_schema():
-    context, candidate, valid = fixture('text')
-    invalid = deepcopy(valid)
-    invalid['scores']['verified_fact_consistency']['evidence'] = []
-    client = Client(invalid, valid)
+    client = Client(payload)
     result = GPT4OMiniRankingJudge(client, use_rubrics=True).judge_text(context, candidate)
-    assert result.score.details['contract_repair_retries'] == 1
-    first = client.calls[0][1]['properties']['scores']['properties']['verified_fact_consistency']
-    second = client.calls[1][1]['properties']['scores']['properties']['verified_fact_consistency']
-    assert first['properties']['evidence'].get('minItems', 0) == 0
-    assert second['properties']['evidence']['minItems'] == 1
-    assert 'EVIDENCE_REPAIR_REQUIRED' in client.calls[1][0]
-    assert 'PREVIOUS_JUDGMENT:' not in client.calls[1][0]
-    with pytest.raises(ValidationError): validate(invalid, client.calls[1][1])
-    validate(valid, client.calls[1][1])
+    assert result.score.details['contract_repair_retries'] == 0
+    assert len(client.calls) == 1
+    assert result.score.details['rubric_scores']['verified_fact_consistency']['score'] == 4
+    assert not result.score.details['rubric_scores']['verified_fact_consistency']['evidence']
+    assert any(d['code'] == 'score_without_citation' for d in result.score.details['rubric_diagnostics'])
+    validate(payload, client.calls[0][1])
 
 
 def test_null_fact_score_keeps_empty_evidence_without_forced_repair():
@@ -320,3 +335,123 @@ def test_null_fact_score_keeps_empty_evidence_without_forced_repair():
     result = GPT4OMiniRankingJudge(client, use_rubrics=True).judge_text(context, candidate)
     assert result.score.details['contract_repair_retries'] == 0
     assert len(client.calls) == 1
+
+
+@pytest.mark.parametrize('fact_score', [None, 1, 4])
+def test_fact_score_disagreement_is_diagnostic_without_changing_scores(fact_score):
+    context, candidate, payload = fixture(values=(3, fact_score, 2, 4), status='missing')
+    client = Client(payload)
+    result = GPT4OMiniRankingJudge(client, use_rubrics=True).judge_text(context, candidate)
+    assert len(client.calls) == 1
+    assert result.score.details['rubric_scores']['verified_fact_consistency']['score'] == fact_score
+    assert not repair_operations(result.observation)
+    codes = {d['code'] for d in result.score.details['rubric_diagnostics']}
+    if fact_score == 1:
+        assert 'low_fact_score_without_confirmed_conflict' in codes
+    elif fact_score == 4:
+        assert 'fact_score_observation_disagreement' in codes
+
+
+@pytest.mark.parametrize('partial_failure', [False, True])
+def test_invalid_judge_response_is_not_a_candidate_defect_and_keeps_successes(partial_failure):
+    from mmkgc.stages.plan_context import ranking_knowledge
+    from mmkgc.stages.generation import build_stage3_feedback
+    _, candidate, payload = fixture()
+    record, _, knowledge, _, reasoning, _ = setup('text')
+    candidates = [candidate]
+    if partial_failure:
+        candidates.append({**candidate, 'candidate_id': 'text_002'})
+    context = build_ranking_context(record.entity_key, record.label, 'text', {},
+        ranking_knowledge(knowledge, reasoning), reasoning,
+        {'relation_alternation_generation': {'text_candidates': candidates}}, {})
+    real_judge = GPT4OMiniRankingJudge(Client(payload), use_rubrics=True)
+
+    class Judge:
+        model_name = 'test'
+        def extract_text_graph(self, candidate):
+            return {'triples': []}
+
+        def judge_text(self, context, candidate):
+            if candidate['candidate_id'] == 'text_001':
+                raise GPT4OMiniJudgeParseError('invalid score')
+            return real_judge.judge_text(context, candidate)
+
+    off = LocalScorerConfig(False, False, None, None)
+    profile = Stage4Profile('test', off, off, off, off, GPT4OMiniJudgeConfig(True, Path('unused'), 30))
+    result = ModelFusionRankingEngine(profile=profile, scorers={'gpt4omini_judge': Judge()}).rank(context)
+    section = result['text_ranking']
+    all_items = section['ranked_candidates'] + section['rejected_candidates']
+    failed = next(c for c in all_items if c['candidate_id'] == 'text_001')
+    assert failed['hard_gate']['hard_violations'] == ['judge_response_invalid']
+    assert failed['generated_content'] == candidate['generated_content']
+    assert len(result['evaluation_failures']) == 1
+    assert not build_stage3_feedback(result, attempt=1).get('repair_needed')
+    if partial_failure:
+        assert section['best_candidate_id'] == 'text_002'
+        assert next(c for c in all_items if c['candidate_id'] == 'text_002')['judge_rubrics']['rubric_scores']
+        assert result['ranking_status'] != 'evaluation_failed'
+    else:
+        assert result['ranking_status'] == 'evaluation_failed'
+        assert section['best_candidate_id'] is None
+
+
+@pytest.mark.parametrize('foreign_ref', [False, True])
+def test_plain_candidate_citation_and_explicit_source_refs_are_preserved(foreign_ref):
+    from mmkgc.observation import removal_targets
+    context, candidate, payload = fixture(values=(4, 2, 4, 4))
+    refs = list(candidate['verification_targets'][1]['evidence_refs'])
+    if foreign_ref:
+        refs.append('foreign:source')
+    payload['observation']['unsupported_claims'] = [{'claim': 'It is blue.',
+        'evidence': ['blue tower'], 'evidence_refs': refs, 'confidence': .95}]
+    result = GPT4OMiniRankingJudge(Client(payload), use_rubrics=True).judge_text(context, candidate)
+    operations = repair_operations(result.observation)
+    if foreign_ref:
+        assert not operations
+        assert any(d['code'] == 'claim_without_source_citation' for d in result.score.details['rubric_diagnostics'])
+    else:
+        assert operations[0]['evidence'] == ['blue tower']
+        assert removal_targets(operations)[0]['evidence_refs'] == refs
+
+
+def test_fenced_rubric_with_only_scores_is_usable_and_explicitly_unassessed():
+    context, candidate, payload = fixture()
+    minimal = {'scores': {key: {'score': value['score']} for key, value in payload['scores'].items()}}
+    response = 'Judge result:\n```json\n' + json.dumps(minimal) + '\n```'
+    parsed = parse_text_judge_response(response)
+    assert parsed.score.normalized_score == 1
+    client = Client(minimal)
+    result = GPT4OMiniRankingJudge(client, use_rubrics=True).judge_text(context, candidate)
+    validate(minimal, client.calls[0][1])
+    assert len(client.calls) == 1
+    assert not result.observation['fact_checks']
+    assert not result.observation['repair_needed']
+    assert any(d['code'] == 'unassessed_checks' for d in result.score.details['rubric_diagnostics'])
+
+
+@pytest.mark.parametrize('mode', ['text', 'image'])
+def test_zero_without_citation_reaches_semantic_gate_not_evaluation_failure(mode):
+    from mmkgc.stages.plan_context import ranking_knowledge
+    from mmkgc.stages.generation import build_stage3_feedback
+    _, candidate, payload = fixture(mode, values=(0, None, 1, 3))
+    for dimension in payload['scores'].values():
+        dimension['evidence'] = []
+    payload['observation'] = {}
+    record, _, knowledge, _, reasoning, _ = setup(mode)
+    context = build_ranking_context(record.entity_key, record.label, mode, {},
+        ranking_knowledge(knowledge, reasoning), reasoning,
+        {'relation_alternation_generation': {mode+'_candidates': [candidate]}},
+        {'image_001': {'image_bytes': png()}} if mode == 'image' else {})
+    off = LocalScorerConfig(False, False, None, None)
+    profile = Stage4Profile('test', off, off, off, off, GPT4OMiniJudgeConfig(True, Path('unused'), 30))
+    client = Client(payload)
+    result = ModelFusionRankingEngine(profile=profile, scorers={
+        'gpt4omini_judge': GPT4OMiniRankingJudge(client, use_rubrics=True)}).rank(context)
+    assert len(client.calls) == 1
+    assert result['ranking_status'] == 'no_valid_candidate'
+    assert not result['evaluation_failures']
+    item = result[mode+'_ranking']['ranked_candidates'][0]
+    assert item['hard_gate']['hard_violations'] == ['identity_mismatch']
+    assert item['judge_rubrics']['rubric_scores']['entity_semantics']['score'] == 0
+    assert item['judge_rubrics']['rubric_diagnostics']
+    assert not build_stage3_feedback(result, attempt=1)['repair_needed']

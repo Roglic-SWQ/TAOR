@@ -25,6 +25,31 @@ def _plain_metadata(value):
     return value
 
 
+def _evidence(value):
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    return [v for v in value if isinstance(v, str) and v.strip()] if isinstance(value, (list, tuple)) else []
+
+
+def _routing_confidence(value):
+    """Missing or unusable confidence cannot authorize an automatic edit."""
+    try:
+        return _confidence(value)
+    except ValueError:
+        return 0.0
+
+
+def _has_candidate_evidence(evidence):
+    # Prefixes are optional. Explicit source/prompt metadata is still not a
+    # citation of candidate content and cannot authorize an automatic edit.
+    return any(not value.lstrip().lower().startswith(('context:', 'metadata:')) for value in evidence)
+
+
+def _metadata_text(item, key):
+    value = item.get(key, '')
+    return value if isinstance(value, str) else ''
+
+
 def validate_repair_targets(value: Any) -> list[dict[str, Any]]:
     """Carry original rejected assertions into a repaired candidate's review."""
     if not isinstance(value, (list, tuple)):
@@ -58,27 +83,23 @@ def removal_targets(operations: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def bind_repair_checks(raw: Any, targets: Any, modality: str) -> list[dict[str, Any]]:
     targets = validate_repair_targets(targets)
     if not isinstance(raw, list):
-        raise ValueError("repair_checks must be an array")
-    by_id = {item["issue_id"]: item for item in targets}
+        raise ValueError('repair_checks must be an array')
+    by_id = {item['issue_id']: item for item in targets}
     result, seen = [], set()
-    prefix = "pixel:" if modality == "image" else "text:"
     for item in raw:
-        if not isinstance(item, Mapping) or set(item) != {"issue_id", "status", "observed", "evidence", "confidence", "reason"}:
-            raise ValueError("invalid repair check fields")
-        issue_id = item["issue_id"]
+        if not isinstance(item, Mapping) or not {'issue_id', 'status'} <= set(item):
+            raise ValueError('invalid repair check fields')
+        issue_id = item['issue_id']
         if not isinstance(issue_id, str) or issue_id not in by_id or issue_id in seen:
-            raise ValueError("unknown or duplicate repair issue_id")
+            raise ValueError('unknown or duplicate repair issue_id')
         seen.add(issue_id)
-        if item["status"] not in {"resolved", "unresolved", "uncertain"}:
-            raise ValueError("invalid repair check status")
-        evidence = _strings(item["evidence"], "evidence")
-        if not any(text.startswith(prefix) and text[len(prefix):].strip() for text in evidence):
-            raise ValueError("repair check requires actual candidate evidence")
-        result.append({**deepcopy(by_id[issue_id]), "status": item["status"],
-            "observed": _text(item["observed"], "observed"), "evidence": evidence,
-            "confidence": _confidence(item["confidence"]), "reason": _text(item["reason"], "reason")})
-    if seen != set(by_id):
-        raise ValueError("repair checks must cover every supplied issue_id exactly once")
+        if item['status'] not in {'resolved', 'unresolved', 'uncertain'}:
+            raise ValueError('invalid repair check status')
+        evidence = _evidence(item.get('evidence'))
+        observed = _metadata_text(item, 'observed')
+        result.append({**deepcopy(by_id[issue_id]), 'status': item['status'],
+            'observed': observed, 'evidence': evidence, 'repair_supported': _has_candidate_evidence(evidence),
+            'confidence': _routing_confidence(item.get('confidence')), 'reason': _metadata_text(item, 'reason')})
     return result
 
 
@@ -166,70 +187,64 @@ def observation_response_schema() -> dict[str, Any]:
 
 
 def bind_observation(raw: Any, targets: Any, modality: str, candidate_id: str, *, repair_targets=None) -> dict[str, Any]:
-    """Validate model observations and attach trusted source metadata and provenance."""
+    """Bind trusted source IDs; incomplete citations remain assessment diagnostics."""
     targets = validate_verification_targets(targets)
-    by_id = {item["check_id"]: item for item in targets}
+    by_id = {item['check_id']: item for item in targets}
     repair_targets = validate_repair_targets(repair_targets or [])
-    fields = {"fact_checks", "unsupported_claims"} | ({"repair_checks"} if repair_targets else set())
-    if not isinstance(raw, Mapping) or set(raw) != fields:
-        raise ValueError("observation requires exactly " + ", ".join(sorted(fields)))
-    if not isinstance(raw["fact_checks"], list) or not isinstance(raw["unsupported_claims"], list):
-        raise ValueError("observation entries must be arrays")
-    checks, seen = [], set()
-    for item in raw["fact_checks"]:
-        fields = {"check_id", "status", "verification_mode", "observed", "evidence", "confidence", "reason"}
-        if not isinstance(item, Mapping) or set(item) != fields:
-            raise ValueError("invalid fact check fields")
-        check_id = item["check_id"]
+    raw = raw or {}
+    if not isinstance(raw, Mapping):
+        raise ValueError('observation must be an object')
+    if not isinstance(raw.get('fact_checks', []), list) or not isinstance(raw.get('unsupported_claims', []), list):
+        raise ValueError('observation entries must be arrays')
+    checks, seen, diagnostics = [], set(), []
+    for item in raw.get('fact_checks', []):
+        if not isinstance(item, Mapping) or not {'check_id', 'status', 'verification_mode'} <= set(item):
+            raise ValueError('invalid fact check fields')
+        check_id = item['check_id']
         if not isinstance(check_id, str) or check_id not in by_id or check_id in seen:
-            raise ValueError("unknown or duplicate observation check_id")
+            raise ValueError('unknown or duplicate observation check_id')
         seen.add(check_id)
         target = by_id[check_id]
-        status, mode = item["status"], item["verification_mode"]
+        status, mode = item['status'], item['verification_mode']
         if status not in CHECK_STATUSES or mode not in VERIFICATION_MODES:
-            raise ValueError("invalid observation status or verification mode")
-        if target["verification_mode"] == "unverifiable" and mode != "unverifiable":
-            raise ValueError("unverifiable target cannot be verified from candidate content")
-        if (mode == "unverifiable" and status != "unverifiable") or (
-            status == "unverifiable" and mode == "direct"
-        ) or (mode == "appearance_only" and status not in {"unverifiable", "uncertain"}):
-            raise ValueError("appearance or invisible evidence cannot verify a full fact")
-        evidence = _strings(item["evidence"], "evidence")
-        if status in {"supported", "contradicted", "missing"}:
-            prefix = "pixel:" if modality == "image" else "text:"
-            if not any(text.startswith(prefix) and text[len(prefix):].strip() for text in evidence):
-                raise ValueError(f"fact check requires {prefix} content evidence")
-        checks.append({
-            **deepcopy(target), "expected": target["claim"], "status": status,
-            "verification_mode": mode, "observed": _text(item["observed"], "observed", allow_empty=True),
-            "evidence": evidence, "confidence": _confidence(item["confidence"]),
-            "reason": _text(item["reason"], "reason"),
-        })
+            raise ValueError('invalid observation status or verification mode')
+        evidence = _evidence(item.get('evidence'))
+        observed = _metadata_text(item, 'observed')
+        compatible = not ((target['verification_mode'] == 'unverifiable' and mode != 'unverifiable')
+            or (mode == 'unverifiable' and status != 'unverifiable')
+            or (status == 'unverifiable' and mode == 'direct')
+            or (mode == 'appearance_only' and status not in {'uncertain', 'unverifiable'}))
+        if not compatible:
+            diagnostics.append({'code': 'observation_mode_disagreement', 'check_id': check_id})
+        if not evidence:
+            diagnostics.append({'code': 'check_without_citation', 'check_id': check_id})
+        checks.append({**deepcopy(target), 'expected': target['claim'], 'status': status,
+            'verification_mode': mode, 'observed': observed, 'evidence': evidence,
+            'repair_supported': compatible and _has_candidate_evidence(evidence),
+            'confidence': _routing_confidence(item.get('confidence')), 'reason': _metadata_text(item, 'reason')})
     if seen != set(by_id):
-        raise ValueError("observation must check every supplied check_id exactly once")
+        diagnostics.append({'code': 'unassessed_checks', 'check_ids': sorted(set(by_id) - seen)})
     unsupported = []
-    for index, item in enumerate(raw["unsupported_claims"], 1):
-        if not isinstance(item, Mapping) or set(item) != {"claim", "evidence", "confidence", "reason"}:
-            raise ValueError("invalid unsupported claim fields")
-        evidence = _strings(item["evidence"], "evidence")
-        prefix = "pixel:" if modality == "image" else "text:"
-        if not any(text.startswith(prefix) and text[len(prefix):].strip() for text in evidence):
-            raise ValueError("unsupported claim requires actual candidate evidence")
-        unsupported.append({
-            "claim_id": f"claim:{index:04d}", "claim": _text(item["claim"], "claim"),
-            "evidence": evidence, "confidence": _confidence(item["confidence"]),
-            "reason": _text(item["reason"], "reason"),
-        })
-    observation = {
-        "schema_version": OBSERVATION_VERSION, "candidate_id": candidate_id, "modality": modality,
-        "fact_checks": checks, "unsupported_claims": unsupported,
-        "violated_facts": [item for item in checks if item["status"] == "contradicted"],
-        "missing_facts": [item for item in checks if item["status"] == "missing"],
-        "unverifiable_facts": [item for item in checks if item["status"] == "unverifiable"],
-    }
+    for index, item in enumerate(raw.get('unsupported_claims', []), 1):
+        if not isinstance(item, Mapping) or not _metadata_text(item, 'claim').strip():
+            diagnostics.append({'code': 'unreadable_conflict'})
+            continue
+        evidence = _evidence(item.get('evidence'))
+        unsupported.append({'claim_id': f'claim:{index:04d}', 'claim': item['claim'],
+            'evidence': evidence, 'evidence_refs': _evidence(item.get('evidence_refs')),
+            'repair_supported': _has_candidate_evidence(evidence), 'confidence': _routing_confidence(item.get('confidence')),
+            'reason': _metadata_text(item, 'reason')})
+    observation = {'schema_version': OBSERVATION_VERSION, 'candidate_id': candidate_id, 'modality': modality,
+        'fact_checks': checks, 'unsupported_claims': unsupported,
+        'violated_facts': [c for c in checks if c['status'] == 'contradicted'],
+        'missing_facts': [c for c in checks if c['status'] == 'missing'],
+        'unverifiable_facts': [c for c in checks if c['status'] == 'unverifiable'], 'diagnostics': diagnostics}
     if repair_targets:
-        observation["repair_checks"] = bind_repair_checks(raw["repair_checks"], repair_targets, modality)
-    observation["repair_needed"] = bool(repair_operations(observation))
+        observation['repair_checks'] = bind_repair_checks(raw.get('repair_checks', []), repair_targets, modality)
+        absent = {t['issue_id'] for t in repair_targets} - {c['issue_id'] for c in observation['repair_checks']}
+        if absent:
+            diagnostics.append({'code': 'unassessed_repair_issues', 'issue_ids': sorted(absent)})
+    observation['repair_needed'] = bool(repair_operations(observation))
     return observation
 
 
@@ -237,6 +252,8 @@ def repair_operations(observation: Mapping[str, Any]) -> list[dict[str, Any]]:
     """Only actionable observations with supplied evidence become edits."""
     operations = []
     for item in observation.get("fact_checks", []):
+        if item.get("repair_supported") is False:
+            continue
         if item["confidence"] < REPAIR_CONFIDENCE or item["verification_mode"] != "direct" or not item["evidence_refs"]:
             continue
         status = item["status"]
@@ -249,11 +266,16 @@ def repair_operations(observation: Mapping[str, Any]) -> list[dict[str, Any]]:
             "evidence_refs": list(item["evidence_refs"]), "evidence": list(item["evidence"]),
         })
     for item in observation.get("unsupported_claims", []):
+        if item.get("repair_supported") is False:
+            continue
         if item["confidence"] >= REPAIR_CONFIDENCE:
             operations.append({"action": "remove", "claim_id": item["claim_id"],
-                               "observed": item["claim"], "evidence": list(item["evidence"])})
+                               "observed": item["claim"], "evidence": list(item["evidence"]),
+                               **({'evidence_refs': list(item['evidence_refs'])} if item.get('evidence_refs') else {})})
     reported = {item["observed"].casefold() for item in operations if item["action"] == "remove"}
     for item in observation.get("repair_checks", []):
+        if item.get("repair_supported") is False:
+            continue
         if item.get('issue_kind', 'fact') == 'semantic':
             continue
         if item["status"] == "unresolved" and item["confidence"] >= REPAIR_CONFIDENCE and item["claim"].casefold() not in reported:
@@ -309,7 +331,7 @@ def repair_is_eligible(original: Mapping[str, Any], repaired: Mapping[str, Any])
             return False
 
     def verified(item):
-        return item.get("status") == "supported" and item.get("verification_mode") == "direct" and item.get("confidence", 0) >= REPAIR_CONFIDENCE
+        return item.get("repair_supported") is not False and item.get("status") == "supported" and item.get("verification_mode") == "direct" and item.get("confidence", 0) >= REPAIR_CONFIDENCE
 
     for item in before.get("fact_checks", []):
         if verified(item) and not verified(checked.get(item["check_id"], {})):
@@ -346,7 +368,7 @@ def repair_outcomes(original: Mapping[str, Any], repaired: Mapping[str, Any]) ->
         issue_id = operation["claim_id"] if remove else operation["check_id"]
         check = (removals if explicit_issue else facts).get(issue_id, {})
         state = "uncertain"
-        if check.get("confidence", 0) >= REPAIR_CONFIDENCE:
+        if check.get("repair_supported") is not False and check.get("confidence", 0) >= REPAIR_CONFIDENCE:
             if explicit_issue and check.get("claim") == operation["observed"]:
                 state = check.get("status", "uncertain")
             elif not remove and check.get("verification_mode") == "direct":

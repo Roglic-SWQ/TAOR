@@ -31,14 +31,14 @@ def test_unresolved_semantic_issue_does_not_become_a_factual_conflict(kind):
     observation = bind_observation(raw_observation(targets, status='uncertain'), targets, 'image', 'image_001')
     observation['repair_checks'] = [{'issue_id': 'semantic:entity' if kind == 'semantic' else 'claim:0001',
         'issue_kind': kind, 'claim': 'Original issue', 'status': 'unresolved',
-        'confidence': .99, 'evidence': ['pixel:Original issue remains']}]
+        'confidence': .99, 'evidence': ['pixel:Original issue remains'], 'evidence_refs': targets[0]['evidence_refs']}]
     details = {'unverified_additions': [], 'repair_suggestions': [],
                'rubric_scores': {'verified_fact_consistency': {'score': None}}}
-    if kind == 'fact':
-        with pytest.raises(ValueError, match='fact score must be null'):
-            validate_bound_observation(details, observation, targets)
-    else:
-        validate_bound_observation(details, observation, targets)
+    result = validate_bound_observation(details, observation, targets)
+    mismatch = any(d['code'] == 'fact_score_observation_disagreement' for d in result['rubric_diagnostics'])
+    assert mismatch == (kind == 'fact')
+    assert result['rubric_scores']['verified_fact_consistency']['score'] is None
+    if kind == 'semantic':
         assert not repair_operations(observation)
 
 

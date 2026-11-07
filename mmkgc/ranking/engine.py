@@ -334,7 +334,7 @@ class ModelFusionRankingEngine:
                     gate = GateResult(
                         "reject",
                         JUDGE_OUTPUT_SCORER_NAME,
-                        hard_violations=("malformed_candidate",),
+                        hard_violations=("judge_response_invalid",),
                         reason=f"{JUDGE_OUTPUT_SCORER_NAME} parse error: {type(exc).__name__}",
                     )
                     items[index]["hard_gate"] = _gate_payload(gate)
@@ -402,7 +402,8 @@ class ModelFusionRankingEngine:
                     items[index]['ranking_reason'] = gate.reason
             if result.score.details.get("rubric_version"):
                 items[index]["judge_rubrics"] = _plain({key: result.score.details[key] for key in (
-                    "rubric_version", "rubric_scores", "rubric_aggregation", "unverified_additions", "repair_suggestions")})
+                    "rubric_version", "rubric_scores", "rubric_aggregation", "unverified_additions", "repair_suggestions",
+                    "rubric_diagnostics") if key in result.score.details})
             if observation is not None:
                 items[index]["observation"] = _plain(observation)
             model_calls.append(

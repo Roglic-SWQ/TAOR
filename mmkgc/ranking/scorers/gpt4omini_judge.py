@@ -45,7 +45,7 @@ REQUIRED_RESPONSE_FIELDS = frozenset(
     }
 )
 MAX_REPAIR_RESPONSE_CHARS = 4000
-OBSERVATION_CONTRACT_VERSION = "candidate_observation_contract_v2"
+OBSERVATION_CONTRACT_VERSION = "candidate_observation_contract_v3"
 VISUAL_SCOPE_INSTRUCTIONS = (
     "\nUse each supplied relation_meaning to interpret original subject/relation/object. "
     "When CHECK_TARGETS supplies relation_meaning, use that definition to read the edge; matching "
@@ -821,7 +821,7 @@ class GPT4OMiniRankingJudge:
                 if result.score.details.get("rubric_version") != judge_rubrics.RUBRIC_VERSION:
                     raise ValueError("active rubric judge requires all four dimension scores; legacy overall score is insufficient")
                 observation = bind_observation(result.observation, targets, kind, candidate_id, repair_targets=repair_targets)
-                judge_rubrics.validate_bound_observation(result.score.details, observation, targets)
+                bound_details = judge_rubrics.validate_bound_observation(result.score.details, observation, targets)
             except (GPT4OMiniJudgeParseError, ValueError, TypeError) as exc:
                 attempts.append({"attempt": attempt, "error": str(exc), "response_text": response})
                 fingerprint = response.strip()
@@ -831,19 +831,6 @@ class GPT4OMiniRankingJudge:
                         "contract_repair_retries": attempt, "contract_repair_failed": True,
                         "contract_repair_stopped_reason": "repeated_invalid_response" if fingerprint in seen else "repair_limit_reached"}) from exc
                 seen.add(fingerprint)
-                if "verified_fact_consistency.evidence needs actual candidate evidence" in str(exc):
-                    # A non-null fact score was returned without evidence. Tighten
-                    # only this bounded format repair; null-first judgments remain legal.
-                    schema = deepcopy(schema)
-                    schema["properties"]["scores"]["properties"]["verified_fact_consistency"]["properties"]["evidence"]["minItems"] = 1
-                    request_prompt = (prompt + "\nEVIDENCE_REPAIR_REQUIRED: The previous non-null "
-                        "verified_fact_consistency score had no evidence. Generate a fresh COMPLETE "
-                        "judgment from the original candidate and sources, not a copy of the invalid JSON. "
-                        "Every non-null score, including verified_fact_consistency, needs actual candidate "
-                        "evidence. Cite text:<verbatim candidate words> or pixel:<visible content>. "
-                        "Complete every supplied check_id exactly once. Do not invent evidence or change "
-                        "the factual scope. Use null factual consistency only if no assertions are verifiable.")
-                    continue
                 request_prompt = prompt + "\nRUBRIC_VALIDATION_ERROR: " + str(exc) + (
                     "\nReturn a complete corrected judgment with the same evidence and check IDs. "
                     "Do not penalize unresolved additions or missing content as verified errors. "
@@ -851,7 +838,7 @@ class GPT4OMiniRankingJudge:
                     "PREVIOUS_JUDGMENT:\n") + _truncate_repair_response(response)
             else:
                 attempts.append({"attempt": attempt, "response_text": response, "errors": []})
-                details = {**result.score.details, "contract_repair_retries": attempt,
+                details = {**bound_details, "contract_repair_retries": attempt,
                     "observation_contract_version": OBSERVATION_CONTRACT_VERSION,
                     "validation_attempts": attempts}
                 return replace(result, observation=observation, score=replace(result.score, details=details))
@@ -1062,11 +1049,28 @@ def _add_repair_check_schema(schema, targets, modality):
 def _rubric_response_schema(targets, modality, repair_targets=None):
     observation_schema = observation_judgment_schema(targets, modality)["properties"]["observation"]
     _add_repair_check_schema(observation_schema, repair_targets or [], modality)
-    # Additional conflicts need both actual candidate evidence and a supplied
-    # source reference. The legacy binder already accepts both string types.
-    prefix = "pixel:" if modality == "image" else "text:"
-    observation_schema["properties"]["unsupported_claims"]["items"]["properties"]["evidence"]["items"]["pattern"] = (
-        "^(?:" + prefix + r"|context:)\s*\S[\s\S]*$")
+    # Citation syntax and check completeness are guidance, not score validity.
+    def relax(node):
+        if isinstance(node, dict):
+            node.pop('pattern', None)
+            if node.get('type') == 'array':
+                node.pop('minItems', None)
+            fields = node.get('properties', {})
+            if 'check_id' in fields:
+                node['required'] = ['check_id', 'status', 'verification_mode']
+            elif 'issue_id' in fields and 'status' in fields:
+                node['required'] = ['issue_id', 'status']
+            elif 'claim' in fields:
+                node['required'] = ['claim']
+            for value in node.values():
+                relax(value)
+        elif isinstance(node, list):
+            for value in node:
+                relax(value)
+    relax(observation_schema)
+    observation_schema['required'] = []
+    observation_schema['properties']['unsupported_claims']['items']['properties']['evidence_refs'] = {
+        'type': 'array', 'items': {'type': 'string'}}
     # A judge with no verification targets must return an empty check array.
     if not targets:
         observation_schema["properties"]["fact_checks"]["items"] = _object_schema({})
@@ -1451,7 +1455,7 @@ def _load_judge_payload(response_text: str) -> Any:
             except json.JSONDecodeError:
                 continue
             if isinstance(payload, Mapping) and (REQUIRED_RESPONSE_FIELDS <= payload.keys()
-                    or judge_rubrics.RESPONSE_FIELDS <= payload.keys()):
+                    or judge_rubrics.REQUIRED_RESPONSE_FIELDS <= payload.keys()):
                 return payload
             payloads.append(payload)
         if payloads:

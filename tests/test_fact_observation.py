@@ -162,8 +162,18 @@ def test_invalid_observations_cannot_become_repair_instructions(problem):
         raw["fact_checks"][1]["verification_mode"] = "appearance_only"
     else:
         raw["fact_checks"][1]["confidence"] = float("nan")
-    with pytest.raises(ValueError):
-        bind_observation(raw, targets, "image", "image_001")
+    if problem in {"metadata_evidence", "false_visual_proof", "nan"}:
+        raw["fact_checks"][1]["status"] = "contradicted"
+    if problem in {"unknown", "duplicate"}:
+        with pytest.raises(ValueError):
+            bind_observation(raw, targets, "image", "image_001")
+    else:
+        observation = bind_observation(raw, targets, "image", "image_001")
+        assert not repair_operations(observation)
+        if problem == "omitted":
+            assert len(observation['fact_checks']) == len(targets) - 1
+            assert not observation['missing_facts']
+            assert any(d['code'] == 'unassessed_checks' for d in observation['diagnostics'])
 
 
 def test_unsupported_assertion_has_its_own_id_and_a_remove_operation():
@@ -249,7 +259,7 @@ def judgment(raw):
 
 
 @pytest.mark.parametrize("mode", ["text", "image"])
-def test_real_judge_binds_fact_checks_and_repairs_missing_checks_with_same_evidence(mode):
+def test_real_judge_keeps_partial_assessment_without_retry_or_inventing_checks(mode):
     record, _, knowledge, _, reasoning, targets = setup(mode)
     candidate = {"candidate_id": f"{mode}_001", "verification_targets": targets,
                  "target_modality": mode, "generated_content": {"type": mode, "value": "a red tower"}}
@@ -277,13 +287,15 @@ def test_real_judge_binds_fact_checks_and_repairs_missing_checks_with_same_evide
         assert all(url and url.startswith("data:image/") for _, url in calls)
     else:
         result = judge.judge_text(context, candidate)
-    assert len(calls) == 2
+    assert len(calls) == 1
     assert result.observation["fact_checks"][1]["fact_id"] == "rf:0001"
-    assert result.score.details["contract_repair_retries"] == 1
+    assert result.score.details["contract_repair_retries"] == 0
+    assert len(result.observation["fact_checks"]) == len(targets) - 1
+    assert any(d["code"] == "unassessed_checks" for d in result.observation["diagnostics"])
     assert "verification_targets" in calls[0][0]
 
 
-def test_judge_does_not_silently_accept_legacy_scores_when_factual_checks_are_required():
+def test_legacy_score_without_observation_is_explicitly_unassessed():
     record, _, knowledge, _, reasoning, targets = setup("text")
     candidate = {"candidate_id": "text_001", "verification_targets": targets,
                  "target_modality": "text", "generated_content": {"type": "text", "value": "a tower"}}
@@ -291,8 +303,10 @@ def test_judge_does_not_silently_accept_legacy_scores_when_factual_checks_are_re
     legacy = json.loads(judgment(raw_observation(targets, mode="text")))
     del legacy["observation"]
     judge = GPT4OMiniRankingJudge(SimpleNamespace(complete=lambda _: json.dumps(legacy)))
-    with pytest.raises(GPT4OMiniJudgeParseError):
-        judge.judge_text(context, candidate)
+    result = judge.judge_text(context, candidate)
+    assert result.observation["fact_checks"] == []
+    assert not result.observation["repair_needed"]
+    assert any(d["code"] == "unassessed_checks" for d in result.observation["diagnostics"])
 
 
 @pytest.mark.parametrize("mode", ["text", "image"])

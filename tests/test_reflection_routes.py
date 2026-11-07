@@ -179,9 +179,10 @@ def test_omitted_issue_review_cannot_pass_a_removal_review():
     candidate["repair_targets"] = targets
     payload["observation"]["unsupported_claims"] = []
     client = Client(payload, payload)
-    with pytest.raises(GPT4OMiniJudgeParseError):
-        GPT4OMiniRankingJudge(client, use_rubrics=True).judge_text(context, candidate)
-    assert len(client.calls) == 2
+    result = GPT4OMiniRankingJudge(client, use_rubrics=True).judge_text(context, candidate)
+    assert len(client.calls) == 1
+    assert result.observation["repair_checks"] == []
+    assert any(d["code"] == "unassessed_repair_issues" for d in result.score.details["rubric_diagnostics"])
 
 
 def test_fact_fix_that_makes_the_image_unusable_cannot_replace_the_original():
@@ -308,7 +309,9 @@ def test_perfect_fact_score_cannot_hide_an_explicitly_unresolved_removal():
     corrected["scores"]["verified_fact_consistency"]["score"] = 2
     client = Client(payload, corrected)
     result = GPT4OMiniRankingJudge(client, use_rubrics=True).judge_text(context, candidate)
-    assert result.score.details["contract_repair_retries"] == 1
+    assert result.score.details["contract_repair_retries"] == 0
+    assert result.score.details["rubric_scores"]["verified_fact_consistency"]["score"] == 4
+    assert any(d["code"] == "high_fact_score_with_conflict" for d in result.score.details["rubric_diagnostics"])
     assert result.observation["repair_needed"]
 
 
@@ -327,3 +330,17 @@ def test_repair_cannot_change_its_target_fact_or_escape_its_parent(change):
     merged = _merge_reflection_ranking(ranked(original), ranked(after))
     assert merged["image_ranking"]["best_candidate_id"] == "image_001"
     assert after["repair_eligible"] is False
+
+
+@pytest.mark.parametrize('check', [None, {'status': 'resolved', 'confidence': .99}])
+def test_missing_or_uncited_issue_review_never_counts_as_fixed(check):
+    context, candidate, payload, original, targets = removal_fixture()
+    candidate['repair_targets'] = targets
+    payload['observation']['unsupported_claims'] = []
+    if check is not None:
+        payload['observation']['repair_checks'] = [{'issue_id': targets[0]['issue_id'], **check}]
+    result = GPT4OMiniRankingJudge(Client(payload), use_rubrics=True).judge_text(context, candidate)
+    after = {**candidate, 'source_candidate_id': 'text_001', 'hard_gate': {'decision': 'pass'},
+             'observation': result.observation}
+    assert not repair_is_eligible(original, after)
+    assert repair_outcomes(original, after)[0]['status'] == 'uncertain'

@@ -1,5 +1,13 @@
 # WN18RR 原生接入与 Qwen2-VL-7B／SDXL 冒烟
 
+## 2026-11-07：Judge 格式性失败修复
+
+当前 Judge 调用协议为 `candidate_observation_contract_v3`：空 evidence、缺少 text:／pixel: 前缀、事实分与逐项观察不一致不再触发整份评分失败。保留原始分数与 null，记录 `rubric_diagnostics`；不补满分、不伪造引用。观察不全只列为未评估；依据不足不执行自动删改，固定修复问题未解决不能替换原候选。Judge 无效响应标为 `judge_response_invalid`，与候选内容缺陷区分。
+
+历史 22 条无效响应回放有 18 条恢复；剩余 4 条是真正的 JSON／检查项结构损坏。新 API 在两张已有 SDXL 修复图上首轮返回有效评分：水道修复可采用；belief 分为 E=1／F=null，原语义问题仍 unresolved，合并后不采用。它此次普通 gate 为 pass，说明模型评分仍波动，不能据此宣称质量完全解决。
+
+468 项针对性回归通过，另 64 项兼容测试通过；4 项修改前已失败的旧协议测试保留基线记录。未重跑 GPU 或扩大批量。回归、历史回放、原始响应和修复资格合并结果位于 `outputs/judge-contract-relaxation-20261107-r1/`，详细规则及已知基线测试失败见 [Stage4 文档](stage4-judge-rubrics.zh.md)。
+
 ## 2026-11-07：清除覆盖等级，保留来源区别（当前）
 
 主体重构提交 `bb05866`；实测后补充了下述校验与恢复边界修复。新运行删除 must／should、逐检查 requirement、文本必需遗漏补写，以及批处理“必须有 must 才导出”的门槛；没有把这些规则换名继续执行。候选上下文只有同一组来源明确的事实检查。旧字段只在只读导入模块 `mmkgc/io/legacy_evidence.py` 中识别、核对和转换，不进入新执行协议。
