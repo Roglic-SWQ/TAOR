@@ -1,6 +1,14 @@
 # WN18RR 原生接入与 Qwen2-VL-7B／SDXL 冒烟
 
-## 2026-11-07：快速修复 Reflection 的意见传递
+## 2026-11-07：pipeline-refactor 单卡三例复测
+
+已使用既有 `CLUSTERX_CFG_PATH=/medisco/linjiashi/clusterx/clusterx.yaml` 提交 `taor-reflect3-1107-r1`，一张 A100 80GB，最终 SUCCEEDED 并释放资源。当前控制环境可用 `/medisco/linjiashi/venvs/taor-control/bin/python` 调用 ClusterX SDK；无需因默认 HOME 路径没有配置而重新索取凭据。
+
+Qwen3.5-9B＋真实 SDXL＋Stage4 跑完三例：waterway 两图通过并导出；bludgeon 模拟缺文本补全通过；belief 两张初始图和一次 Reflection 图仍缺少实体语义，明确结束为 no_usable_candidate。共 5 张真实新图，15 次本地 Qwen 响应正常结束、无空响应。核对 Judge 完整意见已传至真实修复请求；belief 没有修好，不能以 API 提示词通过代替像素验收。161 个执行源文件及冻结输入指纹不变；491 项相关软件回归通过。
+
+逐例过程、实际模型分工及限制见 [本次复测报告](evaluation/2026-11-07-pipeline-refactor-native-retest.zh.md)。原始记录位于 `outputs/pipeline-refactor-retest-20261107-r1/`。本轮是三例闭环检查，未扩大至全量或声称多视角收益。
+
+## 2026-11-07：快速修复 Reflection 的意见传递（此前 API 验证）
 
 当前策略为 `targeted_reflection_v4`：把原 Judge 的分项原因、证据、具体建议、未确认新增信息与诊断传给现有修复模型；语义修复直接指出实际问题。建议只作为参考，不成为必须补齐的清单，也不单独触发重写。旧兼容路径清除低关系覆盖导致的补写触发，并将“仅限图谱事实”改为已有来源支持。没有增加严格门控或自动上游循环。
 
