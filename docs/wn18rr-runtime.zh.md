@@ -1,5 +1,40 @@
 # WN18RR 原生接入与 Qwen2-VL-7B／SDXL 冒烟
 
+## 2026-11-07：上游重提小对照，暂不接入自动回退
+
+用户要求先试验并判断是否值得增加设计。本轮仅做 CPU/API 诊断，复用现有 compact 提取、语义筛选、原图像素核验、事实选择、文本生成和 Stage4。没有修改生产流水线，没有申请 GPU，没有新增 SDXL 图片，也没有增加门控阈值或 must/should 规则。
+
+在调用前固定 student、bludgeon、mullah 三个案例，分别作为漏提疑似例、已有可用结果的物体正例、肖像不足以表达角色的负例；共 7 张已准入原图。保留原准入、盲描述、图片字节和 train 图谱，隐藏目标文本。比较同一个 gpt-6-luna、温度 0、相同来源与下游处理的两组：
+
+- repeat：使用当前提取说明重新看图。
+- targeted：在相同说明后追加旧提议、旧筛选结果和一次问题指向，询问是否主体定位错误、漏掉可见行为或结构；允许空结果，不要求发现特定事实。
+
+旧 Qwen 输出只用于定位问题，不作为同模型对照。两组执行顺序事先交替；没有根据结果继续改提示词直到成功。
+
+| 案例 | 普通重提 | 带失败反馈重提 | 本轮判断 |
+| --- | --- | --- | --- |
+| student | 提取 0 项，仍不足 | 多提取一项“右侧人物手持纸张和话筒”；语义筛选认为该动作不足以表达 student，删除后仍不足 | 没有恢复文本补全；原图有课堂线索，不能由弃答推断完全无信息 |
+| mullah | 提取 0 项，弃答 | 提取 0 项，弃答 | 没有把头饰、胡须升级成角色身份，也没有新增可用信息 |
+| bludgeon | 提议 4 项、筛选后 2 项，两项像素核验均支持；选中形状和木质外观，生成文本并通过评审 | 提议 4 项、筛选后 3 项；把不同图片的木质／纹理合在一起的提议、被手遮挡的柄端均未获确认，只保留形状；生成文本并通过评审 | 两组都可用，定向反馈没有显示额外收益；未确认的提议不等于已证明错误 |
+
+普通重提的木棒文本：
+
+> The pictured subject associated with “bludgeon” appears to be an elongated, roughly cylindrical wooden object with visible grain and a rough surface. One end is thicker, while the body tapers slightly toward the other.
+
+定向重提的木棒文本：
+
+> The pictured subject associated with “bludgeon” appears to have an elongated cylindrical body with one thicker, enlarged end; its exact identity and function are not verified.
+
+后一组形状提议原引两图，像素复核明确只确认第二张原图；原提议引用与实际支持引用分别保留，不能宣称多图独立互证。两组所选事实及核验 panel 不同，内部评分不可直接用于量化写作质量收益。生成和评审仍同用 gpt-6-luna，不是独立真值认证。
+
+六组均执行完成，共记录 17 次上游网络尝试、2 次文本生成，两个文本候选均通过 Stage4，没有触发内容 Reflection。对 student，定向反馈额外产生一次语义筛选调用，仍未恢复补全。三个诊断案例中没有出现“普通重提失败、定向重提成功”的新增完成案例；样本很小，每组只运行一次，不能据此断言回退永远无用。
+
+结论：暂不把自动返回上游接入主流程。当前保留既有诊断入口；后续若出现明确可定位的上游漏提，再针对原始来源验证。生产问题仍包括主体定位及角色相关性判断，不能靠泛化的重试指令保证解决。
+
+结果根目录：`outputs/upstream-reextract-probe-20261107-r1/`。`manifest.json` 与 `*-frozen.json` 保存固定输入；`attempt-r2/` 保存六组提议、筛选、像素核验、选择及完整文本结果；`verified-summary.json` 核对两组提取提示词仅追加反馈、schema／原图元数据相同、原始文件／train 指纹不变、选择仅使用图片来源、执行源码未改。`probe.py` 和 `verify.py` 保存可复核实验代码。
+
+最初实验封装遗漏内部调用审计字段，六组均在发出网络请求前失败，记录单独保留在根目录的 `arms/` 和 `results.json`；修正封装后运行 `attempt-r2`，没有将封装错误计入模型质量结论。未重跑全仓软件测试，本轮验证的是实际 API 对照与数据／来源一致性。
+
 ## 2026-11-07：Judge 格式性失败修复
 
 当前 Judge 调用协议为 `candidate_observation_contract_v3`：空 evidence、缺少 text:／pixel: 前缀、事实分与逐项观察不一致不再触发整份评分失败。保留原始分数与 null，记录 `rubric_diagnostics`；不补满分、不伪造引用。观察不全只列为未评估；依据不足不执行自动删改，固定修复问题未解决不能替换原候选。Judge 无效响应标为 `judge_response_invalid`，与候选内容缺陷区分。
