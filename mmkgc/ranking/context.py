@@ -1062,7 +1062,9 @@ class RankingContext:
                 raise TypeError(
                     f"existing_modalities.{modality} must be a string or None; got {type(value).__name__}"
                 )
-            safe_existing[modality] = value if modality in allowed_modalities else None
+            # Candidate modality and source modality have opposite masks: a
+            # missing image is judged against existing text, never its target.
+            safe_existing[modality] = value if modality != missing_mode else None
         object.__setattr__(self, "existing_modalities", freeze_value(safe_existing))
         object.__setattr__(self, "entity_profile", freeze_value(_sanitize_profile(self.entity_profile)))
         object.__setattr__(

@@ -1,0 +1,6 @@
+model_config: configs/qwen35-9b-hybrid.yaml
+stage1_model_config: configs/qwen35-9b-hybrid.yaml
+stage2_model_config: configs/gpt6-luna-visual-description.yaml
+max_selected_facts: 4
+knowledge_stage_timeout_seconds: 600
+model_call_timeout_seconds: 120

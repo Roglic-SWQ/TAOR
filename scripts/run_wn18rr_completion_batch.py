@@ -45,7 +45,7 @@ def save(path, value):
     temp.replace(path)
 
 
-def freeze(root):
+def freeze(root, runtime_settings=None):
     root.mkdir(parents=True, exist_ok=False)
     store = build_dataset_store('wn18rr', DATASET, graph_split='train')
     test = {row[i] for row in (line.split('\t') for line in
@@ -69,6 +69,13 @@ def freeze(root):
         [DATASET/name for name in ('entities.txt', 'relations.txt', 'train.tsv',
          'test.tsv', 'entity2text.txt', 'wordnet-mlj12-definitions.txt',
          'image_alignment/entity2images.json')]}
+    if runtime_settings is not None:
+        allowed = {'model_config', 'stage1_model_config', 'stage2_model_config',
+                   'max_selected_facts', 'knowledge_stage_timeout_seconds', 'model_call_timeout_seconds'}
+        if not isinstance(runtime_settings, dict) or set(runtime_settings) - allowed:
+            raise ValueError('Unsupported pilot runtime setting')
+        save(root/'runtime-settings.json', runtime_settings)
+        bindings[str(root/'runtime-settings.json')] = digest(root/'runtime-settings.json')
     sources = {str(path.relative_to(ROOT)): digest(path) for folder in ('mmkgc', 'scripts', 'configs')
                for path in (ROOT/folder).rglob('*') if path.suffix in {'.py', '.yaml', '.sh'}}
     save(root/'scope.json', {'test_entities': len(test), 'real_missing_image': missing_images,
@@ -234,8 +241,11 @@ def summarize(root, manifest):
     for item in manifest:
         path = root/'state'/f"{item['missing_mode']}-{item['entity_key']}.json"
         rows.append(read(path) if path.exists() else {**item, 'status': 'pending'})
+    settings = read(root/'runtime-settings.json') if (root/'runtime-settings.json').exists() else {}
+    from mmkgc.adapters.qwen import load_qwen_config
+    model = load_qwen_config(ROOT/settings.get('model_config', 'configs/qwen7b-text-vision.yaml')).model_name
     save(root/'summary.json', {'expected_entities': len(rows), 'counts': dict(Counter(r['status'] for r in rows)),
-        'ground_truth_used': False, 'generation_model': 'Qwen2-VL-7B-Instruct',
+        'ground_truth_used': False, 'generation_model': model,
         'image_model': 'SDXL', 'review_model': 'gpt-6-luna', 'rows': rows})
     (root/'completion_manifest.jsonl').write_text(''.join(json.dumps(_safe_output(r), ensure_ascii=False)+'\n' for r in rows))
 
@@ -327,6 +337,7 @@ def selection_control(root, failure_path):
 def run(root, retry_failed=False):
     from mmkgc.defaults import build_default_mainline_runtime
     rows = validate(root)
+    settings = read(root/'runtime-settings.json') if (root/'runtime-settings.json').exists() else {}
     store = build_dataset_store('wn18rr', DATASET, graph_split='train')
     for mode in ('image', 'text'):
         pending = []
@@ -339,9 +350,10 @@ def run(root, retry_failed=False):
         if not pending:
             continue
         runtime = build_default_mainline_runtime(missing_mode=mode, candidate_budget=2 if mode == 'image' else 1,
-            model_config=ROOT/'configs/qwen7b-text-vision.yaml', dataset_root=DATASET,
+            **{'model_config': ROOT/'configs/qwen7b-text-vision.yaml', 'model_call_timeout_seconds': 120, **settings},
+            dataset_root=DATASET,
             stage1_reranker_model_dir='/medisco/linjiashi/models/Qwen/Qwen3-Reranker-4B',
-            stage1_reranker_device='cuda:0', model_call_timeout_seconds=120,
+            stage1_reranker_device='cuda:0',
             stage1_visual_verifier_config=ROOT/'configs/gpt6-luna-mainline.yaml',
             stage4_config=ROOT/'configs/stage4-gpt6-luna-gpu0.yaml',
             sdxl_model_dir='/medisco/linjiashi/models/SDXL/stable-diffusion-xl-base-1.0', sdxl_device='cuda:0')
@@ -433,10 +445,15 @@ def main():
     parser.add_argument('--retry-failed', action='store_true')
     parser.add_argument('--review', action='store_true')
     parser.add_argument('--selection-control', type=Path)
+    parser.add_argument('--runtime-config', type=Path, help='Freeze pilot model settings during --prepare')
     args = parser.parse_args()
     root = args.root.resolve()
     if args.prepare:
-        freeze(root)
+        if args.runtime_config:
+            import yaml
+            freeze(root, yaml.safe_load(args.runtime_config.read_text()))
+        else:
+            freeze(root)
     elif args.review:
         review(root)
     elif args.selection_control:

@@ -1221,6 +1221,8 @@ def test_missing_mode_removes_opposite_modality_context_and_transport(missing_mo
     opposite = "image" if missing_mode == "text" else "text"
 
     assert not getattr(context, f"{opposite}_candidates")
+    assert context.existing_modalities[missing_mode] is None
+    assert context.existing_modalities[opposite] == inputs['existing_modalities'][opposite]
     assert opposite not in context.modality_constraints
     if missing_mode == "text":
         assert context.generated_image_inputs == {}
@@ -1233,7 +1235,7 @@ def test_missing_mode_removes_opposite_modality_context_and_transport(missing_mo
         with pytest.raises(ValueError, match="missing_mode"):
             build_visual_constraint_text(context, {"target_modality": "image"})
     else:
-        assert context.existing_modalities["text"] is None
+        assert context.existing_modalities["text"] == 'Existing public text.'
         with pytest.raises(ValueError, match="missing_mode"):
             build_kg_reference(context, "text")
 

@@ -70,8 +70,16 @@ class QwenConfig:
     stage1_image_policy: str = "entity_visual_features_v2"
     text_use_source_images: bool = False
     entity_visual_description: bool = False
+    abstract_visual_features: bool = False
+    review_source_text: bool = False
 
     def __post_init__(self) -> None:
+        if type(self.review_source_text) is not bool:
+            raise ValueError("review_source_text must be a boolean")
+        if type(self.abstract_visual_features) is not bool:
+            raise ValueError("abstract_visual_features must be a boolean")
+        if self.abstract_visual_features and not self.entity_visual_description:
+            raise ValueError("abstract_visual_features requires entity_visual_description")
         if type(self.entity_visual_description) is not bool:
             raise ValueError("entity_visual_description must be a boolean")
         if type(self.text_use_source_images) is not bool:
@@ -137,6 +145,8 @@ def _coerce_qwen_config(data: dict, source_path: str | Path) -> QwenConfig:
         stage1_image_policy=inference.get("stage1_image_policy", "entity_visual_features_v2"),
         text_use_source_images=inference.get("text_use_source_images", False),
         entity_visual_description=inference.get("entity_visual_description", False),
+        abstract_visual_features=inference.get("abstract_visual_features", False),
+        review_source_text=inference.get("review_source_text", False),
     )
 
 
@@ -1093,7 +1103,10 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
         modalities = [modality for modality in ("image", "video", "audio")
                       if modality != missing_mode and (image_paths if modality == "image" else record.existing_modalities.get(modality))]
         if not modalities:
-            return super().build_knowledge(record, missing_mode, coarse)
+            proposed = super().build_knowledge(record, missing_mode, coarse)
+            if self.config.review_source_text and missing_mode == 'image' and record.description:
+                return self._review_text_knowledge(record, missing_mode, coarse, proposed)
+            return proposed
         from mmkgc.adapters.media_knowledge import (
             DESCRIPTION_PROMPTS, IMAGE_MODELING_VERSION, MEDIA_MODELING_VERSION,
             load_source_media, with_media_description,
@@ -1278,6 +1291,39 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
             result["image_modeling"]["extraction_batches"] = batch_records
         return result
 
+    def _review_text_knowledge(self, record, missing_mode, coarse, proposed):
+        """Re-extract from the original text, not a possibly wrong label sense."""
+        reviewer = self.visual_verifier
+        if reviewer is None:
+            raise ValueError('Source-text review requires a separate configured API reviewer')
+        start = len(reviewer.calls)
+        previous = reviewer.source_bound_text_extraction
+        reviewer.source_bound_text_extraction = True
+        audit = {'stage': 'stage1_source_semantic_review', 'model_name': reviewer.config.model_name,
+            'original_text': record.description, 'source_bound': True,
+            'proposed_text_facts': [deepcopy(f) for f in proposed['relation_facts']
+                if 'text' in f.get('source_modalities', [])]}
+        try:
+            result = reviewer.build_knowledge(record, missing_mode, coarse)
+            prefix = record.label + ','
+            if record.description.casefold().startswith(prefix.casefold()):
+                definition = record.description[len(prefix):].split(';', 1)[0].strip()
+                audit['literal_source_definition'] = definition
+                if definition and not any(f.get('subject') == record.label and
+                        f.get('object', '').strip() == definition and 'text' in f.get('source_modalities', [])
+                        for f in result['relation_facts']):
+                    raise ValueError('Source review did not preserve the supplied lexical definition')
+            audit.update(status='applied', reviewed_text_facts=[deepcopy(f) for f in result['relation_facts']
+                if 'text' in f.get('source_modalities', [])])
+            return result
+        except Exception as exc:
+            audit.update(status='failed', error_type=type(exc).__name__, error_message=str(exc))
+            raise
+        finally:
+            reviewer.source_bound_text_extraction = previous
+            self.calls.extend(deepcopy(reviewer.calls[start:]))
+            self.calls.append(audit)
+
     def _compact_visual_knowledge(self, inputs, context, deadline):
         from mmkgc.adapters import visual_feature_contract as contract
         from mmkgc.stages.modeling import apply_knowledge_response
@@ -1316,6 +1362,9 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
                     call['contract_repair_retries'] = 1
                     prompt = contract.prompt(inputs, [str(exc)])
                     call['repair_prompt'] = prompt
+            if self.config.abstract_visual_features:
+                projected = self._project_visual_payload(inputs['entity']['label'], json.loads(text), deadline)
+                result = apply_knowledge_response(inputs, contract.decode(json.dumps(projected), inputs))
             call['status'] = 'applied'
             result['semantic_refinement'] = {'stage': 'stage1_knowledge', 'status': 'applied',
                                              'planner': self.planner_name, 'prompt_version': contract.SCHEMA}
@@ -1323,6 +1372,47 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
         except Exception as exc:
             call.update(status='failed', error_type=type(exc).__name__, error_message=str(exc))
             setattr(exc, 'model_call', call)
+            raise
+        finally:
+            call['latency_ms'] = int((time.perf_counter() - started) * 1000)
+            self.calls.append(call)
+            KNOWLEDGE_REQUEST_CONTEXT.reset(token)
+
+    def _project_visual_payload(self, label, payload, deadline):
+        from mmkgc.adapters import visual_projection as projection
+        from mmkgc.stages.semantic import Stage1CompletionError
+        import jsonschema
+        if not payload['features']:
+            return payload
+        if self.visual_verifier is None:
+            raise ValueError('Visual abstraction requires a separate configured API reviewer')
+        call = {'stage': 'stage1_visual_semantic_projection', 'prompt_version': projection.VERSION,
+            'source_features': deepcopy(payload['features']), 'prompt': projection.prompt(label, payload),
+            'output_schema': projection.schema(payload), 'network_attempts': [], 'contract_repair_retries': 0,
+            'reviewer_model': self.visual_verifier.config.model_name, 'media_input_metadata': []}
+        started = time.perf_counter()
+        token = KNOWLEDGE_REQUEST_CONTEXT.set({'deadline': deadline, 'call': call, 'media_inputs': []})
+        try:
+            for attempt in range(2):
+                text = self.visual_verifier._complete_prompt(call.get('repair_prompt', call['prompt'])).strip()
+                call['response_text'] = text
+                failure = ('output_token_limit' if call['network_attempts'] and
+                    call['network_attempts'][-1].get('finish_reason') == 'length' else
+                    'empty_response' if not text else None)
+                if failure:
+                    call['completion_failure'] = failure
+                    raise Stage1CompletionError(failure)
+                try:
+                    result = projection.apply(payload, json.loads(text))
+                    call.update(status='applied', projected_features=deepcopy(result['features']))
+                    return result
+                except (ValueError, jsonschema.ValidationError) as exc:
+                    if attempt:
+                        raise
+                    call['contract_repair_retries'] = 1
+                    call['repair_prompt'] = projection.prompt(label, payload, [str(exc)])
+        except Exception as exc:
+            call.update(status='failed', error_type=type(exc).__name__, error_message=str(exc))
             raise
         finally:
             call['latency_ms'] = int((time.perf_counter() - started) * 1000)

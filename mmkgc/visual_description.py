@@ -2,6 +2,20 @@
 from copy import deepcopy
 
 TASK = 'entity_visual_description_v1'
+IMAGE_SEMANTIC_RULES = (
+    'INDEPENDENT VISUAL-SEMANTIC EVIDENCE: judge actual pixels, not the artist title or intended prompt. '
+    'Name concrete visible cues that convey the original source meaning. Generic geometry or decorative '
+    'patterns do not depict a cognitive state merely because the target is abstract. An unlabeled generic '
+    'portrait or wireframe face does not express freedom from restraints. An office room or business attire '
+    'alone does not establish an invested official role. Laboratory objects alone do not demonstrate a named '
+    'scientific process: require visible source-relevant configuration, interactions or separation, and never '
+    'imagine missing steps. If there is no such entity-relevant semantic cue, entity_semantics.score MUST be '
+    '0 even when visual quality is high and all supplied checks look compatible. Selected facts and '
+    'uncertainty disclaimers cannot supply absent pixel semantics. A recognizable physical category or '
+    'depicted activity may remain semantically compatible while exact taxonomy, chemical composition or '
+    'other invisible properties remain uncertain; do not pretend those properties were verified. '
+    'Keep factual consistency separate and cite actual pixels.'
+)
 FEATURE_RULES = (
     'Describe visual semantics relevant to the supplied entity, not every property in every image. '
     'First locate the depicted subject that could represent that entity. Retain a few complementary '
