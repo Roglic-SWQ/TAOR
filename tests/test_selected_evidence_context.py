@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from mmkgc.io.legacy_evidence import convert_saved_checks
+from mmkgc.io.legacy_evidence import convert_saved_checks, recover_saved_repair_targets
 from mmkgc.observation import (bind_observation, candidate_repair_operations, removal_targets,
     repair_is_eligible, repair_operations, validate_verification_targets)
 from mmkgc.stages.candidate_planning import apply_fact_selection
@@ -12,6 +12,34 @@ from mmkgc.stages.plan_context import compile_plan_context
 from mmkgc.stages.generation import build_stage3_feedback, route_image_repairs
 from test_candidate_fact_plan import source
 from test_fact_observation import raw_observation
+
+
+def test_image_source_metadata_survives_frozen_ranking_context():
+    from mmkgc.ranking.contracts import freeze_value
+    from mmkgc.ranking.scorers.gpt4omini_judge import _rubric_response_schema
+    _, candidate, _ = selected_sources()
+    targets = candidate['verification_targets']
+    assert validate_verification_targets(freeze_value(targets)) == targets
+    assert _rubric_response_schema(freeze_value(targets), 'text')['type'] == 'object'
+
+
+@pytest.mark.parametrize('kind', ['semantic', 'fact'])
+def test_unresolved_semantic_issue_does_not_become_a_factual_conflict(kind):
+    from mmkgc.ranking.judge_rubrics import validate_bound_observation
+    _, candidate, _ = selected_sources()
+    targets = candidate['verification_targets']
+    observation = bind_observation(raw_observation(targets, status='uncertain'), targets, 'image', 'image_001')
+    observation['repair_checks'] = [{'issue_id': 'semantic:entity' if kind == 'semantic' else 'claim:0001',
+        'issue_kind': kind, 'claim': 'Original issue', 'status': 'unresolved',
+        'confidence': .99, 'evidence': ['pixel:Original issue remains']}]
+    details = {'unverified_additions': [], 'repair_suggestions': [],
+               'rubric_scores': {'verified_fact_consistency': {'score': None}}}
+    if kind == 'fact':
+        with pytest.raises(ValueError, match='fact score must be null'):
+            validate_bound_observation(details, observation, targets)
+    else:
+        validate_bound_observation(details, observation, targets)
+        assert not repair_operations(observation)
 
 
 def selected_sources():
@@ -116,3 +144,40 @@ def test_semantic_repair_requires_explicit_resolution_and_preserves_source_metad
     assert repair_is_eligible(original, repaired)
     repaired['observation']['fact_checks'][1]['source_modalities'] = ['image']
     assert not repair_is_eligible(original, repaired)
+
+
+def test_repair_issues_survive_stage3_storage_and_checked_historical_recovery():
+    from mmkgc.io.writer import _compact_stage3_candidate
+    original = semantic_candidate()
+    issues = removal_targets(candidate_repair_operations(original))
+    repaired = {**deepcopy(original), 'candidate_id': 'image_safe_001',
+                'source_candidate_id': 'image_001', 'repair_targets': issues}
+    compact, _ = _compact_stage3_candidate(repaired)
+    assert compact['repair_targets'] == issues
+    old = deepcopy(compact)
+    old.pop('repair_targets')
+    ranking = {'image_ranking': {'ranked_candidates': [repaired]}}
+    recover_saved_repair_targets(old, ranking)
+    assert old['repair_targets'] == issues
+    altered = deepcopy(compact)
+    altered.pop('repair_targets')
+    bad = deepcopy(ranking)
+    bad['image_ranking']['ranked_candidates'][0]['repair_targets'][0]['evidence_refs'] = ['foreign']
+    with pytest.raises(ValueError, match='foreign source'):
+        recover_saved_repair_targets(altered, bad)
+
+
+def test_historical_fact_replacement_keeps_empty_extra_issue_list():
+    candidate = {'candidate_id': 'image_safe_001', 'target_modality': 'image',
+                 'source_candidate_id': 'image_001', 'verification_targets': []}
+    ranking = {'image_ranking': {'ranked_candidates': [{**candidate, 'repair_targets': []}]}}
+    recover_saved_repair_targets(candidate, ranking)
+    assert candidate['repair_targets'] == []
+
+
+def test_typed_saved_repair_issue_cannot_add_another_sources_evidence():
+    _, candidate, _ = selected_sources()
+    candidate['repair_targets'] = [{'issue_id': 'semantic:entity', 'issue_kind': 'semantic',
+        'claim': 'Original issue', 'evidence_refs': ['foreign:source']}]
+    with pytest.raises(ValueError, match='foreign source'):
+        convert_saved_checks(candidate, candidate['verification_targets'])

@@ -1138,6 +1138,8 @@ def _repair_check_instructions():
         "\nREPAIR REVIEW: REPAIR_TARGETS contains specific rejected assertions or semantic defects from the ORIGINAL "
         "candidate, not assertions made by the current candidate and not new evidence. Re-read the "
         "current actual text/pixels and return observation.repair_checks for each issue_id exactly once. "
+        "An issue_kind=semantic defect concerns entity relevance, not a factual contradiction; "
+        "its unresolved status alone must not change verified_fact_consistency or make null invalid. "
         "resolved means the old wrong assertion is demonstrably absent or corrected; unresolved means "
         "it is still asserted; uncertain means you cannot determine this, including an off-frame feature. "
         "An empty unsupported_claims list does not prove resolution. Include actual text:/pixel: evidence, "

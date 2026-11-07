@@ -10,7 +10,7 @@ from typing import Any
 from mmkgc.adapters.base import GeneratedImageArtifact
 from mmkgc.data import EntityRecord, existing_image_paths
 from mmkgc.pipeline import PreparedEntity
-from mmkgc.io.legacy_evidence import convert_saved_checks
+from mmkgc.io.legacy_evidence import convert_saved_checks, recover_saved_repair_targets
 from mmkgc.stages.plan_context import compile_plan_context
 from mmkgc.stages.relation_planning import apply_candidate_slot_plans
 from mmkgc.stages.candidate_planning import PLAN_SCHEMAS, LEGACY_PLAN_SCHEMA, apply_candidate_plans
@@ -54,6 +54,8 @@ def load_saved_run(entity_dir: str | Path, record: EntityRecord, candidate_budge
     def stage(name):
         return read(root / name)["data"]
     calls = [json.loads(line) for line in (root / "model_calls.jsonl").read_text().splitlines()]
+    old_ranking_path = root / '4_kg_aware_candidate_consistency_ranking.json'
+    saved_ranking = read(old_ranking_path).get('data', {}) if old_ranking_path.is_file() else {}
     v3 = stage("1_knowledge_modeling.json")
     if v3.get("schema_version") not in {"qwen_grounded_knowledge_v1", "grounded_triples_v1", "grounded_triples_v2"}:
         raise ValueError("Saved image run does not contain full grounded knowledge")
@@ -128,6 +130,7 @@ def load_saved_run(entity_dir: str | Path, record: EntityRecord, candidate_budge
             raise ValueError("Duplicate saved text candidate")
         seen.add(candidate_id)
         plan = by_plan[candidate["source_plan_id"]]
+        recover_saved_repair_targets(candidate, saved_ranking)
         convert_saved_checks(candidate, plan["verification_targets"])
         content = candidate.get("generated_content", {})
         if content.get("type") != "text" or not isinstance(content.get("value"), str) or not content["value"].strip():
@@ -151,6 +154,7 @@ def load_saved_run(entity_dir: str | Path, record: EntityRecord, candidate_budge
         if (metadata["entity_key"], metadata["candidate_id"]) != (record.entity_key, candidate_id):
             raise ValueError("Saved image metadata belongs to another candidate")
         plan = by_plan[candidate["source_plan_id"]]
+        recover_saved_repair_targets(candidate, saved_ranking)
         convert_saved_checks(candidate, plan["verification_targets"])
         context = plan["generation_context"]
         candidate.update(

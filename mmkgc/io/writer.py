@@ -768,6 +768,9 @@ def _compact_stage3_candidate(item: Any) -> tuple[Any, list[str]]:
         compact['description_task'] = item['description_task']
     if item.get("verification_targets") is not None:
         compact["verification_targets"] = item["verification_targets"]
+    if item.get('repair_targets') is not None:
+        from mmkgc.observation import validate_repair_targets
+        compact['repair_targets'] = validate_repair_targets(item['repair_targets'])
     if isinstance(item.get("metadata"), dict) and item["metadata"].get("presentation_policy"):
         compact["presentation"] = {key: deepcopy(item["metadata"][key]) for key in (
             "presentation_policy", "requested_rendering", "presentation_signature", "presentation_rewrites",

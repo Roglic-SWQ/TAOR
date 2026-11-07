@@ -146,7 +146,8 @@ def validate_bound_observation(details, observation, targets):
         if not set(suggestion["evidence_refs"]) <= known_refs:
             raise ValueError("repair suggestion references evidence outside the supplied checks")
     fact_score = details["rubric_scores"]["verified_fact_consistency"]["score"]
-    unresolved_repairs = any(item["status"] == "unresolved" for item in observation.get("repair_checks", []))
+    unresolved_repairs = any(item["status"] == "unresolved" and item.get('issue_kind', 'fact') == 'fact'
+                             for item in observation.get("repair_checks", []))
     assessable = bool(direct or removals or unresolved_repairs)
     conflict = any(item["status"] == "contradicted" for item in direct) or bool(removals) or unresolved_repairs
     if (fact_score is None) == assessable:

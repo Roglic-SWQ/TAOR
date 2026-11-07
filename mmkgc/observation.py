@@ -13,6 +13,16 @@ REPAIR_CONFIDENCE = 0.8
 REFLECTION_POLICY = "targeted_reflection_v3"
 CHECK_STATUSES = ("supported", "contradicted", "missing", "unverifiable", "uncertain")
 VERIFICATION_MODES = ("direct", "appearance_only", "unverifiable")
+SEMANTIC_ISSUE_ID = 'semantic:entity'
+
+
+def _plain_metadata(value):
+    """Copy JSON metadata even after ranking has frozen its nested mappings."""
+    if isinstance(value, Mapping):
+        return {key: _plain_metadata(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain_metadata(item) for item in value]
+    return value
 
 
 def validate_repair_targets(value: Any) -> list[dict[str, Any]]:
@@ -21,7 +31,8 @@ def validate_repair_targets(value: Any) -> list[dict[str, Any]]:
         raise ValueError("repair_targets must be an array")
     result, seen = [], set()
     for item in value:
-        if not isinstance(item, Mapping) or set(item) != {"issue_id", "claim", "evidence_refs"}:
+        if not isinstance(item, Mapping) or set(item) not in (
+                {"issue_id", "claim", "evidence_refs"}, {"issue_id", "claim", "evidence_refs", "issue_kind"}):
             raise ValueError("repair target requires issue_id, claim, evidence_refs")
         issue_id = _text(item["issue_id"], "issue_id")
         if issue_id in seen:
@@ -29,11 +40,17 @@ def validate_repair_targets(value: Any) -> list[dict[str, Any]]:
         seen.add(issue_id)
         result.append({"issue_id": issue_id, "claim": _text(item["claim"], "claim"),
                        "evidence_refs": _strings(item["evidence_refs"], "evidence_refs")})
+        kind = item.get('issue_kind', 'fact')
+        if kind not in {'fact', 'semantic'}:
+            raise ValueError('Unknown repair issue kind')
+        if kind == 'semantic':
+            result[-1]['issue_kind'] = kind
     return result
 
 
 def removal_targets(operations: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return validate_repair_targets([{"issue_id": item.get("claim_id", item.get("check_id")), "claim": item["observed"],
+        **({'issue_kind': 'semantic'} if item['action'] == 'reframe' else {}),
         "evidence_refs": item.get("evidence_refs") or [entry[len("context:"):].strip() for entry in item["evidence"]
                           if entry.startswith("context:")]} for item in operations if item["action"] in {"remove", "reframe"}])
 
@@ -90,7 +107,7 @@ def compile_verification_targets(context: Mapping[str, Any], knowledge: Mapping[
                 "source_modalities": sorted(set(fact.get('source_modalities', [])) | {
                     catalog[ref]['modality'] for ref in constraint.get('evidence_refs', [])
                     if ref in catalog and catalog[ref].get('modality')}),
-                "visual_observations": deepcopy(fact.get('visual_observations', [])),
+                "visual_observations": _plain_metadata(fact.get('visual_observations', [])),
             })
     return validate_verification_targets(targets)
 
@@ -122,7 +139,10 @@ def validate_verification_targets(value: Any) -> list[dict[str, Any]]:
         for key in ("subject", "relation", "object", "direction"):
             target[key] = _text(item.get(key, ""), key, allow_empty=True)
         target['source_modalities'] = _strings(item.get('source_modalities', []), 'source_modalities')
-        target['visual_observations'] = deepcopy(item.get('visual_observations', []))
+        visual = item.get('visual_observations', [])
+        if not isinstance(visual, (list, tuple)) or any(not isinstance(v, Mapping) for v in visual):
+            raise ValueError('visual_observations must contain source observation objects')
+        target['visual_observations'] = _plain_metadata(visual)
         result.append(target)
     return result
 
@@ -234,6 +254,8 @@ def repair_operations(observation: Mapping[str, Any]) -> list[dict[str, Any]]:
                                "observed": item["claim"], "evidence": list(item["evidence"])})
     reported = {item["observed"].casefold() for item in operations if item["action"] == "remove"}
     for item in observation.get("repair_checks", []):
+        if item.get('issue_kind', 'fact') == 'semantic':
+            continue
         if item["status"] == "unresolved" and item["confidence"] >= REPAIR_CONFIDENCE and item["claim"].casefold() not in reported:
             operations.append({"action": "remove", "claim_id": item["issue_id"], "observed": item["claim"],
                                "evidence": list(item["evidence"]), "evidence_refs": list(item["evidence_refs"])})
@@ -259,7 +281,7 @@ def candidate_repair_operations(candidate):
     refs = sorted({ref for item in candidate.get('verification_targets', []) for ref in item.get('evidence_refs', [])})
     evidence = list(rubric.get('evidence') or gate.get('evidence') or [])
     if gate.get('decision') == 'reject' and rubric.get('score') == 0 and refs and evidence:
-        operations.append({'action': 'reframe', 'check_id': 'semantic:entity',
+        operations.append({'action': 'reframe', 'check_id': SEMANTIC_ISSUE_ID,
             'expected': 'Express the target entity meaning with concrete, source-supported semantic cues.',
             'observed': rubric.get('reason') or gate.get('reason', ''),
             'evidence': evidence, 'evidence_refs': refs})
