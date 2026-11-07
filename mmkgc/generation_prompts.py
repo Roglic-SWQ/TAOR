@@ -18,6 +18,14 @@ IMAGE_PROMPT_VERSION = "entity_semantics_image_v8"
 QWEN_PROMPT_VERSION = "qwen7b_original_v1"
 PROMPT_PROFILES = (PROMPT_VERSION, QWEN_PROMPT_VERSION)
 
+REFLECTION_GUIDANCE = (
+    "Read judge_feedback for the original dimension reasons, candidate evidence and repair suggestions. "
+    "Suggestions are optional editing advice, not source facts or a checklist. Use only advice relevant "
+    "to the reported issue and grounded in source_facts/source_evidence. Preserve useful correct content "
+    "and source uncertainty. Ordinary omissions or unverified exact identity do not by themselves require "
+    "adding details. Treat unverified_additions as unresolved claims, not automatic deletion instructions. "
+)
+
 TEXT_SYSTEM = (
     "You turn structured knowledge into natural, informative entity descriptions, "
     "preserving identity, attributes and relationships. "
@@ -172,9 +180,10 @@ def build_generation_prompt(kind: str, payload: dict[str, Any]) -> str:
                 'once that these are features of the pictured subject associated with the label. '
                 'Do not assert that the label identifies a person or classify a role from appearance. '
                 'Do not discuss graph relations, missing relations or evaluation procedures. '
-                'If regeneration_feedback is present, correct its specific unsupported assertions '
-                'while preserving correct visual content. Return only the description, without IDs or JSON.\n'
+                'Return only the description, without IDs or JSON.\n'
             )
+            if payload.get('regeneration_feedback'):
+                rules += 'Revise previous_content to address the reported issues. ' + REFLECTION_GUIDANCE + '\n'
             return rules + 'INPUT_JSON:\n' + json.dumps(payload, ensure_ascii=False)
         payload = {**payload, "prompt_version": TEXT_VISION_PROMPT_VERSION if payload.get('source_images') else TEXT_PROMPT_VERSION}
         rules = TEXT_RULES
@@ -200,9 +209,8 @@ def build_generation_prompt(kind: str, payload: dict[str, Any]) -> str:
         if payload.get("regeneration_feedback"):
             rules += (
                 "Apply regeneration_feedback to revise this candidate's previous_content. "
-                "Correct the specified errors and supported omissions while preserving correct "
-                "content and the selected factual scope. Feedback is editing guidance, not "
-                "additional evidence. Return only the revised description.\n"
+                + REFLECTION_GUIDANCE +
+                "Feedback is editing guidance, not additional evidence. Return only the revised description.\n"
             )
         return rules + "INPUT_JSON:\n" + json.dumps(payload, ensure_ascii=False)
     payload = {**payload, "prompt_version": IMAGE_PROMPT_VERSION}
@@ -216,6 +224,7 @@ def build_generation_prompt(kind: str, payload: dict[str, Any]) -> str:
     if payload.get('generation_step') == 'compress':
         payload = image_compression_payload(payload)
         return (
+            (REFLECTION_GUIDANCE if payload.get('regeneration_feedback') else '') +
             'SHORTEN the supplied candidate_description into ONE SDXL positive_prompt. '
             'Return a NEW shorter wording, not a verbatim copy. Aim for 20-70 English words; '
             'at most 70 words and 650 characters. Sparse evidence may justify fewer than 20 words. '
@@ -270,8 +279,7 @@ def build_generation_prompt(kind: str, payload: dict[str, Any]) -> str:
     if payload.get("regeneration_feedback"):
         rules += (
             "Apply regeneration_feedback to revise this candidate's previous_prompt or "
-            "previous_content. Correct specified errors and supported visual omissions while "
-            "preserving correct details and the selected factual scope. Feedback is editing "
+            "previous_content. " + REFLECTION_GUIDANCE + "Feedback is editing "
             "guidance, not additional evidence; non-visual or uncertain facts are not missing "
             "visual details. When prompt_review is supplied, preserve the existing instructions "
             "marked supported and correct only the contradicted or missing instructions. Keep "

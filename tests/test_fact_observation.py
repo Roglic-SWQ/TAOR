@@ -11,7 +11,7 @@ import pytest
 from mmkgc.adapters import GeneratedImageArtifact
 from mmkgc.adapters.qwen import QwenConfig, QwenLocalImagePromptGenerator, QwenLocalTextGenerator
 from mmkgc.data import EntityRecord
-from mmkgc.generation_prompts import QWEN_PROMPT_VERSION
+from mmkgc.generation_prompts import QWEN_PROMPT_VERSION, PROMPT_VERSION
 from mmkgc.io.writer import _stage_artifact
 from mmkgc.observation import bind_observation, repair_operations
 from mmkgc.pipeline import MMKGCPipeline, PreparedEntity, _merge_reflection_ranking, _needs_stage4_regeneration
@@ -310,15 +310,28 @@ def test_legacy_score_without_observation_is_explicitly_unassessed():
 
 
 @pytest.mark.parametrize("mode", ["text", "image"])
-def test_qwen_original_profile_receives_original_content_and_only_its_own_fact_edits(mode):
+@pytest.mark.parametrize('profile', [PROMPT_VERSION, QWEN_PROMPT_VERSION])
+def test_generation_profiles_receive_judge_feedback_and_only_local_edits(mode, profile):
+    from mmkgc.ranking.contracts import freeze_value
+    from mmkgc.generation_prompts import image_compression_payload
     record, _, knowledge, selection, reasoning, targets = setup(mode)
     candidate = observed_candidate(targets, mode=mode, status="contradicted")
     candidate["positive_prompt"] = "original prompt without red color"
-    feedback = build_stage3_feedback(ranked(candidate), attempt=1, generation={f"{mode}_candidates": [candidate]})
+    original = deepcopy(candidate)
+    advice = {'rubric_scores': {'entity_semantics': {'score': 2,
+        'reason': 'The visible color conflicts with this candidate source.', 'evidence': ['visible blue tower']}},
+        'repair_suggestions': [{'issue': 'color', 'evidence_refs': targets[1]['evidence_refs'],
+            'suggestion': 'Use the supplied red exterior; other presentation details are optional.'}],
+        'unverified_additions': [{'claim': 'Unknown construction date', 'evidence': [], 'reason': 'Not established.'}],
+        'rubric_diagnostics': [{'code': 'score_without_citation', 'dimension': 'semantic_coverage'}]}
+    candidate['judge_rubrics'] = freeze_value(advice)
+    feedback = build_stage3_feedback(ranked(candidate), attempt=1, generation={f"{mode}_candidates": [original]})
+    assert feedback['candidate_feedback'][0]['judge_feedback'] == advice
+    advice['repair_suggestions'][0]['suggestion'] = 'Mutated after feedback'
     if mode == "image":
         # This test exercises editing after an already decisive prompt review.
         feedback["candidate_feedback"][0]["repair_route"] = "edit_prompt"
-    config = QwenConfig("Qwen/Qwen2-VL-7B-Instruct", "http://localhost:1", "EMPTY", prompt_profile=QWEN_PROMPT_VERSION)
+    config = QwenConfig("Qwen/Qwen2-VL-7B-Instruct", "http://localhost:1", "EMPTY", prompt_profile=profile)
     captures = []
 
     class Text(QwenLocalTextGenerator):
@@ -338,6 +351,14 @@ def test_qwen_original_profile_receives_original_content_and_only_its_own_fact_e
     assert len(captures) == 1
     action = "replace"
     assert "original prompt without red color" in captures[0] and f'"action": "{action}"' in captures[0]
+    assert 'Use the supplied red exterior; other presentation details are optional.' in captures[0]
+    assert 'Unknown construction date' in captures[0]
+    assert 'score_without_citation' in captures[0]
+    assert 'Suggestions are optional editing advice' in captures[0]
+    assert 'not automatic deletion instructions' in captures[0]
+    payload = json.loads(captures[0].split('INPUT_JSON:\n')[-1]) if 'INPUT_JSON:\n' in captures[0] else None
+    if payload is not None:
+        assert image_compression_payload(payload)['regeneration_feedback']['judge_feedback'] == feedback['candidate_feedback'][0]['judge_feedback']
     # A global list of non-visual cautions can mention the architect, but it must
     # not become this candidate's source fact or an editing target.
     assert '"fact_id": "rf:0002"' not in captures[0]

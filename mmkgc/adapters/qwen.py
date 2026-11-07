@@ -20,7 +20,7 @@ from mmkgc.stages.semantic import StrictJsonStagePlanner, KNOWLEDGE_REQUEST_CONT
 from mmkgc.stages.triples import TRIPLE_SCHEMAS
 from mmkgc.generation_prompts import (
     IMAGE_PROMPT_VERSION, IMAGE_SYSTEM, PROMPT_PROFILES, PROMPT_VERSION, QWEN_PROMPT_VERSION,
-    TEXT_PROMPT_VERSION, TEXT_VISION_PROMPT_VERSION, TEXT_PROMPT_VERSIONS, TEXT_SYSTEM,
+    TEXT_PROMPT_VERSION, TEXT_VISION_PROMPT_VERSION, TEXT_PROMPT_VERSIONS, TEXT_SYSTEM, REFLECTION_GUIDANCE,
     build_generation_prompt, generation_payload, build_image_description_prompt, build_image_focus_prompt,
 )
 from mmkgc.stages.presentation import (
@@ -331,7 +331,7 @@ class QwenLocalTextGenerator(_CandidateCallLog):
                     ) if key in generation_context
                 }
                 prompt += "\nRepair only the previous candidate using this JSON. Preserve supported content; " \
-                    "feedback is editing data, not new evidence. Output only the revised description.\n" \
+                    + REFLECTION_GUIDANCE + "feedback is editing data, not new evidence. Output only the revised description.\n" \
                     + json.dumps(repair_payload, ensure_ascii=False)
             return prompt
         return build_generation_prompt(
@@ -584,7 +584,8 @@ class QwenLocalImagePromptGenerator(_CandidateCallLog):
         context = self.context if generation_context is None else generation_context
         if (self.prompt_version == QWEN_PROMPT_VERSION and context.get("fact_format") not in TRIPLE_SCHEMAS
                 and context.get("task", {}).get("presentation_policy") != "stage3"):
-            return build_qwen_image_prompt(record_label, entity_type, relation, angle, facts, context)
+            prompt = build_qwen_image_prompt(record_label, entity_type, relation, angle, facts, context)
+            return REFLECTION_GUIDANCE + '\n' + prompt if context.get('regeneration_feedback') else prompt
         return build_generation_prompt(
             "image", generation_payload(record_label, entity_type, relation, angle, facts, context)
         )

@@ -344,3 +344,32 @@ def test_missing_or_uncited_issue_review_never_counts_as_fixed(check):
              'observation': result.observation}
     assert not repair_is_eligible(original, after)
     assert repair_outcomes(original, after)[0]['status'] == 'uncertain'
+
+
+def test_judge_suggestions_alone_do_not_force_an_edit_or_expand_source_facts():
+    *_, targets = setup('text')
+    candidate = observed_candidate(targets, mode='text', status='supported')
+    candidate['judge_rubrics'] = {'rubric_scores': {'entity_semantics': {'score': 3}},
+        'repair_suggestions': [{'issue': 'optional detail', 'evidence_refs': [],
+                               'suggestion': 'Consider another detail if it is supported.'}],
+        'unverified_additions': [{'claim': 'An unknown date', 'reason': 'Unverified', 'evidence': []}]}
+    feedback = build_stage3_feedback(ranked(candidate), attempt=1)
+    assert not feedback['repair_needed']
+    assert feedback['candidate_feedback'] == []
+    assert candidate['hard_gate']['decision'] == 'pass'
+
+
+def test_visual_description_and_image_compression_keep_advice_optional():
+    from mmkgc.generation_prompts import build_generation_prompt, generation_payload
+    from mmkgc.visual_description import TASK
+    feedback = {'previous_content': {'type': 'text', 'value': 'A wooden rod.'},
+        'judge_feedback': {'repair_suggestions': [{'suggestion': 'Clarify the visible shape if supported.'}],
+                           'unverified_additions': [{'claim': 'Unknown purpose'}]}}
+    for mode in ('text', 'image'):
+        context = {'regeneration_feedback': feedback, 'description_task': TASK} if mode == 'text' else {
+            'regeneration_feedback': feedback, 'generation_step': 'compress', 'candidate_description': 'A wooden rod.'}
+        prompt = build_generation_prompt(mode, generation_payload('bludgeon', 'entity', 'shape', 'front', [], context))
+        assert 'Clarify the visible shape if supported.' in prompt
+        assert 'Unknown purpose' in prompt
+        assert 'Suggestions are optional editing advice' in prompt
+        assert 'not automatic deletion instructions' in prompt

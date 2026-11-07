@@ -10,7 +10,7 @@ from typing import Any
 
 OBSERVATION_VERSION = "fact_observation_v2"
 REPAIR_CONFIDENCE = 0.8
-REFLECTION_POLICY = "targeted_reflection_v3"
+REFLECTION_POLICY = "targeted_reflection_v4"
 CHECK_STATUSES = ("supported", "contradicted", "missing", "unverifiable", "uncertain")
 VERIFICATION_MODES = ("direct", "appearance_only", "unverifiable")
 SEMANTIC_ISSUE_ID = 'semantic:entity'
@@ -303,9 +303,10 @@ def candidate_repair_operations(candidate):
     refs = sorted({ref for item in candidate.get('verification_targets', []) for ref in item.get('evidence_refs', [])})
     evidence = list(rubric.get('evidence') or gate.get('evidence') or [])
     if gate.get('decision') == 'reject' and rubric.get('score') == 0 and refs and evidence:
+        issue = rubric.get('reason') or gate.get('reason') or '; '.join(evidence)
         operations.append({'action': 'reframe', 'check_id': SEMANTIC_ISSUE_ID,
-            'expected': 'Express the target entity meaning with concrete, source-supported semantic cues.',
-            'observed': rubric.get('reason') or gate.get('reason', ''),
+            'expected': 'Address this entity-semantic issue using the supplied sources: ' + issue,
+            'observed': issue,
             'evidence': evidence, 'evidence_refs': refs})
     return operations
 

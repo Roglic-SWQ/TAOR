@@ -137,11 +137,12 @@ def test_publication_keeps_optional_uncertainty_but_rejects_unresolved_claims():
     assert batch.publication_ready({}) is False
 
 
-def test_resume_checks_artifacts_before_skipping_completed_entity(tmp_path):
+@pytest.mark.parametrize('status', ['needs_review', 'no_usable_candidate'])
+def test_resume_checks_artifacts_before_skipping_completed_entity(tmp_path, status):
     entity = tmp_path/'entity'
     entity.mkdir()
     batch.save(entity/'final.json', {'ranking_status': 'completed'})
-    row = {'status': 'needs_review', 'entity_dir': str(entity),
+    row = {'status': status, 'entity_dir': str(entity),
            'artifact_sha256': {str(entity/'final.json'): batch.digest(entity/'final.json')}}
     assert batch.terminal(row, tmp_path)
     batch.save(entity/'final.json', {'ranking_status': 'tampered'})

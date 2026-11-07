@@ -43,11 +43,11 @@ def test_stage3_feedback_keeps_generation_problems_and_builds_repair_actions():
 
     assert feedback["target_modality"] == "text"
     assert feedback["hard_violations"] == ["unsupported_claim"]
-    assert feedback["soft_violations"] == ["low_relation_coverage"]
+    assert feedback["soft_violations"] == []
     assert "judge_service_error" not in feedback["hard_violations"]
     assert feedback["candidate_feedback"][0]["candidate_id"] == "text_001"
-    assert "remove claims that are not supported by graph evidence" in feedback["repair_actions"]
-    assert "increase coverage of the required relations" in feedback["repair_actions"]
+    assert "address the reported claim conflict using supplied source evidence" in feedback["repair_actions"]
+    assert not any('coverage' in action for action in feedback['repair_actions'])
     assert feedback["preserve"] == [
         "entity identity",
         "supported core attributes",
@@ -74,3 +74,12 @@ def test_stage4_system_failures_do_not_trigger_stage3_regeneration():
     assert feedback["hard_violations"] == []
     assert feedback["soft_violations"] == []
     assert _needs_stage4_regeneration(ranking, feedback) is False
+
+
+def test_coverage_only_legacy_feedback_does_not_force_regeneration():
+    ranking = _ranking_with_items([{'candidate_id': 'text_001', 'hard_gate': {
+        'hard_violations': ['missing_required_content'],
+        'soft_violations': ['low_relation_coverage']}}])
+    feedback = build_stage3_feedback(ranking, attempt=1)
+    assert feedback['candidate_feedback'] == []
+    assert not _needs_stage4_regeneration(ranking, feedback)

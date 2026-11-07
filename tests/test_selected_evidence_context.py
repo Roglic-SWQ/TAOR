@@ -123,6 +123,9 @@ def test_semantic_rejection_creates_one_scoped_prompt_review_task():
     assert feedback['repair_needed']
     operation = feedback['candidate_feedback'][0]['operations'][0]
     assert operation['action'] == 'reframe'
+    assert original['judge_rubrics']['rubric_scores']['entity_semantics']['reason'] in operation['expected']
+    assert 'Generic geometry does not depict the target entity.' in feedback['candidate_feedback'][0]['repair_actions'][0]
+    assert 'using supported fact:' not in feedback['candidate_feedback'][0]['repair_actions'][0]
     assert set(operation['evidence_refs']) == {r for t in original['verification_targets'] for r in t['evidence_refs']}
     def reviewer(candidate, operations):
         return {'observation': {'fact_checks': [{'check_id': 'semantic:entity', 'status': 'missing',

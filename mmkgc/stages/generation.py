@@ -13,7 +13,7 @@ from typing import Any
 from mmkgc.adapters import GeneratedImageArtifact, ImageGenerator, ImagePromptGenerator, TextGenerator
 from mmkgc.generation_prompts import PROMPT_VERSION, QWEN_PROMPT_VERSION
 from mmkgc.observation import (REPAIR_CONFIDENCE, REFLECTION_POLICY, observation_priority,
-                               repair_operations, removal_targets, candidate_repair_operations)
+                               repair_operations, removal_targets, candidate_repair_operations, _plain_metadata)
 from mmkgc.stages.candidate_planning import PLAN_SCHEMA, PLAN_SCHEMAS, LEGACY_PLAN_SCHEMA
 from mmkgc.plan_schema import FACT_SELECTION_SCHEMA
 from mmkgc.stages.triples import TRIPLE_SCHEMAS
@@ -43,11 +43,13 @@ _NON_STAGE3_VIOLATION_CODES = frozenset(
         "missing_image_artifact",
         "missing_image_input",
         "schema_invalid",
+        "low_relation_coverage",
+        "missing_required_content",
     }
 )
 
 _STAGE3_REPAIR_ACTIONS = {
-    "unsupported_claim": "remove claims that are not supported by graph evidence",
+    "unsupported_claim": "address the reported claim conflict using supplied source evidence",
     "unsupported_relation": "remove relations that are not supported by graph evidence",
     "unsupported_high_risk_fact": "remove unsupported high-risk facts",
     "forbidden_content": "remove forbidden or excluded content",
@@ -509,7 +511,7 @@ def _model_generation_context(
         "regeneration_feedback": {key: deepcopy(feedback[key]) for key in (
             "repair_actions", "preserve", "hard_violations", "soft_violations",
             "operations", "observation", "previous_content", "previous_prompt", "source_candidate_id",
-            "repair_route", "prompt_review",
+            "repair_route", "prompt_review", "judge_feedback",
         ) if key in feedback},
     }
 
@@ -1369,12 +1371,17 @@ def _fact_stage3_feedback(ranking: Mapping[str, Any], attempt: int, generation: 
                     if item["status"] == "supported" and item["confidence"] >= REPAIR_CONFIDENCE]
         actions = [
             (f"remove unsupported content: {item['observed']}" if item["action"] == "remove" else
+             f"revise the candidate to address: {item['observed']}" if item['action'] == 'reframe' else
              f"{item['action']} the content for {item['check_id']} using supported fact: {item['expected']}")
             for item in operations
         ]
+        rubric = candidate.get('judge_rubrics') or {}
         tasks.append({
             "candidate_id": candidate_id, "source_candidate_id": candidate_id, "modality": modality,
             "observation": deepcopy(observation), "operations": operations,
+            "judge_feedback": {key: _plain_metadata(rubric[key]) for key in (
+                'rubric_scores', 'repair_suggestions', 'unverified_additions', 'rubric_diagnostics',
+            ) if key in rubric},
             "previous_content": deepcopy(original.get("generated_content", {})),
             "previous_candidate": deepcopy(original),
             "previous_prompt": original.get("positive_prompt") or original.get("prompt_or_instruction", ""),
@@ -1471,7 +1478,7 @@ def _feedback_modality(candidate_feedback: list[dict[str, Any]]) -> str:
 
 def _feedback_facts(feedback: Mapping[str, Any]) -> list[str]:
     facts = [
-        "Regenerate safer candidates using only graph-supported facts.",
+        "Revise the candidate using the supplied source-supported facts.",
         "Preserve entity identity, supported core attributes, and selected relation roles.",
     ]
     actions = feedback.get("repair_actions", [])
@@ -1479,7 +1486,7 @@ def _feedback_facts(feedback: Mapping[str, Any]) -> list[str]:
         facts.append("Apply these Stage 3 repair actions: " + "; ".join(str(action) for action in actions))
     if feedback.get("operations"):
         facts.append("Candidate-specific repair data (not a source of new facts): " + json.dumps({
-            key: feedback[key] for key in ("operations", "previous_content", "previous_prompt", "preserve") if key in feedback
+            key: feedback[key] for key in ("operations", "previous_content", "previous_prompt", "preserve", "judge_feedback") if key in feedback
         }, ensure_ascii=False))
     return facts
 

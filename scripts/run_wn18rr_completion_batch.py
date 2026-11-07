@@ -394,10 +394,12 @@ def run(root, retry_failed=False):
                 row['export'] = export_best(entity, mode, root/'exports'/mode/(record.entity_key+suffix))
                 payload = result['relation_alternation_generation']['relation_alternation_generation']
                 row['generated_candidate_count'] = len(payload[mode+'_candidates'])
-                row['status'] = ('exported' if row['export'] else 'needs_review'
-                                 if row['generated_candidate_count'] else 'no_usable_candidate')
+                row['status'] = 'exported' if row['export'] else 'no_usable_candidate'
                 if row['ranking_status'] == 'evaluation_failed':
                     row['status'] = 'failed'
+                elif not row['export']:
+                    row['completion_reason'] = ('no_accepted_export' if row['generated_candidate_count']
+                                                else 'no_candidate_generated')
                 row['artifact_sha256'] = {str(p): digest(p) for p in entity.rglob('*') if p.is_file()}
             except Exception as exc:
                 row.update(status='failed', error_type=type(exc).__name__, error=str(exc))
