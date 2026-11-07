@@ -105,23 +105,26 @@ def reextract(record, previous, extractor):
     return knowledge,media,deadline
 
 
-def case(row,root,phase,shared_pipeline=None):
+def case(row,root,phase,shared_pipeline=None,model_config=None,selector_config=None):
     key=row['entity_key'];folder=root/phase/key;folder.mkdir(parents=True,exist_ok=False)
     store=build_dataset_store('wn18rr',DATASET,graph_split='train')
     record=store.build_record(row['entity_id'],'text')
     assert not record.description and not record.existing_modalities.get('text')
     previous,_=load_saved_run(row['source_entity_dir'],record,1,missing_mode='text')
     api=load_qwen_config(ROOT/'configs/gpt6-luna-visual-description.yaml')
-    config=(api if phase=='api' else load_qwen_config(ROOT/'configs/qwen7b-visual-description.yaml'))
+    config=(api if phase=='api' else load_qwen_config(model_config or ROOT/'configs/qwen7b-visual-description.yaml'))
+    selection_config=load_qwen_config(selector_config) if selector_config else api
     extractor=QwenLocalSemanticStagePlanner(config,timeout_seconds=120,knowledge_stage_timeout_seconds=180,
         dataset_root=DATASET,visual_verifier_config=api)
-    selector=OpenAICompatibleRelationPlanner(api,max_selected_facts=4,timeout_seconds=120)
+    selector=OpenAICompatibleRelationPlanner(selection_config,max_selected_facts=4,timeout_seconds=120)
     writer=RunWriter(folder,'run',{'description_task':TASK,'generation_model':config.model_name,
-        'selection_model':api.model_name,'stage4_model':api.model_name,'graph_split':'train',
+        'selection_model':selection_config.model_name,'stage4_model':api.model_name,'graph_split':'train',
         'graph_relations_in_description_input':False,'reused_admission_and_blind_captions':True,
         'ground_truth_used':False,'local_neural_scoring':phase!='api',
         'feature_source':'frozen_api_semantic_features' if phase=='writer' else 'rerun_extraction'})
-    summary={'entity_key':key,'label':record.label,'phase':phase,'status':'running'}
+    summary={'entity_key':key,'label':record.label,'phase':phase,'status':'running',
+        'feature_extraction_model':config.model_name,'selection_model':selection_config.model_name,
+        'writer_model':config.model_name,'pixel_verifier_model':api.model_name,'judge_model':api.model_name}
     try:
         if phase=='writer':
             frozen=read(root/'api'/key/'prepared.json')
@@ -188,6 +191,8 @@ def main():
     parser.add_argument('--prepare',action='store_true')
     parser.add_argument('--phase',choices=('api','native','writer'),default='api')
     parser.add_argument('--reuse-api-extraction',type=Path)
+    parser.add_argument('--model-config',type=Path,help='Override the native extractor and writer model')
+    parser.add_argument('--selector-model-config',type=Path,help='Override feature selection; pixel verifier and Judge stay independent')
     args=parser.parse_args();root=args.root.resolve()
     if args.prepare:
         freeze(root,args.reuse_api_extraction);return
@@ -195,20 +200,20 @@ def main():
     rows=read(root/'manifest.json');results=[]
     if args.phase=='api':
         with ThreadPoolExecutor(max_workers=2) as executor:
-            futures=[executor.submit(case,row,root,args.phase) for row in rows]
+            futures=[executor.submit(case,row,root,args.phase,None,args.model_config,args.selector_model_config) for row in rows]
             for future in as_completed(futures):
                 results.append(future.result());save(root/f'{args.phase}-summary.json',results)
     else:
         from mmkgc.defaults import build_default_mainline_runtime
         runtime=build_default_mainline_runtime(missing_mode='text',candidate_budget=1,
-            model_config=ROOT/'configs/qwen7b-visual-description.yaml',dataset_root=DATASET,
-            stage1_model_config=ROOT/'configs/qwen7b-visual-description.yaml',
-            stage2_model_config=ROOT/'configs/gpt6-luna-visual-description.yaml',
+            model_config=args.model_config or ROOT/'configs/qwen7b-visual-description.yaml',dataset_root=DATASET,
+            stage1_model_config=args.model_config or ROOT/'configs/qwen7b-visual-description.yaml',
+            stage2_model_config=args.selector_model_config or ROOT/'configs/gpt6-luna-visual-description.yaml',
             stage1_visual_verifier_config=ROOT/'configs/gpt6-luna-visual-description.yaml',
             stage1_reranker_model_dir='/medisco/linjiashi/models/Qwen/Qwen3-Reranker-4B',
             model_call_timeout_seconds=120,stage4_config=ROOT/'configs/stage4-gpt6-luna-gpu0.yaml')
         for row in rows:
-            results.append(case(row,root,args.phase,runtime.pipeline));save(root/f'{args.phase}-summary.json',results)
+            results.append(case(row,root,args.phase,runtime.pipeline,args.model_config,args.selector_model_config));save(root/f'{args.phase}-summary.json',results)
     validate(root)
 
 

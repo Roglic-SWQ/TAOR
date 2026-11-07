@@ -1,6 +1,39 @@
 # WN18RR 原生接入与 Qwen2-VL-7B／SDXL 冒烟
 
-## 2026-11-07：实体相关视觉语义重试（最新）
+## 2026-11-07：Qwen3.5-9B 单卡实测（最新）
+
+**9B 的提取、选择、写作与 Stage 4 已完成六例，但未通过扩大批量的质量验收。** 使用相同六个诊断实体及其 17 张原图；沿用历史准入和盲描述，其中 13 张准入原图实际进入 9B。不是重新执行全部预处理，也不是代表性随机样本。新提取、选择和写作不提供图谱断言或遮蔽目标文本。
+
+完整 BF16 权重位于 `/medisco/linjiashi/models/Qwen/Qwen3.5-9B`，从官方 ModelScope 仓库下载的 17 个文件均核对 SHA256，总计 19,329,394,438 字节。新环境 `/medisco/linjiashi/venvs/taor-qwen35` 使用 Torch 2.8.0、Transformers 5.3.0；原有 7B 环境保持原状。成功作业 `taor-qwen35-9b-1107-r4` 使用一张 A100 80GB，现已结束。试验服务为 Transformers／SDPA，关闭 thinking、贪心解码，输出上限 4096，应用层验证 JSON，未启用受约束解码器；请求中的 repetition_penalty 按实际参数执行。它与旧 7B 的后端、选择模型均有差异，不能作为只改变模型一个变量的准确率或速度对照。
+
+本轮由 **Qwen3.5-9B 看原图提取、选择特征并写作**，gpt-6-luna 进行独立像素复核和 Stage 4 Judge，沿用本地神经评分配置。初提取 24 项，现有像素／资格策略放行 15 项，9B 选择 13 项，生成 6 条文本；Stage 4 六例全部 pass、13 项检查均 supported，没有触发 Reflect。19 次真实生成调用（含一次纯文本预检）均正常结束，无空响应或 token 截断；其中六次提取实际传入原图，六次选择和六次写作均没有原图输入。未运行新 SDXL 出图，也未启动 100 实体或全量。
+
+| 实体 | 9B 最终文本内容与助手逐项复核 |
+| --- | --- |
+| piciform bird | 保留尖直喙和粗粒度羽色，不再加入停栖面；明确不能确认细粒度物种。仅作为样本特征使用 |
+| bludgeon | 保留长而刚性的圆柱外形、黑色及来源限制；黑色只属于部分来源实例，文字中 taxonomy 措辞仍冗余 |
+| screen | 保留框架、网孔、把手，未重现上轮玻璃格枚举；按具体来源视图使用，不泛化到所有 screen |
+| surface lift | 提取到缆线和支柱，但结构事实中夹带橙色下部，仍需复核相关性与抽象程度 |
+| mullah | 仍选入白胡须、头巾并生成描述；虽保留身份／角色未验证的限制，这些特征仍与角色语义无关，拒绝采用 |
+| liberator | 仍选入棕色眼睛和微笑；没有断言人物做过解放行为，但这些肖像细节与实体语义无关，拒绝采用 |
+
+助手逐项复核保留 3 条有使用限制的候选、1 条待复核、2 条因语义无关拒绝；这不是独立人工标注，也不是模型总体正确率。**像素上成立和选中事实被复述，不能证明这些事实与目标实体语义相关。** 9B 仍把角色人物的服饰／外观标成 entity_feature，Stage 4 也把它们作为已选事实放行；增加身份不确定性声明并不能解决相关性问题。
+
+另冻结同一份 9B 已复核特征，只替换 Stage 2 为 gpt-6-luna。API 选择 7 项，mullah、liberator 均返回 insufficient_evidence；棍棒仅保留结构，screen 保留网孔与框架。该对照**只重跑选择，没有重新写作**，不能称为另一个已经完成的混合生成闭环。surface lift 的橙色细节仍与支柱捆绑在同一事实中，API 选择也保留它，说明仅筛选事实 ID 无法去掉复合事实内部的非必要细节。
+
+现阶段可将 9B 作为提取／写作候选，继续保留独立语义筛选；不能把整条链路交给 9B 后直接扩大批量。还需让上游事实更易于抽象，并让评审独立判断实体相关性。
+
+结果根目录为 `outputs/wn18rr-qwen35-9b-20261107-r1/`：`reviewed/entity_descriptions.json` 保留全部真实文本、来源、逐项复核与旧版对照；`reviewed/summary.json` 为计数；`attempt-r3/` 为最终运行；`selection-control/` 为同事实选择对照。初次缺少共享盘挂载、字符串消息兼容失败、缺失 token 计数接口的记录分别保留，不并入最终语义质量计数。始终顺序申请单卡，只停止过本轮自己提交的未完成试验作业。相关 CPU 回归 39 项通过，另验证真实消息预处理、token 计数和实际文本生成接口。
+
+新增 `configs/qwen35-9b-visual-description.yaml`，试验入口可用 `--model-config`、`--selector-model-config` 指定原生提取／写作与筛选模型。冻结新的 root 并启动已关闭 thinking 的对应服务后，原生阶段使用：
+
+```bash
+python -m scripts.retry_entity_visual_description --root <新的冻结目录> --phase native \
+  --model-config configs/qwen35-9b-visual-description.yaml \
+  --selector-model-config configs/qwen35-9b-visual-description.yaml
+```
+
+## 2026-11-07：实体相关视觉语义重试（上一轮）
 
 目标改为保留图片中与实体有关的少量可见语义特征，不要求描述覆盖图谱关系，也不将每张图片的背景、衣着、姿态逐项列出。新增显式任务 `entity_visual_description_v1`，默认旧配置不变。
 
