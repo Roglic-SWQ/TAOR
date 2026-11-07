@@ -6,6 +6,7 @@ cd "${PROJECT_ROOT}"
 export PYTHONPATH="${PROJECT_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 TOKENIZERS_PARALLELISM=false
 export VLLM_WORKER_MULTIPROC_METHOD=spawn VLLM_NO_USAGE_STATS=1
+export VLLM_LOG_STATS_INTERVAL=1
 export OMP_NUM_THREADS=4 MKL_NUM_THREADS=4
 export NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost
 exec /medisco/linjiashi/venvs/taor-qwen35-batch/bin/python -m vllm.entrypoints.openai.api_server \
