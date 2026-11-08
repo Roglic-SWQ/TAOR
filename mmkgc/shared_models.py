@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from functools import wraps
+from pathlib import Path
 import threading
 
 
@@ -46,6 +47,16 @@ class SharedLocalModels:
         self._initialization = threading.Lock()
         self._gpu = threading.RLock()
         self._models = {}
+        self._datasets = {}
+
+    def dataset_store(self, name, root, *, graph_split):
+        """Share read-only source indexes; build_record returns owned records."""
+        from mmkgc.data import build_dataset_store
+        key = (name, str(Path(root).resolve()), graph_split)
+        with self._initialization:
+            if key not in self._datasets:
+                self._datasets[key] = build_dataset_store(name, root, graph_split=graph_split)
+            return self._datasets[key]
 
     def reranker(self, model_dir, **kwargs):
         from mmkgc.adapters.evidence_reranker import Qwen3EvidenceReranker

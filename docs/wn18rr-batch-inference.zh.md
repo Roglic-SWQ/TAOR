@@ -4,11 +4,11 @@
 
 ## 服务与调度
 
-`scripts/run_qwen35_batch_server.sh` 启动一套 Qwen3.5-9B 权重，使用 vLLM 连续批处理，默认最多 24 个运行中序列，可通过 `TAOR_QWEN_MAX_NUM_SEQS` 设置为 1～32。固定服务依赖见 `requirements-qwen35-batch.txt`。vLLM 的 [0.19.1 模型支持列表](https://docs.vllm.ai/en/v0.19.1/models/supported_models/)列出 Qwen3.5 多模态架构；支持列表不代替本机 GPU 验证。
+`scripts/run_qwen35_batch_server.sh` 启动一套 Qwen3.5-9B 权重，使用 vLLM 连续批处理，默认最多 24 个运行中序列，可通过 `TAOR_QWEN_MAX_NUM_SEQS` 设置为 1～256。固定服务依赖见 `requirements-qwen35-batch.txt`。vLLM 的 [0.19.1 模型支持列表](https://docs.vllm.ai/en/v0.19.1/models/supported_models/)列出 Qwen3.5 多模态架构；支持列表不代替本机 GPU 验证。
 
 原来的 Transformers 服务每次持有全局生成锁，多个 HTTP 请求只能排队；新入口用推理引擎的序列调度，不能仅凭 HTTP 线程数宣称批量推理生效。`scripts/check_qwen_batch_service.py` 检查同一组请求的串行／并发吞吐（可通过 `--concurrency` 设置请求数）、逐请求返回归属、finish_reason、token 计数，以及可选的真实图片输入；同时采样引擎 `num_requests_running`，验证实际模型调度存在重叠。
 
-`scripts/run_wn18rr_parallel_completion.py` 把实体分到可配置的互不重叠 checkpoint 分片（1～32 个），每片使用已有单实体流水线。各 worker 拥有独立的来源规划器、模型调用记录、实体状态、图片预算账本和输出目录。每个 worker 内只同时等待一个远程请求，实体 worker 数决定源审核／Judge 的并发上限；没有再乘以候选数展开请求。
+`scripts/run_wn18rr_parallel_completion.py` 把实体分到可配置的互不重叠 checkpoint 分片（1～256 个），每片使用已有单实体流水线。各 worker 拥有独立的来源规划器、模型调用记录、实体状态、图片预算账本和输出目录。每个 worker 内只同时等待一个远程请求，实体 worker 数决定源审核／Judge 的并发上限；没有再乘以候选数展开请求。
 
 Reranker、SDXL、SBERT、CLIP、BLIP 各只有一份本地权重，由 `SharedLocalModels` 保护本地调用。Reranker 的审计列表按线程保留，失败记录也归回原实体。每个 worker 使用独立的 Stage 4 引擎控制状态；共享的 Judge 客户端不保存候选历史。Qwen 服务与这些本地模型共用调度器分配的一张 GPU。
 
@@ -59,3 +59,13 @@ python -m scripts.run_wn18rr_parallel_completion --repartition \
 该操作获取任务独占锁；作业仍运行时拒绝改分片。只移动没有 checkpoint 的待运行实体，已完成与中断实体留在原 worker 中。原图、评分、状态、尝试编号、Stage 0～3 缓存和 SDXL 预算账本不变，已判无可用候选的实体也不因切换并发而重跑。旧 manifest、binding、配置和账本保存在 `repartition-history/`；新调度配置重新冻结并校验。只允许调度脚本变更，语义实现改变时拒绝沿用旧任务。
 
 随后以新的 GPU 作业继续原目录，并用 `--concurrency 24` 预检 Qwen 服务。模型显存预算仍为 45%，不因实体 worker 增多加载多份 SDXL；本地模型调用仍互斥，增加的并发主要覆盖远程 API 等待并提高 Qwen 请求批处理密度。吞吐提升以实测为准，不能按 worker 数线性推算。
+
+## 128／256 个实体并发实验
+
+实体分片容量、同时推进的实体数、远程 API 传输上限及 vLLM 运行序列数分别配置，不能把这些数字当成同一个吞吐指标。`--workers 256` 准备 256 个分片；全量目录的 `entity-concurrency.json` 用 `{"active_entities":128}` 或 `{"active_entities":256}` 控制实际实体准入。它是可调运行参数，不属于事实约束；原子替换后在实体边界生效，降低目标不会终止已有推理。`admission-status.json` 和 `concurrency-events.jsonl` 记录实际活动数、峰值及调整历史。
+
+高并发 worker 共用只读 WN18RR 索引；每次 `build_record` 仍创建实体自己的记录。事实、提示词、Judge／Reflection 以及导出规则保持原实现。单实体失败不占用永久准入槽。
+
+`OPENAI_MAX_REQUESTS_IN_FLIGHT=64` 对配置的远程 API 主机限制同时打开的请求，包含读取响应体；同步和异步客户端共用额度，排队仍受请求 timeout 约束。此限制不影响本机 Qwen 地址。`TAOR_QWEN_MAX_NUM_SEQS` 另行控制 vLLM 调度；`check_qwen_batch_service --concurrency 128 --serial-requests 4` 可用少量串行基线测试大量并发请求，报告分别列出请求数与真实引擎活动峰值。HTTP 等待中的请求不算模型同时执行。SDXL 等本地模型仍共享一份权重并互斥调用。
+
+是否采用 128 或 256 个实体，以同一运行中的有效导出速度、失败率、GPU 显存和进程内存为依据；远程 API 短请求压测不能替代真实闭环。

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import asdict
 import fcntl
@@ -320,11 +321,13 @@ def selection_control(root, failure_path):
         raise
 
 
-def run(root, retry_failed=False, *, shared_local_models=None, max_attempts=None):
+def run(root, retry_failed=False, *, shared_local_models=None, max_attempts=None, entity_admission=None):
     from mmkgc.defaults import build_default_mainline_runtime
     rows = validate(root)
     settings = read(root/'runtime-settings.json') if (root/'runtime-settings.json').exists() else {}
-    store = build_dataset_store('wn18rr', DATASET, graph_split='train')
+    store = (shared_local_models.dataset_store('wn18rr', DATASET, graph_split='train')
+             if shared_local_models is not None else
+             build_dataset_store('wn18rr', DATASET, graph_split='train'))
     for mode in ('image', 'text'):
         pending = []
         for item in (r for r in rows if r['missing_mode'] == mode):
@@ -351,80 +354,81 @@ def run(root, retry_failed=False, *, shared_local_models=None, max_attempts=None
         if mode == 'image':
             pipeline.image_generator = BudgetedImages(pipeline.image_generator, root/'sdxl-attempts.json')
         for item, state, previous in pending:
-            record = store.build_record(item['entity_id'], mode)
-            if mode == 'text':
-                assert not record.description and not record.existing_modalities.get('text')
-            else:
-                assert not record.image_paths and not record.existing_modalities.get('image')
-            number = int(previous.get('attempt', 0)) + 1
-            attempt = root/'attempts'/f"{mode}-{record.entity_key}"/f'{number:03d}'
-            attempt.mkdir(parents=True, exist_ok=False)
-            row = {**item, 'attempt': number, 'status': 'running', 'started_at': time.time(),
-                   'initial_entity_dir': previous.get('initial_entity_dir')}
-            save(state, row)
-            summarize(root, rows)
-            print(json.dumps({'event': 'entity_start', 'mode': mode, 'key': record.entity_key}), flush=True)
-            try:
-                if row['initial_entity_dir']:
-                    prepared, generation = load_saved_run(row['initial_entity_dir'], record,
-                        2 if mode == 'image' else 1, missing_mode=mode)
+            with entity_admission if entity_admission is not None else nullcontext():
+                record = store.build_record(item['entity_id'], mode)
+                if mode == 'text':
+                    assert not record.description and not record.existing_modalities.get('text')
                 else:
-                    prepared = pipeline.prepare(record, mode)
-                    save(attempt/'prepared.json', {'coarse': prepared.coarse, 'knowledge': prepared.knowledge,
-                         'selection': prepared.selection, 'reasoning': prepared.reasoning, 'model_calls': prepared.model_calls})
-                    generation = relation_alternation_generation(record, mode, prepared.knowledge,
-                        prepared.reasoning, prepared.selection, pipeline.text_generator,
-                        pipeline.image_prompt_generator, pipeline.image_generator, candidate_budget=1)
-                    if mode == 'image':
-                        # Persist the first actual PNG before attempting another draw.
-                        generation['relation_alternation_generation']['candidate_budget'] = 2
-                        first = persist_initial(pipeline, prepared, generation, attempt, 'first')
-                        row['initial_entity_dir'] = str(first)
+                    assert not record.image_paths and not record.existing_modalities.get('image')
+                number = int(previous.get('attempt', 0)) + 1
+                attempt = root/'attempts'/f"{mode}-{record.entity_key}"/f'{number:03d}'
+                attempt.mkdir(parents=True, exist_ok=False)
+                row = {**item, 'attempt': number, 'status': 'running', 'started_at': time.time(),
+                       'initial_entity_dir': previous.get('initial_entity_dir')}
+                save(state, row)
+                summarize(root, rows)
+                print(json.dumps({'event': 'entity_start', 'mode': mode, 'key': record.entity_key}), flush=True)
+                try:
+                    if row['initial_entity_dir']:
+                        prepared, generation = load_saved_run(row['initial_entity_dir'], record,
+                            2 if mode == 'image' else 1, missing_mode=mode)
+                    else:
+                        prepared = pipeline.prepare(record, mode)
+                        save(attempt/'prepared.json', {'coarse': prepared.coarse, 'knowledge': prepared.knowledge,
+                             'selection': prepared.selection, 'reasoning': prepared.reasoning, 'model_calls': prepared.model_calls})
+                        generation = relation_alternation_generation(record, mode, prepared.knowledge,
+                            prepared.reasoning, prepared.selection, pipeline.text_generator,
+                            pipeline.image_prompt_generator, pipeline.image_generator, candidate_budget=1)
+                        if mode == 'image':
+                            # Persist the first actual PNG before attempting another draw.
+                            generation['relation_alternation_generation']['candidate_budget'] = 2
+                            first = persist_initial(pipeline, prepared, generation, attempt, 'first')
+                            row['initial_entity_dir'] = str(first)
+                            save(state, row)
+                            generation = add_seed_variant(generation, record, pipeline.image_generator)
+                        initial = persist_initial(pipeline, prepared, generation, attempt, 'initial')
+                        row['initial_entity_dir'] = str(initial)
                         save(state, row)
-                        generation = add_seed_variant(generation, record, pipeline.image_generator)
-                    initial = persist_initial(pipeline, prepared, generation, attempt, 'initial')
-                    row['initial_entity_dir'] = str(initial)
-                    save(state, row)
-                result = pipeline.finish(prepared, generation_result=generation)
-                writer = RunWriter(attempt, 'evaluated', {'missing_mode': mode, 'scope': item['scope'],
-                    'generation_model': runtime.model_name, 'ground_truth_used': False,
-                    'initial_entity_dir': row['initial_entity_dir'], 'candidate_budget': 2 if mode == 'image' else 1})
-                writer.write_entity(result)
-                writer.write_summary()
-                entity = writer.entities_dir/record.entity_key
-                row['entity_dir'] = str(entity)
-                row['ranking_status'] = result['final']['ranking_status']
-                suffix = '.png' if mode == 'image' else '.txt'
-                row['export'] = export_best(entity, mode, root/'exports'/mode/(record.entity_key+suffix))
-                payload = result['relation_alternation_generation']['relation_alternation_generation']
-                row['generated_candidate_count'] = len(payload[mode+'_candidates'])
-                row['status'] = 'exported' if row['export'] else 'no_usable_candidate'
-                if row['ranking_status'] == 'evaluation_failed':
-                    row['status'] = 'failed'
-                    row['error_type'] = 'EvaluationFailure'
-                    row['evaluation_failures'] = result['kg_aware_candidate_consistency_ranking'].get('evaluation_failures', [])
-                    row['error'] = 'Evaluation or repair did not finish; retained candidates are recoverable.'
-                elif not row['export']:
-                    row['completion_reason'] = ('no_accepted_export' if row['generated_candidate_count']
-                                                else 'no_candidate_generated')
-                row['artifact_sha256'] = {str(p): digest(p) for p in entity.rglob('*') if p.is_file()}
-            except Exception as exc:
-                row.update(status='failed', error_type=type(exc).__name__, error=str(exc))
-                save(attempt/'failure.json', {'error_type': type(exc).__name__, 'error': str(exc),
-                    'partial_knowledge': getattr(exc, 'partial_knowledge', None),
-                    'model_call': getattr(exc, 'model_call', None),
-                    'calls': [call for component in (pipeline.semantic_planner, pipeline.knowledge_planner,
-                             pipeline.relation_planner, pipeline.evidence_reranker)
-                             for call in getattr(component, 'calls', [])]})
-            row['seconds'] = round(time.time()-row['started_at'], 3)
-            save(state, row)
-            summarize(root, rows)
-            print(json.dumps({'event': 'entity_end', 'mode': mode, 'key': record.entity_key,
-                              'status': row['status'], 'seconds': row['seconds']}), flush=True)
-            for component in (pipeline.semantic_planner, pipeline.knowledge_planner,
-                              pipeline.relation_planner, pipeline.evidence_reranker):
-                if isinstance(getattr(component, 'calls', None), list):
-                    component.calls.clear()
+                    result = pipeline.finish(prepared, generation_result=generation)
+                    writer = RunWriter(attempt, 'evaluated', {'missing_mode': mode, 'scope': item['scope'],
+                        'generation_model': runtime.model_name, 'ground_truth_used': False,
+                        'initial_entity_dir': row['initial_entity_dir'], 'candidate_budget': 2 if mode == 'image' else 1})
+                    writer.write_entity(result)
+                    writer.write_summary()
+                    entity = writer.entities_dir/record.entity_key
+                    row['entity_dir'] = str(entity)
+                    row['ranking_status'] = result['final']['ranking_status']
+                    suffix = '.png' if mode == 'image' else '.txt'
+                    row['export'] = export_best(entity, mode, root/'exports'/mode/(record.entity_key+suffix))
+                    payload = result['relation_alternation_generation']['relation_alternation_generation']
+                    row['generated_candidate_count'] = len(payload[mode+'_candidates'])
+                    row['status'] = 'exported' if row['export'] else 'no_usable_candidate'
+                    if row['ranking_status'] == 'evaluation_failed':
+                        row['status'] = 'failed'
+                        row['error_type'] = 'EvaluationFailure'
+                        row['evaluation_failures'] = result['kg_aware_candidate_consistency_ranking'].get('evaluation_failures', [])
+                        row['error'] = 'Evaluation or repair did not finish; retained candidates are recoverable.'
+                    elif not row['export']:
+                        row['completion_reason'] = ('no_accepted_export' if row['generated_candidate_count']
+                                                    else 'no_candidate_generated')
+                    row['artifact_sha256'] = {str(p): digest(p) for p in entity.rglob('*') if p.is_file()}
+                except Exception as exc:
+                    row.update(status='failed', error_type=type(exc).__name__, error=str(exc))
+                    save(attempt/'failure.json', {'error_type': type(exc).__name__, 'error': str(exc),
+                        'partial_knowledge': getattr(exc, 'partial_knowledge', None),
+                        'model_call': getattr(exc, 'model_call', None),
+                        'calls': [call for component in (pipeline.semantic_planner, pipeline.knowledge_planner,
+                                 pipeline.relation_planner, pipeline.evidence_reranker)
+                                 for call in getattr(component, 'calls', [])]})
+                row['seconds'] = round(time.time()-row['started_at'], 3)
+                save(state, row)
+                summarize(root, rows)
+                print(json.dumps({'event': 'entity_end', 'mode': mode, 'key': record.entity_key,
+                                  'status': row['status'], 'seconds': row['seconds']}), flush=True)
+                for component in (pipeline.semantic_planner, pipeline.knowledge_planner,
+                                  pipeline.relation_planner, pipeline.evidence_reranker):
+                    if isinstance(getattr(component, 'calls', None), list):
+                        component.calls.clear()
         del pipeline, runtime
         gc.collect()
         import torch

@@ -71,11 +71,53 @@ def load_proxy_exports(path):
     return found
 
 
-def pace_api_requests(host, interval_ms):
+def pace_api_requests(host, interval_ms, max_inflight=0):
     """Wrap real transports for this process/host; leave request/response data intact."""
     interval = max(0, float(interval_ms)) / 1000
+    maximum = int(max_inflight)
+    if maximum < 0:
+        raise ValueError('max_inflight must be nonnegative')
+    permits = threading.BoundedSemaphore(maximum) if maximum else None
     original_sync, original_async = request.urlopen, httpx.AsyncClient.request
     lock, next_start = threading.Lock(), [0.0]
+
+    class LeasedResponse:
+        def __init__(self, response):
+            self.response, self.released = response, False
+        def release(self):
+            if not self.released:
+                self.released = True
+                permits.release()
+        def __getattr__(self, name):
+            return getattr(self.response, name)
+        def __enter__(self):
+            try:
+                self.response.__enter__()
+            except BaseException:
+                self.release()
+                raise
+            return self
+        def __exit__(self, *args):
+            try:
+                return self.response.__exit__(*args)
+            finally:
+                self.release()
+        def read(self, *args, **kwargs):
+            try:
+                value = self.response.read(*args, **kwargs)
+                amount = args[0] if args else kwargs.get('amt', kwargs.get('size', -1))
+                if amount is None or amount < 0 or not value:
+                    self.release()
+                return value
+            except BaseException:
+                self.release()
+                raise
+        def close(self):
+            try:
+                return self.response.close()
+            finally:
+                self.release()
+
     def delay(url):
         if urlsplit(str(url)).hostname != host:
             return 0
@@ -85,15 +127,42 @@ def pace_api_requests(host, interval_ms):
             next_start[0] = start + interval
             return max(0, start-now)
     def sync(req, *args, **kwargs):
-        wait = delay(req.full_url if hasattr(req, 'full_url') else req)
-        if wait:
-            time.sleep(wait)
-        return original_sync(req, *args, **kwargs)
+        url = req.full_url if hasattr(req, 'full_url') else req
+        limited = permits is not None and urlsplit(str(url)).hostname == host
+        started = time.monotonic()
+        timeout = kwargs.get('timeout')
+        if limited:
+            if not permits.acquire(timeout=timeout if isinstance(timeout, (int, float)) else None):
+                raise TimeoutError('Remote API admission wait exceeded request timeout')
+        try:
+            wait = delay(url)
+            if wait:
+                time.sleep(wait)
+            if limited and isinstance(timeout, (int, float)):
+                remaining = timeout - (time.monotonic() - started)
+                if remaining <= 0:
+                    raise TimeoutError('Remote API admission wait exceeded request timeout')
+                kwargs['timeout'] = remaining
+            response = original_sync(req, *args, **kwargs)
+            return LeasedResponse(response) if limited else response
+        except BaseException:
+            if limited:
+                permits.release()
+            raise
     async def asynchronous(client, method, url, *args, **kwargs):
-        wait = delay(url)
-        if wait:
-            await asyncio.sleep(wait)
-        return await original_async(client, method, url, *args, **kwargs)
+        limited = permits is not None and urlsplit(str(url)).hostname == host
+        if limited:
+            # Polling is cancellation-safe across the per-worker event loops.
+            while not permits.acquire(blocking=False):
+                await asyncio.sleep(.01)
+        try:
+            wait = delay(url)
+            if wait:
+                await asyncio.sleep(wait)
+            return await original_async(client, method, url, *args, **kwargs)
+        finally:
+            if limited:
+                permits.release()
     request.urlopen, httpx.AsyncClient.request = sync, asynchronous
     def restore():
         request.urlopen, httpx.AsyncClient.request = original_sync, original_async

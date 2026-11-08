@@ -85,7 +85,7 @@ def test_worker_failures_do_not_lose_successes_and_retry_is_bounded(dataset, mon
     root = parallel.prepare(dataset / 'run', workers=2)
     invocations = []
 
-    def worker(shard, retry_failed=False, *, shared_local_models=None, max_attempts=None):
+    def worker(shard, retry_failed=False, *, shared_local_models=None, max_attempts=None, entity_admission=None):
         invocations.append((str(shard), retry_failed, max_attempts, id(shared_local_models)))
         rows = batch.read(shard / 'manifest.json')
         status = 'exported' if rows[0]['entity_key'] == '00000001' else 'failed'
@@ -146,8 +146,78 @@ def test_repartition_moves_only_pending_and_rejects_running_or_semantic_changes(
         parallel.repartition(root, workers=3)
 
 
-@pytest.mark.parametrize('workers', [0, 33, True, 2.0])
+@pytest.mark.parametrize('workers', [0, 257, True, 2.0])
 def test_invalid_worker_counts_fail_before_creating_run(dataset, workers):
     with pytest.raises(ValueError, match='workers must'):
         parallel.prepare(dataset / 'invalid', workers=workers)
     assert not (dataset / 'invalid').exists()
+
+
+def test_admission_resizes_without_interrupting_active_entities(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    import time
+    batch.save(tmp_path / 'entity-concurrency.json', {'active_entities': 1})
+    gate = parallel.EntityAdmission(tmp_path, 256)
+    entered = threading.Event()
+    with gate:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            def second():
+                with gate:
+                    entered.set()
+                    return gate.snapshot()['active']
+            future = pool.submit(second)
+            assert not entered.wait(.05)
+            batch.save(tmp_path / 'entity-concurrency.json', {'active_entities': 128})
+            gate._checked = 0
+            assert future.result(timeout=3) == 2
+    assert gate.snapshot()['active'] == 0
+    assert gate.snapshot()['target'] == 128
+    batch.save(tmp_path / 'entity-concurrency.json', {'active_entities': 256})
+    gate._checked = 0
+    assert gate.snapshot()['target'] == 256
+    batch.save(tmp_path / 'entity-concurrency.json', {'active_entities': 999})
+    gate._checked = 0
+    assert gate.snapshot()['target'] == 256
+    with pytest.raises(ValueError):
+        with gate:
+            raise ValueError('entity failed')
+    assert gate.snapshot()['active'] == 0
+
+
+def test_admission_actually_runs_128_then_256_without_restarting_threads(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    import time
+    batch.save(tmp_path / 'entity-concurrency.json', {'active_entities': 128})
+    gate = parallel.EntityAdmission(tmp_path, 256)
+    release = threading.Event()
+    def worker(_):
+        with gate:
+            assert release.wait(timeout=10)
+    def wait_active(target):
+        deadline = time.monotonic() + 5
+        while gate.snapshot()['active'] != target:
+            assert time.monotonic() < deadline
+            time.sleep(.01)
+    with ThreadPoolExecutor(max_workers=256) as pool:
+        futures = [pool.submit(worker, i) for i in range(256)]
+        try:
+            wait_active(128)
+            batch.save(tmp_path / 'entity-concurrency.json', {'active_entities': 256})
+            gate._checked = 0
+            wait_active(256)
+            assert gate.snapshot()['peak_active'] == 256
+        finally:
+            release.set()
+        for future in futures:
+            future.result(timeout=3)
+    assert gate.snapshot()['active'] == 0
+
+
+@pytest.mark.parametrize('concurrency,serial', [(0, None), (257, None), (128, 0), (128, 129)])
+def test_invalid_probe_load_fails_before_any_requests(tmp_path, concurrency, serial):
+    from scripts.check_qwen_batch_service import check
+    with pytest.raises(ValueError):
+        check(tmp_path / 'probe', concurrency=concurrency, serial_requests=serial)
+    assert not (tmp_path / 'probe').exists()

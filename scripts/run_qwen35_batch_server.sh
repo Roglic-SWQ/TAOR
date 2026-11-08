@@ -11,8 +11,8 @@ export VLLM_LOG_STATS_INTERVAL=1
 export OMP_NUM_THREADS=4 MKL_NUM_THREADS=4
 export NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost
 TAOR_QWEN_MAX_NUM_SEQS=${TAOR_QWEN_MAX_NUM_SEQS:-24}
-if [[ ! "${TAOR_QWEN_MAX_NUM_SEQS}" =~ ^[0-9]+$ ]] || ((TAOR_QWEN_MAX_NUM_SEQS < 1 || TAOR_QWEN_MAX_NUM_SEQS > 32)); then
-  echo 'TAOR_QWEN_MAX_NUM_SEQS must be in [1, 32]' >&2
+if [[ ! "${TAOR_QWEN_MAX_NUM_SEQS}" =~ ^[0-9]+$ ]] || ((TAOR_QWEN_MAX_NUM_SEQS < 1 || TAOR_QWEN_MAX_NUM_SEQS > 256)); then
+  echo 'TAOR_QWEN_MAX_NUM_SEQS must be in [1, 256]' >&2
   exit 2
 fi
 exec /medisco/linjiashi/venvs/taor-qwen35-batch/bin/python -m vllm.entrypoints.openai.api_server \

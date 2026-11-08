@@ -9,6 +9,20 @@ import pytest
 from mmkgc.shared_models import LockedLocalModel, SharedLocalModels
 
 
+def test_many_workers_share_one_dataset_index_without_duplicate_loads(monkeypatch, tmp_path):
+    from mmkgc import data
+    built = []
+    store = object()
+    def build(*args, **kwargs):
+        built.append((args, kwargs))
+        return store
+    monkeypatch.setattr(data, 'build_dataset_store', build)
+    shared = SharedLocalModels()
+    with ThreadPoolExecutor(max_workers=128) as pool:
+        results = list(pool.map(lambda _: shared.dataset_store('wn18rr', tmp_path, graph_split='train'), range(256)))
+    assert len(built) == 1
+    assert all(result is store for result in results)
+
 def test_concurrent_reranking_keeps_each_entities_audit_even_on_failure():
     barrier = threading.Barrier(10)
 

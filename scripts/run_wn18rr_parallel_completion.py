@@ -9,13 +9,62 @@ import json
 from pathlib import Path
 import random
 import shutil
+import threading
 import time
 
 from mmkgc.data import build_dataset_store
 from mmkgc.shared_models import SharedLocalModels
 from scripts import run_wn18rr_completion_batch as batch
 
-MAX_WORKERS = 32
+MAX_WORKERS = 256
+
+
+class EntityAdmission:
+    """Resize active entities between checkpoints without restarting models."""
+
+    def __init__(self, root, maximum):
+        self.root, self.maximum = Path(root), maximum
+        self._condition = threading.Condition()
+        self._active = self._peak = 0
+        self._target = maximum
+        self._checked = 0.0
+
+    def _limit(self):
+        now = time.monotonic()
+        if now - self._checked >= 1:
+            self._checked = now
+            path = self.root / 'entity-concurrency.json'
+            try:
+                target = batch.read(path)['active_entities'] if path.exists() else self.maximum
+                if type(target) is not int or not 1 <= target <= self.maximum:
+                    raise ValueError('active_entities outside prepared worker capacity')
+                if target != self._target:
+                    self._target = target
+                    with (self.root / 'concurrency-events.jsonl').open('a') as output:
+                        output.write(json.dumps({'time': time.time(), 'active_entities_target': target}) + '\n')
+            except (ValueError, KeyError, TypeError, OSError) as exc:
+                # A malformed manual edit retains the last valid setting.
+                with (self.root / 'concurrency-events.jsonl').open('a') as output:
+                    output.write(json.dumps({'time': time.time(), 'error_type': type(exc).__name__,
+                                             'retained_target': self._target}) + '\n')
+        return self._target
+
+    def __enter__(self):
+        with self._condition:
+            while self._active >= self._limit():
+                self._condition.wait(timeout=1)
+            self._active += 1
+            self._peak = max(self._peak, self._active)
+        return self
+
+    def __exit__(self, *args):
+        with self._condition:
+            self._active -= 1
+            self._condition.notify_all()
+
+    def snapshot(self):
+        with self._condition:
+            return {'target': self._limit(), 'active': self._active, 'peak_active': self._peak}
 
 
 def validate_workers(workers):
@@ -143,7 +192,9 @@ def repartition(root, *, workers):
         # Scheduling changes may resume saved work; semantic changes require a
         # separate run rather than silently rebinding the old implementation.
         allowed = {'scripts/run_wn18rr_parallel_completion.py',
-                   'scripts/run_qwen35_batch_server.sh', 'scripts/check_qwen_batch_service.py'}
+                   'scripts/run_qwen35_batch_server.sh', 'scripts/check_qwen_batch_service.py',
+                   'mmkgc/shared_models.py', 'scripts/run_wn18rr_completion_batch.py',
+                   'scripts/run_with_cluster_api.py', 'scripts/run_wn18rr_api_preflight.py'}
         previous = batch.read(root / 'binding.json')
         changed = {path for path in previous['sources'].keys() | binding['sources'].keys()
                    if previous['sources'].get(path) != binding['sources'].get(path)}
@@ -244,6 +295,7 @@ def run(root):
     config = batch.read(root / 'orchestration.json')
     validate_workers(config['workers'])
     shared = SharedLocalModels()
+    admission = EntityAdmission(root, config['workers'])
 
     def worker(shard):
         with (shard / '.worker.lock').open('a') as shard_lock:
@@ -254,11 +306,12 @@ def run(root):
                     previous.update(status='failed', error_type='InterruptedAttempt',
                                     error='Previous worker ended before completing this checkpoint')
                     batch.save(path, previous)
-            batch.run(shard, shared_local_models=shared, max_attempts=config['max_attempts'])
+            batch.run(shard, shared_local_models=shared, max_attempts=config['max_attempts'],
+                      entity_admission=admission)
             # One additional entity attempt for engineering failures. Accepted
             # and no-usable-candidate checkpoints are terminal; budgets persist.
             batch.run(shard, retry_failed=True, shared_local_models=shared,
-                      max_attempts=config['max_attempts'])
+                      max_attempts=config['max_attempts'], entity_admission=admission)
 
     with (root / '.worker.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -269,7 +322,10 @@ def run(root):
             while pending:
                 completed, pending = wait(pending, timeout=20, return_when=FIRST_COMPLETED)
                 summary = aggregate(root)
+                admission_status = admission.snapshot()
+                batch.save(root / 'admission-status.json', admission_status)
                 print(json.dumps({'event': 'parallel_progress', 'root': str(root), 'counts': summary['counts'],
+                                  'entity_admission': admission_status,
                                   'elapsed_seconds': round(time.monotonic()-started, 1)}), flush=True)
                 for future in completed:
                     # Infrastructure/source-binding errors end the run instead

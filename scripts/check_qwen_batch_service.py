@@ -14,9 +14,12 @@ import uuid
 from scripts.run_wn18rr_completion_batch import save
 
 
-def check(root, endpoint='http://127.0.0.1:12345', image_path=None, concurrency=10):
-    if type(concurrency) is not int or not 1 <= concurrency <= 32:
-        raise ValueError('concurrency must be in [1, 32]')
+def check(root, endpoint='http://127.0.0.1:12345', image_path=None, concurrency=10, serial_requests=None):
+    if type(concurrency) is not int or not 1 <= concurrency <= 256:
+        raise ValueError('concurrency must be in [1, 256]')
+    serial_requests = concurrency if serial_requests is None else serial_requests
+    if type(serial_requests) is not int or not 1 <= serial_requests <= concurrency:
+        raise ValueError('serial_requests must be in [1, concurrency]')
     root = Path(root)
     root.mkdir(parents=True, exist_ok=False)
     barrier = threading.Barrier(concurrency)
@@ -66,7 +69,7 @@ def check(root, endpoint='http://127.0.0.1:12345', image_path=None, concurrency=
     monitor.start()
     try:
         start = time.monotonic()
-        serial = [submit(index, False) for index in range(concurrency)]
+        serial = [submit(index, False) for index in range(serial_requests)]
         serial_seconds = time.monotonic()-start
         print(json.dumps({'event': 'qwen_serial_probe_done', 'seconds': serial_seconds}), flush=True)
         started = time.monotonic()
@@ -78,7 +81,7 @@ def check(root, endpoint='http://127.0.0.1:12345', image_path=None, concurrency=
         monitor.join(timeout=3)
         save(root / 'scheduler-metrics.json', samples)
     peak = max((sample['running'] for sample in samples), default=0)
-    report = {'requests': len(results), 'all_response_ids_matched': True,
+    report = {'requests': len(results), 'serial_requests': len(serial), 'all_response_ids_matched': True,
               'peak_engine_running_requests': peak, 'wall_seconds': parallel_seconds,
               'serial_seconds': serial_seconds, 'serial_results': serial,
               'serial_tokens_per_second': sum(row['completion_tokens'] for row in serial)/serial_seconds,
@@ -118,5 +121,6 @@ if __name__ == '__main__':
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--image', type=Path)
     parser.add_argument('--concurrency', type=int, default=10)
+    parser.add_argument('--serial-requests', type=int)
     args = parser.parse_args()
-    check(args.root, image_path=args.image, concurrency=args.concurrency)
+    check(args.root, image_path=args.image, concurrency=args.concurrency, serial_requests=args.serial_requests)

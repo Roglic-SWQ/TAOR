@@ -47,7 +47,8 @@ def main():
         print(json.dumps(status)); return
     if not args.module:
         parser.error('--module is required unless --check-only is set')
-    restore = pace_api_requests(status['api_host'], os.environ.get('OPENAI_MIN_REQUEST_INTERVAL_MS','0'))
+    restore = pace_api_requests(status['api_host'], os.environ.get('OPENAI_MIN_REQUEST_INTERVAL_MS','0'),
+                                os.environ.get('OPENAI_MAX_REQUESTS_IN_FLIGHT', '0'))
     previous = sys.argv
     module_args = args.module_args[1:] if args.module_args[:1] == ['--'] else args.module_args
     sys.argv = [args.module, *module_args]
