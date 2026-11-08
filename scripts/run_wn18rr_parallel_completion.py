@@ -183,9 +183,9 @@ def repartition(root, *, workers):
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         rows = batch.validate(root, check_sources=False)
         config = batch.read(root / 'orchestration.json')
-        old_shards = sorted((root / 'workers').iterdir())
-        if workers <= len(old_shards):
-            raise ValueError('Repartition requires more workers than the existing layout')
+        old_shards = sorted((root / 'workers').iterdir(), key=lambda path: int(path.name))
+        if workers < len(old_shards):
+            raise ValueError('Repartition cannot reduce the prepared worker capacity')
         if (root / 'finished.json').exists():
             raise ValueError('Completed runs do not need repartitioning')
         binding = source_binding()
@@ -300,12 +300,22 @@ def run(root):
     def worker(shard):
         with (shard / '.worker.lock').open('a') as shard_lock:
             fcntl.flock(shard_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            recovered = False
             for path in (shard / 'state').glob('*.json'):
                 previous = batch.read(path)
                 if previous.get('status') == 'running':
                     previous.update(status='failed', error_type='InterruptedAttempt',
+                                    interrupted_attempts=int(previous.get('interrupted_attempts', 0)) + 1,
                                     error='Previous worker ended before completing this checkpoint')
                     batch.save(path, previous)
+                    recovered = True
+                elif (previous.get('status') == 'failed' and previous.get('error_type') == 'InterruptedAttempt'
+                      and not previous.get('interrupted_attempts')):
+                    previous['interrupted_attempts'] = 1
+                    batch.save(path, previous)
+                    recovered = True
+            if recovered:
+                batch.summarize(shard, batch.read(shard / 'manifest.json'))
             batch.run(shard, shared_local_models=shared, max_attempts=config['max_attempts'],
                       entity_admission=admission)
             # One additional entity attempt for engineering failures. Accepted

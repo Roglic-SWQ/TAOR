@@ -69,3 +69,7 @@ python -m scripts.run_wn18rr_parallel_completion --repartition \
 `OPENAI_MAX_REQUESTS_IN_FLIGHT=64` 对配置的远程 API 主机限制同时打开的请求，包含读取响应体；同步和异步客户端共用额度，排队仍受请求 timeout 约束。此限制不影响本机 Qwen 地址。`TAOR_QWEN_MAX_NUM_SEQS` 另行控制 vLLM 调度；`check_qwen_batch_service --concurrency 128 --serial-requests 4` 可用少量串行基线测试大量并发请求，报告分别列出请求数与真实引擎活动峰值。HTTP 等待中的请求不算模型同时执行。SDXL 等本地模型仍共享一份权重并互斥调用。
 
 是否采用 128 或 256 个实体，以同一运行中的有效导出速度、失败率、GPU 显存和进程内存为依据；远程 API 短请求压测不能替代真实闭环。
+
+高并发作业必须显式设置 `OPENAI_MIN_REQUEST_INTERVAL_MS=0`；本地共用环境文件可能仍为其他顺序任务保留 `1000`。同时启用 64 路在途请求限制和每秒一次的启动限速，会把 API 请求排队计入调用时限，导致高并发下尚未发送就超时。保留在途上限即可，不能用这段受旧限速影响的运行估计模型吞吐。
+
+管理性停机不计作模型失败：`attempt` 仍记录不可覆盖的执行目录编号，`interrupted_attempts` 单独累计；两次工程失败上限使用两者之差。SDXL 三次实际出图预算不变，缓存继续恢复。停机重绑可使用原分片容量；编号超过 99 的分片按数字排序，状态和账本始终留在原 owner。恢复中断状态后先刷新分片汇总，避免等待实体准入时显示旧的 running 数量。

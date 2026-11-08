@@ -321,6 +321,11 @@ def selection_control(root, failure_path):
         raise
 
 
+def attempt_budget_used(row):
+    """Administrative stops retain execution history but are not model failures."""
+    return max(0, int(row.get('attempt', 0)) - int(row.get('interrupted_attempts', 0)))
+
+
 def run(root, retry_failed=False, *, shared_local_models=None, max_attempts=None, entity_admission=None):
     from mmkgc.defaults import build_default_mainline_runtime
     rows = validate(root)
@@ -336,7 +341,7 @@ def run(root, retry_failed=False, *, shared_local_models=None, max_attempts=None
             if terminal(previous, root) or (previous.get('status') == 'failed' and not retry_failed):
                 continue
             if (max_attempts is not None and previous.get('status') == 'failed'
-                    and int(previous.get('attempt', 0)) >= max_attempts):
+                    and attempt_budget_used(previous) >= max_attempts):
                 continue
             pending.append((item, state, previous))
         if not pending:
@@ -364,6 +369,7 @@ def run(root, retry_failed=False, *, shared_local_models=None, max_attempts=None
                 attempt = root/'attempts'/f"{mode}-{record.entity_key}"/f'{number:03d}'
                 attempt.mkdir(parents=True, exist_ok=False)
                 row = {**item, 'attempt': number, 'status': 'running', 'started_at': time.time(),
+                       'interrupted_attempts': int(previous.get('interrupted_attempts', 0)),
                        'initial_entity_dir': previous.get('initial_entity_dir')}
                 save(state, row)
                 summarize(root, rows)

@@ -221,3 +221,39 @@ def test_invalid_probe_load_fails_before_any_requests(tmp_path, concurrency, ser
     with pytest.raises(ValueError):
         check(tmp_path / 'probe', concurrency=concurrency, serial_requests=serial)
     assert not (tmp_path / 'probe').exists()
+
+
+def test_refreeze_preserves_owner_above_99_and_execution_history(dataset):
+    root = parallel.prepare(dataset / 'run', workers=128)
+    origin = root / 'workers/01'
+    owner = root / 'workers/100'
+    row = batch.read(origin / 'manifest.json')[0]
+    for shard, rows in [(origin, []), (owner, [row])]:
+        batch.save(shard / 'manifest.json', rows)
+        binding = batch.read(shard / 'binding.json')
+        batch.save(shard / 'binding.json', {**binding, 'manifest_sha256': batch.digest(shard / 'manifest.json')})
+    state = {**row, 'status': 'running', 'attempt': 2, 'initial_entity_dir': str(owner / 'saved')}
+    batch.save(owner / 'state/image-00000003.json', state)
+    parallel.repartition(root, workers=128)
+    assert batch.read(owner / 'manifest.json') == [row]
+    assert batch.read(owner / 'state/image-00000003.json') == state
+    assert batch.read(origin / 'manifest.json') == []
+
+
+def test_admin_interruption_preserves_cache_without_exhausting_failure_budget(dataset, monkeypatch):
+    root = parallel.prepare(dataset / 'run', workers=1)
+    shard = root / 'workers/00'
+    row = batch.read(shard / 'manifest.json')[0]
+    state = shard / 'state/image-00000001.json'
+    batch.save(state, {**row, 'status': 'running', 'attempt': 2, 'initial_entity_dir': 'unchanged-cache'})
+    seen = []
+    def execute(path, **kwargs):
+        saved = batch.read(state)
+        seen.append(saved)
+        assert saved['initial_entity_dir'] == 'unchanged-cache'
+        assert saved['interrupted_attempts'] == 1
+        assert batch.attempt_budget_used(saved) == 1
+    monkeypatch.setattr(batch, 'run', execute)
+    parallel.run(root)
+    assert len(seen) == 2
+    assert batch.attempt_budget_used({'attempt': 2}) == 2
