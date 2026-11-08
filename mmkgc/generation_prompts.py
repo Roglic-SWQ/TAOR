@@ -14,7 +14,7 @@ TEXT_PROMPT_VERSION = "entity_semantics_text_v5"
 TEXT_VISION_PROMPT_VERSION = "entity_semantics_text_with_images_v2"
 TEXT_PROMPT_VERSIONS = frozenset({TEXT_PROMPT_VERSION, TEXT_VISION_PROMPT_VERSION,
                                  'entity_semantics_text_v4', 'entity_semantics_text_with_images_v1', VISUAL_DESCRIPTION_TASK})
-IMAGE_PROMPT_VERSION = "entity_semantics_image_v9"
+IMAGE_PROMPT_VERSION = "entity_semantics_image_v10"
 QWEN_PROMPT_VERSION = "qwen7b_original_v1"
 PROMPT_PROFILES = (PROMPT_VERSION, QWEN_PROMPT_VERSION)
 
@@ -86,6 +86,8 @@ VISUAL_REALIZATION_RULE = (
     "For a word sense, a simple illustrative instance may make its action or property visible; "
     "keep it an illustration rather than an additional asserted fact. For named real-world entities, "
     "do not invent historical events, participants or comparisons; preserve those source limits. "
+    "For brief motion, an illustrative motion cue or sequence can communicate the action better "
+    "than a frozen close-up. Choose a useful rendering rather than insisting on photorealism. "
 )
 IMAGE_RULES = (
     "Create one English SDXL positive prompt for a coherent depiction centered on the target "
@@ -171,7 +173,44 @@ def generation_payload(
     return payload
 
 
+def lexical_image_view(payload: dict[str, Any]) -> dict[str, Any]:
+    """Render a dictionary sense from its definition, retaining original data in the caller."""
+    label = payload.get('entity', {}).get('label', '')
+    facts = payload.get('source_facts', [])
+    definitions = [f['object'] for f in facts if f.get('subject') == label
+                   and f.get('relation', '').casefold() == 'means' and f.get('object')]
+    prefix = label + ','
+    sources = payload.get('source_evidence', [])
+    if not definitions or not any(isinstance(s.get('content'), str)
+            and s['content'].casefold().startswith(prefix.casefold()) for s in sources):
+        return payload
+    view = deepcopy(payload)
+    meaning = '; '.join(dict.fromkeys(definitions))
+    view['entity'] = {'label': meaning, 'type': 'lexical sense'}
+    view.setdefault('identity_context', {})['core_identity'] = meaning
+    for fact in view['source_facts']:
+        if fact.get('direction') == 'in':
+            if fact.get('object') == label:
+                fact['object'] = 'the target sense'
+        elif fact.get('subject') == label:
+            fact['subject'] = 'the target sense'
+        for key in ('claim', 'evidence_triples', 'evidence_bundle'):
+            fact.pop(key, None)
+    for source in view['source_evidence']:
+        content = source.get('content')
+        if isinstance(content, str) and content.casefold().startswith(prefix.casefold()):
+            source['content'] = content[len(prefix):].lstrip()
+        elif source.get('modality') == 'graph':
+            source.pop('content', None)  # The structured selected edge is already present.
+    # Checks are evaluation metadata. Rendering still uses the selected fact IDs.
+    view['checks'] = []
+    view['context_only'] = []
+    return view
+
+
 def build_generation_prompt(kind: str, payload: dict[str, Any]) -> str:
+    if kind == 'image':
+        payload = lexical_image_view(payload)
     if kind == "text":
         if payload.get('description_task') == VISUAL_DESCRIPTION_TASK:
             from mmkgc.visual_description import FEATURE_RULES
@@ -308,6 +347,7 @@ def image_compression_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 def build_image_description_prompt(payload: dict[str, Any], error: str | None = None) -> str:
     """Select the next evidence-supported visual focus before SDXL compression."""
+    payload = lexical_image_view(payload)
     payload = deepcopy(payload)
     payload.update(prompt_version=IMAGE_PROMPT_VERSION, generation_step='describe')
     presentation = payload.get('presentation_context', {})
@@ -357,6 +397,7 @@ def build_image_description_prompt(payload: dict[str, Any], error: str | None = 
 
 def build_image_focus_prompt(payload: dict[str, Any], error: str | None = None) -> str:
     """Ask the model to select explicit evidence and rendering before writing prose."""
+    payload = lexical_image_view(payload)
     task = {key: deepcopy(payload[key]) for key in (
         'entity', 'source_facts', 'identity_context', 'presentation_context') if key in payload}
     presentation = task.get('presentation_context', {})
@@ -381,8 +422,10 @@ def build_image_focus_prompt(payload: dict[str, Any], error: str | None = None) 
         'difference_from_previous (one short concrete explanation, empty for the first image). '
         'rendering MUST be a JSON OBJECT with those five named keys, never a string or list. '
         'All five rendering values are concise strings that YOU choose for this entity; there is '
-        'NO preset sequence of shot sizes, views or styles. Unknown factual appearance, clothing, '
-        'locations and relationships must not be invented. Rendering choices may vary without '
+        'NO preset sequence of shot sizes, views or styles. For named real-world entities, unknown '
+        'factual appearance, clothing, locations and relationships must not be invented. For lexical '
+        'senses, simple unnamed illustrative actors or objects may enact the supplied meaning; '
+        'their rendering details are not properties of the word. Rendering choices may vary without '
         'adding factual scene content. If visible attributes are sparse, keep the supported subject '
         'and avoid arbitrary variation or an abstract or silhouette fallback. '
         'Read previous_focus_plans. A later image must offer a '

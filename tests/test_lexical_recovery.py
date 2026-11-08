@@ -42,6 +42,24 @@ def test_named_entity_background_guard_is_preserved():
         task.decode(raw)
 
 
+def test_image_writer_uses_the_definition_without_changing_archived_facts():
+    from mmkgc.generation_prompts import lexical_image_view
+    original = {'entity': {'label': 'sun', 'type': 'verb'}, 'identity_context': {'core_identity': 'sun'},
+        'source_facts': [{'fact_id': 'mf:1', 'subject': 'sun', 'relation': 'means',
+                         'object': 'expose to the rays of the sun', 'direction': 'out'}],
+        'source_evidence': [{'content': 'sun, expose to the rays of the sun', 'modality': 'text'}],
+        'checks': [{'claim': 'sun'}]}
+    before = deepcopy(original)
+    view = lexical_image_view(original)
+    assert original == before
+    assert view['entity']['label'] == 'expose to the rays of the sun'
+    assert view['source_facts'][0]['subject'] == 'the target sense'
+    assert view['source_facts'][0]['object'] == 'expose to the rays of the sun'
+    assert view['source_evidence'][0]['content'] == 'expose to the rays of the sun'
+    assert view['checks'] == []
+    assert lexical_image_view(view) == view
+
+
 @pytest.mark.parametrize('review_ready', [True, False])
 def test_empty_selection_gets_one_review_without_forcing_ready(monkeypatch, review_ready):
     from test_shared_fact_selection import source
