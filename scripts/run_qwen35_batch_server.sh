@@ -4,6 +4,7 @@ set -euo pipefail
 PROJECT_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "${PROJECT_ROOT}"
 export PYTHONPATH="${PROJECT_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
+export PATH="/medisco/linjiashi/venvs/taor-qwen35-batch/bin:${PATH}"
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 TOKENIZERS_PARALLELISM=false
 export VLLM_WORKER_MULTIPROC_METHOD=spawn VLLM_NO_USAGE_STATS=1
 export VLLM_LOG_STATS_INTERVAL=1

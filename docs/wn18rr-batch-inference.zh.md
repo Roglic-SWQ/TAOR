@@ -14,6 +14,8 @@ Reranker、SDXL、SBERT、CLIP、BLIP 各只有一份本地权重，由 `SharedL
 
 当前服务配置针对 A100 80GB：BF16、最长 24,576 token、十个序列、一次最多 8,192 个批处理 token，服务显存预算为整卡的 45%，为流水线本地模型保留空间。使用 eager 执行，图像编码器使用 Torch SDPA；全量补图的 Qwen 输入没有目标原图。服务仍接受原始图像，单独验证视觉输入；跳过最坏情况多图启动 profiling，实际视觉请求须符合预检和配置预算。
 
+批量服务使用独立虚拟环境，关闭 `include-system-site-packages`，避免继承其他 Torch 版本编译的 FlashAttention 扩展。启动脚本优先使用该环境中的工具；CUDA 运行库可通过只包含匹配版本库的目录复用，不加入旧环境的整个 site-packages。
+
 ## 恢复、复用与错误
 
 首轮之前冻结实体清单、源数据、配置和执行源码哈希。已完成结果只有在原始数据一致、原 checkpoint 哈希完整、真实 PNG 可解码且 Stage 4 已判通过时才复用；结果和原始阶段记录复制到新 run，保留来源路径，不覆盖旧任务。
