@@ -303,6 +303,18 @@ class MMKGCPipeline:
                     model_calls.extend(failed_model_calls)
                     image_model_calls.extend(failed_image_calls)
 
+        repair_failures = [dict(item) for item in stage3_feedback.get('skipped_repairs', [])
+                           if item.get('review_error_type')]
+        regeneration = ranking.get('stage3_regeneration') or {}
+        if regeneration.get('status') == 'failed':
+            repair_failures.append({key: regeneration.get(key) for key in ('error_type', 'error')})
+        if repair_failures:
+            ranking['repair_failures'] = repair_failures
+            modes = ('text', 'image') if missing_mode == 'both' else (missing_mode,)
+            if not any(ranking.get(mode + '_ranking', {}).get('best_candidate_id') for mode in modes):
+                ranking['ranking_status'] = 'evaluation_failed'
+                ranking.setdefault('evaluation_failures', []).append({
+                    'stage': 'reflection', 'reason': 'repair_failed', 'details': repair_failures})
         return {
             "entity": asdict(record),
             "coarse_relation_filtering": coarse,

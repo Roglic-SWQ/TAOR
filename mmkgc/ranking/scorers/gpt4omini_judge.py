@@ -904,6 +904,7 @@ class GPT4OMiniRankingJudge:
         response_schema: dict[str, Any] | None = None,
     ) -> str:
         attempts = self.max_retries + 1
+        transport_attempts = []
         for attempt in range(1, attempts + 1):
             started = time.monotonic()
             try:
@@ -923,6 +924,8 @@ class GPT4OMiniRankingJudge:
                     retryable=retryable,
                     will_retry=will_retry,
                 )
+                transport_attempts.append(deepcopy(getattr(exc, 'gpt4omini_judge_diagnostic', {})))
+                exc.judge_transport_attempts = list(transport_attempts)
                 if not will_retry:
                     raise
                 delay = self.retry_backoff_seconds
@@ -1353,6 +1356,11 @@ def _attach_judge_diagnostic(
     }
     if attempt is not None:
         diagnostic["attempt"] = attempt
+    if isinstance(exc, HTTPError):
+        diagnostic['http_status'] = exc.code
+        diagnostic['provider_error'] = deepcopy(getattr(exc, 'provider_error', {}))
+        if exc.headers:
+            diagnostic['server_request_id'] = exc.headers.get('x-request-id') or exc.headers.get('request-id')
     if max_attempts is not None:
         diagnostic["max_attempts"] = max_attempts
     if retryable is not None:

@@ -238,10 +238,19 @@ class _OpenAICompatibleCompletionClient:
             payload = self._open_json_with_timeout(req)
         except error.HTTPError as exc:
             if retryable_http_error(exc):
-                raise error.HTTPError(
+                failure = error.HTTPError(
                     endpoint, exc.code, "ranking judge service temporarily unavailable",
                     exc.headers, exc.fp,
-                ) from exc
+                )
+                raw = getattr(exc, '_mmkgc_error_body', b'')
+                try:
+                    detail = json.loads(raw).get('error', {})
+                except (ValueError, TypeError, AttributeError):
+                    detail = {}
+                failure.provider_error = {key: str(detail[key]).replace(self.config.api_key, '[REDACTED]')
+                    if self.config.api_key else str(detail[key]) for key in ('code', 'type', 'message', 'param')
+                    if isinstance(detail, dict) and key in detail}
+                raise failure from exc
             raise RuntimeError(f"GPT-4o mini ranking judge HTTP error: {exc.code}") from exc
         if not isinstance(payload, dict):
             raise CompletionResponseError("invalid_provider_response", {}, {})

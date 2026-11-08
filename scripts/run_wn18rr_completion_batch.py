@@ -401,6 +401,9 @@ def run(root, retry_failed=False, *, shared_local_models=None, max_attempts=None
                 row['status'] = 'exported' if row['export'] else 'no_usable_candidate'
                 if row['ranking_status'] == 'evaluation_failed':
                     row['status'] = 'failed'
+                    row['error_type'] = 'EvaluationFailure'
+                    row['evaluation_failures'] = result['kg_aware_candidate_consistency_ranking'].get('evaluation_failures', [])
+                    row['error'] = 'Evaluation or repair did not finish; retained candidates are recoverable.'
                 elif not row['export']:
                     row['completion_reason'] = ('no_accepted_export' if row['generated_candidate_count']
                                                 else 'no_candidate_generated')

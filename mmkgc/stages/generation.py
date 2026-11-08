@@ -476,6 +476,7 @@ def _model_generation_context(
     visual = knowledge.get("stage1_v3", {}).get("text_visual_profile", knowledge.get("text_visual_profile", {}))
     if modality == "image":
         identity["non_visual_facts"] = deepcopy(visual.get("non_visual_facts", []))
+        identity['source_context'] = deepcopy(knowledge.get('source_extraction', {}).get('context_triples', []))
     attributes = knowledge.get("stage1_v3", {}).get("key_attributes", [])
     visual_details = [
         {"detail": value["value"], "evidence_refs": [value["source_ref"]]}
@@ -1407,6 +1408,12 @@ def route_image_repairs(feedback: Mapping[str, Any], reviewer) -> tuple[dict[str
         if task["modality"] != "image":
             tasks.append(task)
             continue
+        if any(item.get('action') == 'reframe' for item in task.get('operations', [])):
+            # The image judge already supplied a grounded semantic defect.
+            # Send it to the writer directly instead of another approval gate.
+            task.update(repair_route='edit_prompt', repair_reason='judge_semantic_feedback')
+            tasks.append(task)
+            continue
         started = time.perf_counter()
         call = {"scorer": "gpt4omini_judge", "kind": "image_prompt_review", "candidate_id": task["candidate_id"],
                 "raw_score": None, "normalized_score": None}
@@ -1427,8 +1434,10 @@ def route_image_repairs(feedback: Mapping[str, Any], reviewer) -> tuple[dict[str
                 task["skip_reason"] = "prompt_assessment_uncertain"
         except Exception as exc:
             task.update(repair_route="skip", skip_reason="prompt_review_failed",
-                        review_error_type=type(exc).__name__, review_error=str(exc))
+                        review_error_type=type(exc).__name__, review_error=str(exc),
+                        transport_attempts=deepcopy(getattr(exc, 'judge_transport_attempts', [])))
             call.update(status="failed", details={"error_type": type(exc).__name__, "error": str(exc),
+                        'transport_attempts': deepcopy(getattr(exc, 'judge_transport_attempts', [])),
                         **getattr(exc, "details", {})})
         call["latency_ms"] = round((time.perf_counter() - started) * 1000)
         calls.append(call)

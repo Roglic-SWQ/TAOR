@@ -78,7 +78,8 @@ def merge_image_batches(inputs: dict[str, Any], batches: list[dict[str, Any]]) -
             'status': 'partial' if partial else 'applied', 'batches': reports,
             'accepted_triple_count': sum(any(ref in source_refs for ref in fact['evidence_refs']) for fact in result['relation_facts']),
             'rejected_triple_count': sum(report['rejected_triple_count'] for report in reports),
-            'excluded_triples': [item for report in reports for item in report.get('excluded_triples', [])]}
+            'excluded_triples': [item for report in reports for item in report.get('excluded_triples', [])],
+            'context_triples': [item for report in reports for item in report.get('context_triples', [])]}
         if partial and 'semantic_refinement' in result:
             result['semantic_refinement']['status'] = 'partial'
     return result

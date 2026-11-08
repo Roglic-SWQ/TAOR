@@ -12,9 +12,9 @@ from mmkgc.stages.triples import (
     triple_response_errors,
 )
 
-SCHEMA = "source_bound_text_triples_v2"
+SCHEMA = "source_bound_text_triples_v3"
 TARGET_REF = "__TARGET__"
-SOURCE_SCHEMAS = {"source_bound_text_triples_v1", SCHEMA}
+SOURCE_SCHEMAS = {"source_bound_text_triples_v1", "source_bound_text_triples_v2", SCHEMA}
 PATCH_KIND = "stage1_source_patch_v3"
 REVIEW_KIND = "stage1_source_review_v1"
 MAX_SOURCE_REVIEWS = 6
@@ -200,6 +200,19 @@ class SourceTextTask:
     evidence_id: str
     text: str
 
+    @property
+    def lexical_entry(self):
+        return self.text.lstrip().casefold().startswith(self.label.casefold() + ',')
+
+    def context_triples(self, response):
+        """Lexical usage keeps its original actors; it is not a target property."""
+        if not self.lexical_entry or not isinstance(response, dict):
+            return []
+        return [deepcopy(row) for row in response.get('extracted_triples', [])
+                if isinstance(row, dict) and set(row) == {'subject', 'relation', 'object'}
+                and all(isinstance(v, str) and v.strip() for v in row.values())
+                and not {row['subject'], row['object']} & {self.label, TARGET_REF}]
+
     def inputs(self):
         # The caller keeps the complete graph for merging. Only the text's
         # evidence ID belongs in the model's extraction request.
@@ -237,6 +250,10 @@ class SourceTextTask:
             "the floor being cleaned or infer that it is a brush. Preserve 'try', alternatives and "
             "other qualifications. A repeated spelling inside a definition may have a DIFFERENT "
             "sense and must not automatically become the target reference. "
+            "For lexical entries, usage examples may keep their ORIGINAL actors in subject and object, "
+            "even when the target word appears only as a predicate. These rows are retained as source "
+            "context, not defining properties of the word sense. Never replace an example's speaker, "
+            "patient or object with the target word merely to satisfy target anchoring. "
             "First resolve whether a source mention really denotes this target from the supplied text. "
             "For a clearly identified full name, alias or pronoun use the target reference rather than "
             "repeating that spelling. Do not treat a component song as the whole combined single, a "
@@ -247,7 +264,8 @@ class SourceTextTask:
             "For a target birthplace, use (__TARGET__, birthplace, London), not "
             "(London, birthplace, __TARGET__). For 'Qin annexed Zhejiang', use "
             "(Qin, annexed, __TARGET__) when Zhejiang is the target. "
-            "Extract only assertions DIRECTLY involving the target. A passage about Zhejiang may "
+            "For non-lexical sources, extract only assertions DIRECTLY involving the target. "
+            "For lexical entries keep defining assertions separate from original usage context. A passage about Zhejiang may "
             "mention Hangzhou and the Grand Canal: their relationship is background, so put it in "
             "excluded_triples using its ORIGINAL subject/relation/object plus a nonempty reason. "
             "Use that explicit outlet instead of forcing background facts into extracted_triples. "
@@ -321,8 +339,14 @@ class SourceTextTask:
         if protocol_errors:
             raise KnowledgeResponseValidationError(protocol_errors)
         errors = triple_response_errors(self.inputs(), canonical)
+        context_rows = self.context_triples(response)
+        context_indices = {i for i, row in enumerate(triples) if row in context_rows}
+        errors = [e for e in errors if not (e.get('code') == 'unrelated_triple'
+                  and e.get('path') in {f'/extracted_triples/{i}' for i in context_indices})]
         if errors:
             raise KnowledgeResponseValidationError(errors)
+        canonical['extracted_triples'] = [row for i, row in enumerate(canonical['extracted_triples'])
+                                           if i not in context_indices]
         return canonical
 
 
@@ -574,7 +598,10 @@ def source_extraction_report(task, response, inputs, patch_results=(), rejected=
                 for index, item in enumerate(response.get('excluded_triples', []))]
     return {'schema_version': 'source_extraction_report_v1',
             'status': 'partial' if rejected else 'applied', 'source_evidence_id': task.evidence_id,
-            'protocol_version': SCHEMA, 'accepted_triple_count': len(response['extracted_triples']),
+            'protocol_version': SCHEMA,
+            'accepted_triple_count': len(response['extracted_triples']) - len(task.context_triples(response)),
+            'context_triples': [{'triple': row, 'evidence_refs': [task.evidence_id],
+                                 'scope': 'lexical_source_context'} for row in task.context_triples(response)],
             'rejected_triple_count': len(rejected), 'rejected_triples': deepcopy(list(rejected)),
             'excluded_triples': excluded + [item for item in decisions if item['decision'] != 'target'],
             'review_decisions': decisions,

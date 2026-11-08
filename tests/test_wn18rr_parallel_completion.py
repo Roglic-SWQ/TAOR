@@ -73,6 +73,10 @@ def test_reuse_accepts_relative_paths_and_revalidates_persisted_results(dataset,
     assert [row['entity_key'] for row in pending] == ['00000003']
     assert batch.digest(current / 'exports/image/00000001.png') == batch.digest(image)
     assert batch.read(current / 'summary.json')['counts'] == {'exported': 1, 'pending': 1}
+    regenerated = parallel.prepare(dataset / 'regenerated', workers=2, reuse=['old/workers/00'],
+                                   regenerate_keys=['00000001'])
+    assert batch.read(regenerated / 'summary.json')['counts'] == {'pending': 2}
+    assert batch.digest(shard / 'exports/image/00000001.png') == batch.digest(image)
 
 
 def test_worker_failures_do_not_lose_successes_and_retry_is_bounded(dataset, monkeypatch):

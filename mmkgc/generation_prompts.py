@@ -14,7 +14,7 @@ TEXT_PROMPT_VERSION = "entity_semantics_text_v5"
 TEXT_VISION_PROMPT_VERSION = "entity_semantics_text_with_images_v2"
 TEXT_PROMPT_VERSIONS = frozenset({TEXT_PROMPT_VERSION, TEXT_VISION_PROMPT_VERSION,
                                  'entity_semantics_text_v4', 'entity_semantics_text_with_images_v1', VISUAL_DESCRIPTION_TASK})
-IMAGE_PROMPT_VERSION = "entity_semantics_image_v8"
+IMAGE_PROMPT_VERSION = "entity_semantics_image_v9"
 QWEN_PROMPT_VERSION = "qwen7b_original_v1"
 PROMPT_PROFILES = (PROMPT_VERSION, QWEN_PROMPT_VERSION)
 
@@ -76,9 +76,16 @@ TEXT_RULES = (
     "internal IDs or explanations of your process.\n"
 )
 VISUAL_REALIZATION_RULE = (
-    "Do not invent extra participants or a comparison scene to visualize an abstract relation or "
-    "superlative. Without source evidence for that visual realization, omit it from the depicted "
-    "scene and keep it as non-visual identity context. "
+    "For lexical entities preserve the supplied word SENSE throughout the visual plan. A verb or "
+    "action definition describes an activity, not an object with the same spelling. Choose concrete "
+    "visible activity or structure that conveys that meaning, using source examples when helpful. "
+    "Usage examples in identity_context.source_context keep their original actors and are illustrative "
+    "context, not universal target properties. Ordinary rendering or illustrative choices need not be "
+    "additional facts about the target. Mere typography, generic shapes, light or an unrelated object "
+    "whose composition draws attention do not by themselves realize a different word sense. "
+    "For a word sense, a simple illustrative instance may make its action or property visible; "
+    "keep it an illustration rather than an additional asserted fact. For named real-world entities, "
+    "do not invent historical events, participants or comparisons; preserve those source limits. "
 )
 IMAGE_RULES = (
     "Create one English SDXL positive prompt for a coherent depiction centered on the target "

@@ -22,6 +22,7 @@ from mmkgc.stages.candidate_planning import (
     apply_candidate_plans, parse_candidate_response,
     FACT_SELECTION_SCHEMA, FACT_SELECTION_PROMPT_VERSION,
     fact_selection_prompt, fact_selection_schema, apply_fact_selection,
+    planning_facts,
 )
 from mmkgc.adapters.fact_selection_repair import (
     REPAIR_VERSION as FACT_SELECTION_REPAIR_VERSION, build_fact_selection_repair,
@@ -346,6 +347,25 @@ class OpenAICompatibleRelationPlanner:
                 call["contract_repair_retries"] = attempt
                 response = self._complete_with_retries(
                     request_messages, schema, call, attempt, started + self.stage_timeout_seconds)
+                if shared and planning_facts(knowledge) and not call.get('empty_selection_review'):
+                    try:
+                        empty = parse_candidate_response(response) == {
+                            'status': 'insufficient_evidence', 'selected_fact_ids': []}
+                    except (ValueError, TypeError):
+                        empty = False
+                    if empty:
+                        review_prompt = (
+                            'Reconsider this empty selection once using the original supplied sources. '
+                            'A supported word-sense definition or meaningful relation may support an '
+                            'illustrative image without established physical appearance. Select useful supplied '
+                            'fact IDs when supported; retain insufficient_evidence if the meaning really remains '
+                            'unsupported. Do not invent facts or fill a quota. Return the same JSON contract.')
+                        call['empty_selection_review'] = {'initial_response': response, 'prompt': review_prompt}
+                        response = self._complete_with_retries(
+                            [*messages, {'role': 'assistant', 'content': response},
+                             {'role': 'user', 'content': review_prompt}], schema, call, attempt,
+                            started + self.stage_timeout_seconds)
+                        call['empty_selection_review']['response_text'] = response
                 call["response_text"] = response
                 parsed = None
                 try:

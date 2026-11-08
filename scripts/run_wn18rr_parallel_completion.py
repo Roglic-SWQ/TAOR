@@ -30,7 +30,7 @@ def source_binding():
     return {'dataset_root': str(batch.DATASET), 'files': files, 'sources': sources}
 
 
-def prepare(root, *, workers=10, keys=None, limit=None, seed=20261108, reuse=()):
+def prepare(root, *, workers=10, keys=None, limit=None, seed=20261108, reuse=(), regenerate_keys=()):
     if type(workers) is not int or not 1 <= workers <= 10:
         raise ValueError('workers must be in [1, 10]')
     root = Path(root).resolve()
@@ -60,6 +60,9 @@ def prepare(root, *, workers=10, keys=None, limit=None, seed=20261108, reuse=())
                 'model_call_timeout_seconds': 120}
     binding = source_binding()
     wanted = {row['entity_key'] for row in rows}
+    regenerate = set(regenerate_keys)
+    if not regenerate <= wanted:
+        raise ValueError('Regeneration keys must belong to the chosen missing-image scope')
     reused = {}
     for previous_root in (Path(path).resolve() for path in reuse):
         batch.validate(previous_root, check_sources=False)
@@ -70,7 +73,7 @@ def prepare(root, *, workers=10, keys=None, limit=None, seed=20261108, reuse=())
         for path in sorted((previous_root / 'state').glob('image-*.json')):
             previous = batch.read(path)
             key = previous['entity_key']
-            if key not in wanted or key in reused or previous.get('status') != 'exported':
+            if key not in wanted or key in regenerate or key in reused or previous.get('status') != 'exported':
                 continue
             batch.terminal(previous, previous_root)
             source = Path(previous['entity_dir'])
@@ -100,6 +103,9 @@ def prepare(root, *, workers=10, keys=None, limit=None, seed=20261108, reuse=())
                'source_split': 'train', 'scope_uses_test_head_and_tail': True,
                'missing_image_population': len(missing), 'entities': len(rows),
                'reused_entities': len(reused), 'pending_entities': len(pending)})
+    if regenerate:
+        config = batch.read(root / 'orchestration.json')
+        batch.save(root / 'orchestration.json', {**config, 'regenerate_keys': sorted(regenerate)})
     batch.save(root / 'binding.json', {**binding, 'manifest_sha256': batch.digest(root / 'manifest.json'),
                'files': {**binding['files'], str(root / 'orchestration.json'): batch.digest(root / 'orchestration.json'),
                          str(root / 'reused.json'): batch.digest(root / 'reused.json'),
@@ -183,9 +189,11 @@ def main():
     parser.add_argument('--limit', type=int)
     parser.add_argument('--keys', nargs='+')
     parser.add_argument('--reuse', type=Path, action='append', default=[])
+    parser.add_argument('--regenerate-keys', nargs='+', default=[])
     args = parser.parse_args()
     if args.prepare:
-        prepare(args.root, workers=args.workers, keys=args.keys, limit=args.limit, reuse=args.reuse)
+        prepare(args.root, workers=args.workers, keys=args.keys, limit=args.limit, reuse=args.reuse,
+                regenerate_keys=args.regenerate_keys)
         print(json.dumps({'prepared': str(args.root)}), flush=True)
     else:
         run(args.root)
