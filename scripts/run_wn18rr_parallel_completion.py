@@ -15,6 +15,13 @@ from mmkgc.data import build_dataset_store
 from mmkgc.shared_models import SharedLocalModels
 from scripts import run_wn18rr_completion_batch as batch
 
+MAX_WORKERS = 32
+
+
+def validate_workers(workers):
+    if type(workers) is not int or not 1 <= workers <= MAX_WORKERS:
+        raise ValueError(f'workers must be in [1, {MAX_WORKERS}]')
+
 
 def source_binding():
     files = {str(batch.DATASET / name): batch.digest(batch.DATASET / name) for name in
@@ -31,8 +38,7 @@ def source_binding():
 
 
 def prepare(root, *, workers=10, keys=None, limit=None, seed=20261108, reuse=(), regenerate_keys=()):
-    if type(workers) is not int or not 1 <= workers <= 10:
-        raise ValueError('workers must be in [1, 10]')
+    validate_workers(workers)
     root = Path(root).resolve()
     root.mkdir(parents=True, exist_ok=False)
     store = build_dataset_store('wn18rr', batch.DATASET, graph_split='train')
@@ -115,6 +121,98 @@ def prepare(root, *, workers=10, keys=None, limit=None, seed=20261108, reuse=(),
     return root
 
 
+def repartition(root, *, workers):
+    """Increase concurrency offline; completed and interrupted work stays in place.
+
+    Only entities without checkpoints move. Existing attempt directories, image
+    ledgers, failure counters and saved Stage 0–3 inputs remain with their owner.
+    Archive old manifests/bindings before freezing the new scheduling layout.
+    """
+    validate_workers(workers)
+    root = Path(root).resolve()
+    with (root / '.worker.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        rows = batch.validate(root, check_sources=False)
+        config = batch.read(root / 'orchestration.json')
+        old_shards = sorted((root / 'workers').iterdir())
+        if workers <= len(old_shards):
+            raise ValueError('Repartition requires more workers than the existing layout')
+        if (root / 'finished.json').exists():
+            raise ValueError('Completed runs do not need repartitioning')
+        binding = source_binding()
+        # Scheduling changes may resume saved work; semantic changes require a
+        # separate run rather than silently rebinding the old implementation.
+        allowed = {'scripts/run_wn18rr_parallel_completion.py',
+                   'scripts/run_qwen35_batch_server.sh', 'scripts/check_qwen_batch_service.py'}
+        previous = batch.read(root / 'binding.json')
+        changed = {path for path in previous['sources'].keys() | binding['sources'].keys()
+                   if previous['sources'].get(path) != binding['sources'].get(path)}
+        if changed - allowed:
+            raise ValueError('Cannot repartition across semantic implementation changes')
+        shards = [root / 'workers' / f'{index:02d}' for index in range(workers)]
+        assigned = [[] for _ in shards]
+        loads = [0 for _ in shards]
+        pending = []
+        seen = set()
+        archive = root / 'repartition-history' / str(time.time_ns())
+        archive.mkdir(parents=True, exist_ok=False)
+        for name in ['manifest.json', 'binding.json', 'orchestration.json', 'summary.json']:
+            shutil.copy2(root / name, archive / name)
+        settings = batch.read(old_shards[0] / 'runtime-settings.json')
+        for index, shard in enumerate(old_shards):
+            manifest = batch.validate(shard, check_sources=False)
+            if batch.read(shard / 'runtime-settings.json') != settings:
+                raise ValueError('Worker settings differ; cannot redistribute pending work')
+            backup = archive / 'workers' / shard.name
+            backup.mkdir(parents=True)
+            for name in ['manifest.json', 'binding.json', 'runtime-settings.json', 'sdxl-attempts.json']:
+                if (shard / name).exists():
+                    shutil.copy2(shard / name, backup / name)
+            for row in manifest:
+                key = row['entity_key']
+                if key in seen:
+                    raise ValueError('Entity occurs in more than one shard')
+                seen.add(key)
+                state = shard / 'state' / f"{row['missing_mode']}-{key}.json"
+                if state.exists():
+                    saved = batch.read(state)
+                    done = batch.terminal(saved, shard)
+                    assigned[index].append(row)
+                    if not done:
+                        loads[index] += 1
+                else:
+                    pending.append(row)
+        reused = {row['entity_key'] for row in batch.read(root / 'reused.json')}
+        if seen & reused or seen | reused != {row['entity_key'] for row in rows}:
+            raise ValueError('Existing shard scope differs from the global manifest')
+        for row in pending:
+            index = min(range(workers), key=lambda i: (loads[i], i))
+            assigned[index].append(row)
+            loads[index] += 1
+        # All checks above are read-only apart from the audit archive. The job
+        # remains stopped until this function finishes and validates the layout.
+        for shard, manifest in zip(shards, assigned):
+            batch.save(shard / 'runtime-settings.json', settings)
+            batch.save(shard / 'manifest.json', manifest)
+            batch.save(shard / 'binding.json', {**binding, 'files': {
+                **binding['files'], str(shard / 'runtime-settings.json'): batch.digest(shard / 'runtime-settings.json')},
+                'manifest_sha256': batch.digest(shard / 'manifest.json')})
+            batch.summarize(shard, manifest)
+        batch.save(root / 'orchestration.json', {**config, 'workers': workers,
+                   'resumed_from_workers': len(old_shards)})
+        batch.save(root / 'binding.json', {**previous, 'sources': binding['sources'],
+                   'files': {**previous['files'],
+                       str(root / 'orchestration.json'): batch.digest(root / 'orchestration.json')}})
+        batch.validate(root)
+        for shard in shards:
+            batch.validate(shard)
+        summary = aggregate(root)
+        batch.save(archive / 'completed.json', {'workers_before': len(old_shards),
+                   'workers_after': workers, 'moved_pending_entities': len(pending),
+                   'counts': summary['counts'], 'changed_sources': sorted(changed)})
+        return summary
+
+
 def aggregate(root):
     root = Path(root)
     reused = batch.read(root / 'reused.json')
@@ -144,6 +242,7 @@ def run(root):
     root = Path(root).resolve()
     batch.validate(root)
     config = batch.read(root / 'orchestration.json')
+    validate_workers(config['workers'])
     shared = SharedLocalModels()
 
     def worker(shard):
@@ -190,8 +289,15 @@ def main():
     parser.add_argument('--keys', nargs='+')
     parser.add_argument('--reuse', type=Path, action='append', default=[])
     parser.add_argument('--regenerate-keys', nargs='+', default=[])
+    parser.add_argument('--repartition', action='store_true',
+                        help='Increase workers on a stopped run without repeating completed entities')
     args = parser.parse_args()
-    if args.prepare:
+    if args.prepare and args.repartition:
+        parser.error('--prepare and --repartition are mutually exclusive')
+    if args.repartition:
+        summary = repartition(args.root, workers=args.workers)
+        print(json.dumps({key: value for key, value in summary.items() if key != 'rows'}), flush=True)
+    elif args.prepare:
         prepare(args.root, workers=args.workers, keys=args.keys, limit=args.limit, reuse=args.reuse,
                 regenerate_keys=args.regenerate_keys)
         print(json.dumps({'prepared': str(args.root)}), flush=True)

@@ -14,10 +14,12 @@ import uuid
 from scripts.run_wn18rr_completion_batch import save
 
 
-def check(root, endpoint='http://127.0.0.1:12345', image_path=None):
+def check(root, endpoint='http://127.0.0.1:12345', image_path=None, concurrency=10):
+    if type(concurrency) is not int or not 1 <= concurrency <= 32:
+        raise ValueError('concurrency must be in [1, 32]')
     root = Path(root)
     root.mkdir(parents=True, exist_ok=False)
-    barrier = threading.Barrier(10)
+    barrier = threading.Barrier(concurrency)
     finished = threading.Event()
     samples = []
 
@@ -64,12 +66,12 @@ def check(root, endpoint='http://127.0.0.1:12345', image_path=None):
     monitor.start()
     try:
         start = time.monotonic()
-        serial = [submit(index, False) for index in range(10)]
+        serial = [submit(index, False) for index in range(concurrency)]
         serial_seconds = time.monotonic()-start
         print(json.dumps({'event': 'qwen_serial_probe_done', 'seconds': serial_seconds}), flush=True)
         started = time.monotonic()
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            results = list(executor.map(submit, range(10)))
+        with ThreadPoolExecutor(max_workers=concurrency) as executor:
+            results = list(executor.map(submit, range(concurrency)))
         parallel_seconds = time.monotonic()-started
     finally:
         finished.set()
@@ -83,7 +85,7 @@ def check(root, endpoint='http://127.0.0.1:12345', image_path=None):
               'parallel_tokens_per_second': sum(row['completion_tokens'] for row in results)/parallel_seconds,
               'results': results}
     save(root / 'summary.json', report)
-    assert peak >= 2, 'HTTP concurrency alone does not prove batched model inference'
+    assert peak >= min(concurrency, 4), 'HTTP concurrency alone does not prove batched model inference'
     tokenize_request = request.Request(endpoint + '/tokenize', data=json.dumps({
         'model': 'Qwen/Qwen3.5-9B', 'messages': [{'role': 'user', 'content': 'Hello'}]}).encode(),
         headers={'Content-Type': 'application/json'})
@@ -115,5 +117,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--image', type=Path)
+    parser.add_argument('--concurrency', type=int, default=10)
     args = parser.parse_args()
-    check(args.root, image_path=args.image)
+    check(args.root, image_path=args.image, concurrency=args.concurrency)
