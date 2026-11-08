@@ -11,6 +11,7 @@ import re
 import time
 from typing import Any
 from urllib.error import HTTPError
+from mmkgc.adapters.http_retry import retryable_http_error
 
 from mmkgc.ranking.context import RankingContext
 from mmkgc.ranking.contracts import GateResult, ScoreResult
@@ -1369,7 +1370,7 @@ def _attach_judge_diagnostic(
 
 def _is_retryable_judge_error(exc: Exception) -> bool:
     if isinstance(exc, HTTPError):
-        return exc.code in {408, 429, 500, 502, 503, 504}
+        return retryable_http_error(exc)
     return type(exc).__name__ in RETRYABLE_JUDGE_ERROR_NAMES
 
 

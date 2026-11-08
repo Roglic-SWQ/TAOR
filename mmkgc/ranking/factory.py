@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, TYPE_CHECKING
 from urllib import error, request
 from urllib.parse import urlsplit
+from mmkgc.adapters.http_retry import retryable_http_error
 
 from mmkgc.ranking.profiles import (
     LocalScorerConfig,
@@ -236,10 +237,10 @@ class _OpenAICompatibleCompletionClient:
         try:
             payload = self._open_json_with_timeout(req)
         except error.HTTPError as exc:
-            if exc.code in {408, 429, 500, 502, 503, 504}:
+            if retryable_http_error(exc):
                 raise error.HTTPError(
                     endpoint, exc.code, "ranking judge service temporarily unavailable",
-                    exc.headers, None,
+                    exc.headers, exc.fp,
                 ) from exc
             raise RuntimeError(f"GPT-4o mini ranking judge HTTP error: {exc.code}") from exc
         if not isinstance(payload, dict):
@@ -283,7 +284,7 @@ class _OpenAICompatibleCompletionClient:
                     if response.status_code >= 400:
                         raise error.HTTPError(
                             req.full_url, response.status_code, response.reason_phrase,
-                            response.headers, None,
+                            response.headers, BytesIO(response.content),
                         )
                     return response.json()
             except httpx.TimeoutException as exc:

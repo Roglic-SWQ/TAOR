@@ -6,6 +6,7 @@ import asyncio
 from copy import deepcopy
 from contextvars import ContextVar
 from datetime import datetime, timezone
+from io import BytesIO
 import json
 import math
 import time
@@ -15,6 +16,7 @@ from uuid import uuid4
 from urllib.parse import urlsplit
 
 from mmkgc.adapters.qwen import QwenConfig
+from mmkgc.adapters.http_retry import retryable_http_error
 from mmkgc.stages.candidate_planning import (
     PLAN_SCHEMA as CANDIDATE_PLAN_SCHEMA, candidate_plan_prompt, candidate_plan_schema,
     apply_candidate_plans, parse_candidate_response,
@@ -240,7 +242,8 @@ class OpenAICompatibleRelationPlanner:
                                 for key in ('type', 'code', 'param', 'message') if key in detail}
                         except (ValueError, TypeError):
                             event['provider_error'] = {'format': 'non_json_error_body'}
-                        raise HTTPError(str(response.url), response.status_code, 'Stage 2 API error', response.headers, None)
+                        raise HTTPError(str(response.url), response.status_code, 'Stage 2 API error',
+                                        response.headers, BytesIO(response.content))
                     return response.json()
             except httpx.TimeoutException as exc:
                 raise TimeoutError('Stage 2 request timed out') from exc
@@ -281,7 +284,7 @@ class OpenAICompatibleRelationPlanner:
                 event['status'] = 'received'
                 return result
             except Exception as exc:
-                retryable = (exc.code in {408, 429, 500, 502, 503, 504} if isinstance(exc, HTTPError)
+                retryable = (retryable_http_error(exc) if isinstance(exc, HTTPError)
                              else isinstance(exc, (TimeoutError, ConnectionError, URLError)))
                 event.update(status='failed', error_type=type(exc).__name__, error_message=str(exc), retryable=retryable)
                 chain = []

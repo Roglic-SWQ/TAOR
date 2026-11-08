@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 from urllib import error, request
 from urllib.parse import urlsplit
+from mmkgc.adapters.http_retry import retryable_http_error
 
 from mmkgc.stages.semantic import StrictJsonStagePlanner, KNOWLEDGE_REQUEST_CONTEXT
 from mmkgc.stages.triples import TRIPLE_SCHEMAS
@@ -1645,8 +1646,12 @@ class QwenLocalSemanticStagePlanner(StrictJsonStagePlanner):
             except (TimeoutError, ConnectionError, error.URLError) as exc:
                 if event is not None:
                     event.update(status="failed", error_type=type(exc).__name__, error_message=str(exc))
-                retryable = (exc.code in {408, 429, 500, 502, 503, 504}
+                retryable = (retryable_http_error(exc)
                              if isinstance(exc, error.HTTPError) else True)
+                if event is not None:
+                    event['retryable'] = retryable
+                    if isinstance(exc, error.HTTPError) and exc.code == 400 and retryable:
+                        event['retry_reason'] = 'intermittent_upstream_format_error'
                 # Never submit an overlapping local request after a timeout.
                 # The service deadline aborts it; missing middleware is handled
                 # by the batch supervisor's existing service recovery path.
