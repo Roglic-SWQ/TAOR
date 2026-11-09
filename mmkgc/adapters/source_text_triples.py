@@ -78,6 +78,30 @@ def parse_source_response(raw):
     """Accept a complete leading JSON object plus prose, never multiple payloads."""
     from mmkgc.stages.semantic import SemanticStageParseError
     text = raw.strip()
+    escaped_container = re.fullmatch(r'<escape>(.*?)</escape>', text, re.DOTALL)
+    if escaped_container:
+        # Some endpoints wrap a complete response and escape whitespace outside
+        # JSON strings. Preserve escapes inside values; never salvage a fragment.
+        inner = escaped_container.group(1).strip()
+        chars, quoted, escaped, index = [], False, False, 0
+        while index < len(inner):
+            char = inner[index]
+            if not quoted and inner[index:index + 2] in {r'\n', r'\r', r'\t'}:
+                chars.append({'n': '\n', 'r': '\r', 't': '\t'}[inner[index + 1]])
+                index += 2
+                continue
+            chars.append(char)
+            if quoted:
+                if escaped:
+                    escaped = False
+                elif char == '\\':
+                    escaped = True
+                elif char == '"':
+                    quoted = False
+            elif char == '"':
+                quoted = True
+            index += 1
+        text = ''.join(chars)
     # Strip a single complete Markdown container, never salvage incomplete JSON.
     fence = re.fullmatch(r"```(?:json)?\s*\n(.*?)\n```", text, re.DOTALL | re.IGNORECASE)
     if fence:
@@ -98,7 +122,7 @@ def parse_source_response(raw):
     trailer = text[end:].strip()
     if trailer and any(character in trailer for character in "{}[]`"):
         raise SemanticStageParseError("multiple or ambiguous source response payloads are not accepted")
-    return value, bool(trailer) or bool(fence)
+    return value, bool(trailer) or bool(fence) or bool(escaped_container)
 
 
 def _object(properties):
@@ -267,7 +291,7 @@ class SourceTextTask:
             "For non-lexical sources, extract only assertions DIRECTLY involving the target. "
             "For lexical entries keep defining assertions separate from original usage context. A passage about Zhejiang may "
             "mention Hangzhou and the Grand Canal: their relationship is background, so put it in "
-            "excluded_triples using its ORIGINAL subject/relation/object plus a nonempty reason. "
+            "excluded_triples as separate audit notes, retaining original endpoints and a reason when known. "
             "Use that explicit outlet instead of forcing background facts into extracted_triples. "
             "For 'Hangzhou is a historically important city' with target Zhejiang, exclude "
             "(Hangzhou, is, historically important city); do NOT output "
@@ -300,12 +324,8 @@ class SourceTextTask:
         if (not isinstance(response, dict) or not required <= set(response)
                 or set(response) - required - {'excluded_triples'}):
             invalid("", "return entity_profile, extracted_triples, uncertain_aspects, optionally excluded_triples")
-        excluded = response.get('excluded_triples', [])
-        if (not isinstance(excluded, list) or any(not isinstance(item, dict)
-                or set(item) != {'subject', 'relation', 'object', 'reason'}
-                or any(not isinstance(value, str) for value in item.values())
-                or not item['reason'].strip() for item in excluded)):
-            invalid('/excluded_triples', 'each excluded assertion needs original subject, relation, object strings and a nonempty reason')
+        # Exclusions are audit annotations, never accepted assertions. Preserve
+        # their missing/unknown fields without rejecting otherwise valid facts.
         profile = response["entity_profile"]
         if not isinstance(profile, dict) or set(profile) != {"primary_type", "core_identity"}:
             invalid("/entity_profile", "return primary_type and core_identity only; the program owns provenance")
@@ -592,10 +612,14 @@ def valid_source_rows(task, response):
 
 def source_extraction_report(task, response, inputs, patch_results=(), rejected=()):
     decisions = [deepcopy(decision) for patch in patch_results for decision in patch.get('decisions', [])]
+    raw_excluded = response.get('excluded_triples', [])
+    raw_excluded = raw_excluded if isinstance(raw_excluded, list) else [raw_excluded]
     excluded = [{'path': f'/excluded_triples/{index}',
-                 'original_triple': {key: item[key] for key in ('subject', 'relation', 'object')},
-                 'decision': 'excluded_at_extraction', 'reason': item['reason']}
-                for index, item in enumerate(response.get('excluded_triples', []))]
+                 'original_triple': {key: deepcopy(item.get(key)) for key in ('subject', 'relation', 'object')}
+                    if isinstance(item, dict) else None,
+                 'decision': 'excluded_at_extraction',
+                 'reason': item.get('reason') if isinstance(item, dict) else None,
+                 'raw_annotation': deepcopy(item)} for index, item in enumerate(raw_excluded)]
     return {'schema_version': 'source_extraction_report_v1',
             'status': 'partial' if rejected else 'applied', 'source_evidence_id': task.evidence_id,
             'protocol_version': SCHEMA,

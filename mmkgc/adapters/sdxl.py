@@ -165,12 +165,13 @@ class SDXLImageGenerator:
         candidate_id: str,
         positive_prompt: str,
         negative_prompt: str,
+        *, seed_offset: int = 0,
     ) -> GeneratedImageArtifact:
         """Generate a PNG artifact or fail the fixed image-generation mainline."""
 
         pipeline = self._get_pipeline()
         start_time = time.perf_counter()
-        seed = _candidate_seed(self.config.seed, candidate_id)
+        seed = _candidate_seed(self.config.seed + int(seed_offset), candidate_id)
         kwargs: dict[str, Any] = {
             "prompt": positive_prompt,
             "negative_prompt": negative_prompt,

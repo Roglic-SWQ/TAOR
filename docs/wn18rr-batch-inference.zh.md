@@ -75,3 +75,23 @@ python -m scripts.run_wn18rr_parallel_completion --repartition \
 管理性停机不计作模型失败：`attempt` 仍记录不可覆盖的执行目录编号，`interrupted_attempts` 单独累计；两次工程失败上限使用两者之差。SDXL 三次实际出图预算不变，缓存继续恢复。停机重绑可使用原分片容量；编号超过 99 的分片按数字排序，状态和账本始终留在原 owner。恢复中断状态后先刷新分片汇总，避免等待实体准入时显示旧的 running 数量。
 
 进度汇总按所有分片目录读取，分片 `summary.json` 在共享文件系统上短暂不可见或不可解析时，从该分片 manifest 和实体 checkpoint 恢复，不能跳过分片。合并后核对全局实体集合。原始作业因汇总异常退出时，应先检查实体终态；所有实体已处理则离线恢复最终汇总并核验导出，保留原调度器失败状态和实际恢复时间，不重跑已完成生成。
+
+## 剩余实体的分轮重试
+
+`scripts/run_wn18rr_retry_completion.py` 从已完成的全量汇总冻结剩余实体，已成功导出的结果直接继承路径和 SHA256，不覆盖或重新生成。重试目录独立保存每轮 manifest、checkpoint、Judge 意见、提示词和实际出图账本。`combined-summary.json` 汇总原结果与新增导出；`cumulative-draws.json` 记录原轮次和重试轮次累计出图调用。
+
+每一轮重新准备来源知识与事实选择，把上一轮 Judge 反馈作为单独的 `retry_diagnostics`，不并入文本／图片／graph 证据。只选择一到两个核心语义事实，改变失败构图和种子。重试提示词使用 gpt-6-luna，来源抽取仍使用 Qwen3.5-9B，SDXL、Reranker 和本地评分模型跨轮共享一份权重。原有 Judge／Reflection 与导出条件继续生效。
+
+```bash
+python -m scripts.run_wn18rr_retry_completion --prepare \
+  --root outputs/<新的重试目录> --source outputs/<已完成的全量目录> \
+  --workers 128 --max-rounds 5
+# 在已分配 GPU 的作业中启动 Qwen 服务后，通过既有 API 配置入口运行：
+OPENAI_MIN_REQUEST_INTERVAL_MS=0 OPENAI_MAX_REQUESTS_IN_FLIGHT=64 \
+python scripts/run_with_cluster_api.py --env-file <本地配置> --proxy-settings <本地代理配置> \
+  --module scripts.run_wn18rr_retry_completion -- --root outputs/<新的重试目录>
+```
+
+每轮每实体最多三次实际出图，工程失败在该轮最多执行两次；语义未通过或未生成候选会自动进入下一轮。成功后立即退出后续轮次。轮次数可配置为 1～5；达到本次预算仍未通过时，记录 `retry_rounds_exhausted` 和剩余数量，不把失败包装成成功，也不转交一个没有执行者的人工待审状态。同一目录重启不会重新运行已结束轮次；另开重试活动会继承累计账本并使用新的可追踪种子命名空间。
+
+源文本解析只接受完整 JSON；兼容完整 `<escape>…</escape>` 容器及其字符串外的换行转义，拒绝截断或多个歧义对象。`excluded_triples` 是排除项审计，不因缺少 object／reason 丢弃有效正向事实；缺失字段、原始注释及不确定性原样保留，排除项不进入正向知识。

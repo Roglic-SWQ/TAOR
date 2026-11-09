@@ -147,7 +147,7 @@ def generation_payload(
     for key in ("source_facts", "source_evidence", "checks", "context_only",
                 "identity_context", "supported_visual_details", "candidate_visual_cues",
                 "regeneration_feedback", "presentation_context", "candidate_description", "generation_step", "focus_plan",
-                "source_images"):
+                "source_images", "retry_diagnostics"):
         if key in context:
             payload[key] = deepcopy(context[key])
     if context.get('description_task') == VISUAL_DESCRIPTION_TASK:
@@ -206,6 +206,13 @@ def lexical_image_view(payload: dict[str, Any]) -> dict[str, Any]:
     view['checks'] = []
     view['context_only'] = []
     return view
+
+
+def retry_rendering_guidance(payload):
+    if payload.get('retry_diagnostics'):
+        from mmkgc.retry_context import RETRY_GUIDANCE
+        return RETRY_GUIDANCE + '\n'
+    return ''
 
 
 def build_generation_prompt(kind: str, payload: dict[str, Any]) -> str:
@@ -270,6 +277,7 @@ def build_generation_prompt(kind: str, payload: dict[str, Any]) -> str:
     if payload.get('generation_step') == 'compress':
         payload = image_compression_payload(payload)
         return (
+            retry_rendering_guidance(payload) +
             (REFLECTION_GUIDANCE if payload.get('regeneration_feedback') else '') +
             'SHORTEN the supplied candidate_description into ONE SDXL positive_prompt. '
             'Return a NEW shorter wording, not a verbatim copy. Aim for 20-70 English words; '
@@ -289,7 +297,7 @@ def build_generation_prompt(kind: str, payload: dict[str, Any]) -> str:
             'references and the description are recorded separately. No explanation.\nINPUT_JSON:\n'
             + json.dumps(payload, ensure_ascii=False)
         )
-    rules = IMAGE_RULES
+    rules = IMAGE_RULES + retry_rendering_guidance(payload)
     if payload.get("presentation_context"):
         rules += (
             "This is a coordinated series from one shared fact set. The first candidate should "
@@ -340,7 +348,7 @@ def image_compression_payload(payload: dict[str, Any]) -> dict[str, Any]:
     result = {key: deepcopy(payload[key]) for key in (
         'prompt_version', 'entity', 'fact_format', 'source_facts', 'identity_context',
         'presentation_context', 'candidate_description', 'generation_step', 'regeneration_feedback',
-        'validation_error', 'focus_plan') if key in payload}
+        'validation_error', 'focus_plan', 'retry_diagnostics') if key in payload}
     result['source_evidence_refs'] = [item['evidence_id'] for item in payload.get('source_evidence', [])]
     return result
 
@@ -348,6 +356,7 @@ def image_compression_payload(payload: dict[str, Any]) -> dict[str, Any]:
 def build_image_description_prompt(payload: dict[str, Any], error: str | None = None) -> str:
     """Select the next evidence-supported visual focus before SDXL compression."""
     payload = lexical_image_view(payload)
+    payload = {**payload, 'retry_rendering_guidance': retry_rendering_guidance(payload)} if payload.get('retry_diagnostics') else payload
     payload = deepcopy(payload)
     payload.update(prompt_version=IMAGE_PROMPT_VERSION, generation_step='describe')
     presentation = payload.get('presentation_context', {})
@@ -361,6 +370,7 @@ def build_image_description_prompt(payload: dict[str, Any], error: str | None = 
         f"{presentation.get('candidate_index', len(prior) + 1)}. "
     )
     return (
+        retry_rendering_guidance(payload) +
         "Create one coherent English image description from the supplied entity and shared selected knowledge. "
         + progress + VISUAL_REALIZATION_RULE +
         "Every candidate receives the same source_facts. Use source_evidence only to interpret those facts; "
@@ -398,8 +408,9 @@ def build_image_description_prompt(payload: dict[str, Any], error: str | None = 
 def build_image_focus_prompt(payload: dict[str, Any], error: str | None = None) -> str:
     """Ask the model to select explicit evidence and rendering before writing prose."""
     payload = lexical_image_view(payload)
+    payload = {**payload, 'retry_rendering_guidance': retry_rendering_guidance(payload)} if payload.get('retry_diagnostics') else payload
     task = {key: deepcopy(payload[key]) for key in (
-        'entity', 'source_facts', 'identity_context', 'presentation_context') if key in payload}
+        'entity', 'source_facts', 'identity_context', 'presentation_context', 'retry_diagnostics') if key in payload}
     presentation = task.get('presentation_context', {})
     previous = presentation.get('previous_focus_plans', [])
     # Full drafts remain available when writing the description. Focus selection
@@ -414,6 +425,7 @@ def build_image_focus_prompt(payload: dict[str, Any], error: str | None = None) 
     if error:
         task['validation_error'] = error[:1600]
     return (
+        retry_rendering_guidance(payload) +
         'Choose ONE explicit visual focus for the next image of this entity, using the SAME shared '
         'source_facts. ' + VISUAL_REALIZATION_RULE +
         'Do not write the image description yet. Return four fields: '

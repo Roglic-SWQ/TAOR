@@ -496,12 +496,15 @@ def _model_generation_context(
                         'asset','sha256','byte_count','evidence_id')},
                     'admission':{key:deepcopy(admission[key]) for key in ('status','identity_verified')},
                 })
+    from mmkgc.retry_context import current_retry
+    retry = current_retry()
     return {
         "task": ({"target_modality": modality, "presentation_policy": "stage3"}
                  if item.get("plan_schema_version") in {PLAN_SCHEMA, FACT_SELECTION_SCHEMA} else
                  {"target_modality": modality, "generation_angle": angle, "diversity_axis": diversity_axis}),
         **({"fact_format": knowledge["schema_version"]} if knowledge.get("schema_version") in TRIPLE_SCHEMAS else {}),
         "source_facts": source_facts, "source_evidence": evidence,
+        **({'retry_diagnostics': retry} if retry else {}),
         **({'description_task': knowledge.get('generation_task', knowledge.get('stage1_v3', {}).get('generation_task'))}
            if knowledge.get('generation_task', knowledge.get('stage1_v3', {}).get('generation_task')) else {}),
         **({'source_image_inputs':source_images} if source_images else {}),

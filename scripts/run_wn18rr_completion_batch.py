@@ -330,6 +330,9 @@ def run(root, retry_failed=False, *, shared_local_models=None, max_attempts=None
     from mmkgc.defaults import build_default_mainline_runtime
     rows = validate(root)
     settings = read(root/'runtime-settings.json') if (root/'runtime-settings.json').exists() else {}
+    retry_policy = read(root/'retry-policy.json') if (root/'retry-policy.json').exists() else {}
+    retry_contexts = read(root/'retry-contexts.json') if (root/'retry-contexts.json').exists() else {}
+    from mmkgc.retry_context import retry_scope, RetrySeededGenerator
     store = (shared_local_models.dataset_store('wn18rr', DATASET, graph_split='train')
              if shared_local_models is not None else
              build_dataset_store('wn18rr', DATASET, graph_split='train'))
@@ -357,9 +360,12 @@ def run(root, retry_failed=False, *, shared_local_models=None, max_attempts=None
             sdxl_model_dir='/medisco/linjiashi/models/SDXL/stable-diffusion-xl-base-1.0', sdxl_device='cuda:0')
         pipeline = runtime.pipeline
         if mode == 'image':
+            if retry_policy:
+                pipeline.image_generator = RetrySeededGenerator(pipeline.image_generator, retry_policy['round'],
+                                                               retry_policy.get('seed_namespace', 0))
             pipeline.image_generator = BudgetedImages(pipeline.image_generator, root/'sdxl-attempts.json')
         for item, state, previous in pending:
-            with entity_admission if entity_admission is not None else nullcontext():
+            with (entity_admission if entity_admission is not None else nullcontext()), retry_scope(retry_contexts.get(item['entity_key'])):
                 record = store.build_record(item['entity_id'], mode)
                 if mode == 'text':
                     assert not record.description and not record.existing_modalities.get('text')

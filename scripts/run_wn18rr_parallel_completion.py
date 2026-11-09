@@ -298,10 +298,13 @@ def aggregate(root):
         if row.get('export'):
             entry['export'] = {key: row['export'].get(key) for key in ('path', 'sha256', 'candidate_id')}
         compact.append(entry)
+    config = batch.read(root / 'orchestration.json')
     summary = {'expected_entities': len(expected), 'updated_at_unix': time.time(),
                'counts': dict(Counter(row['status'] for row in rows)), 'reused_entities': len(reused),
                'workers': batch.read(root / 'orchestration.json')['workers'],
-               'ground_truth_used': False, 'generation_model': 'Qwen/Qwen3.5-9B',
+               'ground_truth_used': False,
+               'generation_model': config.get('image_prompt_model', 'Qwen/Qwen3.5-9B'),
+               'stage1_model': 'Qwen/Qwen3.5-9B',
                'image_model': 'SDXL', 'review_model': 'gpt-6-luna', 'rows': compact}
     if recovered_summaries:
         summary['reconstructed_worker_summaries'] = recovered_summaries
@@ -310,12 +313,12 @@ def aggregate(root):
     return summary
 
 
-def run(root):
+def run(root, *, shared_local_models=None):
     root = Path(root).resolve()
     batch.validate(root)
     config = batch.read(root / 'orchestration.json')
     validate_workers(config['workers'])
-    shared = SharedLocalModels()
+    shared = shared_local_models if shared_local_models is not None else SharedLocalModels()
     admission = EntityAdmission(root, config['workers'])
 
     def worker(shard):

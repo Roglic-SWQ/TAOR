@@ -328,6 +328,11 @@ class OpenAICompatibleRelationPlanner:
         schema = (fact_selection_schema(knowledge, self.max_selected_facts)
                   if shared else candidate_plan_schema(knowledge, candidate_budget))
         messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
+        from mmkgc.retry_context import current_retry, RETRY_GUIDANCE
+        retry = current_retry()
+        if retry:
+            messages.append({'role': 'user', 'content': RETRY_GUIDANCE +
+                             '\nRETRY_DIAGNOSTICS:\n' + json.dumps(retry, ensure_ascii=False)})
         call = {
             "stage": "stage2_selection", "provider": self.planner_name,
             "model_name": self.config.model_name, "prompt": prompt, "system_prompt": system,
@@ -338,6 +343,8 @@ class OpenAICompatibleRelationPlanner:
             "ground_truth_used": False, "network_attempts": [], "transport_retries": 0,
             "stage_timeout_seconds": self.stage_timeout_seconds, "validation_attempts": [],
         }
+        if retry:
+            call['retry_diagnostics'] = retry
         started = time.perf_counter()
         seen = set()
         previous_legal_choices = []
