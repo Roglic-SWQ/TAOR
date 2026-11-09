@@ -268,8 +268,27 @@ def aggregate(root):
     root = Path(root)
     reused = batch.read(root / 'reused.json')
     rows = list(reused)
-    for path in sorted((root / 'workers').glob('*/summary.json')):
-        rows.extend(batch.read(path)['rows'])
+    recovered_summaries = []
+    for shard in sorted((root / 'workers').iterdir()):
+        try:
+            worker_rows = batch.read(shard / 'summary.json')['rows']
+        except (FileNotFoundError, json.JSONDecodeError):
+            # A shared-filesystem reader can briefly miss an atomically replaced
+            # summary. Checkpoints remain authoritative; never skip that shard
+            # or abort otherwise healthy workers because progress reporting failed.
+            worker_rows = []
+            for item in batch.read(shard / 'manifest.json'):
+                state = shard / 'state' / f"{item['missing_mode']}-{item['entity_key']}.json"
+                try:
+                    worker_rows.append(batch.read(state))
+                except FileNotFoundError:
+                    worker_rows.append({**item, 'status': 'pending'})
+            recovered_summaries.append(shard.name)
+        rows.extend(worker_rows)
+    expected = batch.read(root / 'manifest.json')
+    keys = [row['entity_key'] for row in rows]
+    if len(keys) != len(set(keys)) or set(keys) != {row['entity_key'] for row in expected}:
+        raise ValueError('Worker progress differs from the frozen global entity scope')
     # Keep the global manifest compact; each worker retains complete Stage 0–4
     # data and every candidate. All export paths remain directly usable.
     compact = []
@@ -279,11 +298,13 @@ def aggregate(root):
         if row.get('export'):
             entry['export'] = {key: row['export'].get(key) for key in ('path', 'sha256', 'candidate_id')}
         compact.append(entry)
-    summary = {'expected_entities': len(batch.read(root / 'manifest.json')),
+    summary = {'expected_entities': len(expected), 'updated_at_unix': time.time(),
                'counts': dict(Counter(row['status'] for row in rows)), 'reused_entities': len(reused),
                'workers': batch.read(root / 'orchestration.json')['workers'],
                'ground_truth_used': False, 'generation_model': 'Qwen/Qwen3.5-9B',
                'image_model': 'SDXL', 'review_model': 'gpt-6-luna', 'rows': compact}
+    if recovered_summaries:
+        summary['reconstructed_worker_summaries'] = recovered_summaries
     batch.save(root / 'summary.json', summary)
     (root / 'completion_manifest.jsonl').write_text(''.join(json.dumps(row, ensure_ascii=False)+'\n' for row in compact))
     return summary

@@ -44,6 +44,42 @@ def test_scope_includes_both_query_directions_without_duplicate_processing(datas
         batch.validate(root)
 
 
+@pytest.mark.parametrize('missing', [True, False])
+def test_missing_or_truncated_summary_recovers_from_checkpoints(dataset, missing):
+    root = parallel.prepare(dataset / 'run', workers=2)
+    shard = root / 'workers/00'
+    row = batch.read(shard / 'manifest.json')[0]
+    batch.save(shard / 'state/image-00000001.json', {**row, 'status': 'failed',
+               'error_type': 'ExampleFailure'})
+    if missing:
+        (shard / 'summary.json').unlink()
+    else:
+        (shard / 'summary.json').write_text('{"rows":')
+    summary = parallel.aggregate(root)
+    assert summary['expected_entities'] == 2
+    assert summary['counts'] == {'failed': 1, 'pending': 1}
+    assert summary['reconstructed_worker_summaries'] == ['00']
+    assert {row['entity_key'] for row in summary['rows']} == {'00000001', '00000003'}
+    assert batch.read(shard / 'state/image-00000001.json')['error_type'] == 'ExampleFailure'
+
+
+def test_transient_summary_disappearance_does_not_stop_workers(dataset, monkeypatch):
+    root = parallel.prepare(dataset / 'run', workers=2)
+    original_read = batch.read
+    def worker(shard, **kwargs):
+        rows = original_read(shard / 'manifest.json')
+        for row in rows:
+            batch.save(shard / 'state'/f"image-{row['entity_key']}.json", {**row, 'status':'failed'})
+    def read(path):
+        if path.name == 'summary.json' and path.parent.parent.name == 'workers':
+            raise FileNotFoundError('shared-filesystem visibility gap')
+        return original_read(path)
+    monkeypatch.setattr(batch, 'run', worker)
+    monkeypatch.setattr(batch, 'read', read)
+    parallel.run(root)
+    assert original_read(root / 'finished.json')['counts'] == {'failed': 2}
+
+
 def test_nonmissing_or_duplicate_scope_is_rejected(dataset):
     with pytest.raises(ValueError, match='unique, truly missing'):
         parallel.prepare(dataset / 'has-original', keys=['00000002'])
